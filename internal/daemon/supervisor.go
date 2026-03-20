@@ -310,8 +310,6 @@ func (s *supervisor) shutdown() {
 	}
 }
 
-// startPortPoller stub — implemented in recovery.go (Task 12)
-func (s *supervisor) startPortPoller() {}
 
 func errResp(msg string) *ipc.Response {
 	return &ipc.Response{OK: false, Error: msg}
