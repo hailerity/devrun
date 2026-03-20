@@ -57,7 +57,7 @@ func runLogs(_ *cobra.Command, args []string) error {
 
 	// Follow: seek to end, poll for new content
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return err
+		return fmt.Errorf("seek to end: %w", err)
 	}
 	reader := bufio.NewReader(f)
 	for {
@@ -65,9 +65,12 @@ func runLogs(_ *cobra.Command, args []string) error {
 		if len(line) > 0 {
 			fmt.Print(line)
 		}
-		if err != nil {
+		if err == io.EOF {
 			time.Sleep(100 * time.Millisecond)
 			continue
+		}
+		if err != nil {
+			return fmt.Errorf("read log: %w", err)
 		}
 	}
 }
