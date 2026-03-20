@@ -1,4 +1,4 @@
-.PHONY: build test lint install clean
+.PHONY: build test test-integration lint install clean
 
 build:
 	go build -o bin/procet ./cmd/procet
