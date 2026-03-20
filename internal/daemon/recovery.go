@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"time"
 
 	"github.com/hailerity/procet/internal/config"
@@ -9,11 +10,16 @@ import (
 
 // startPortPoller polls each running service's port every 5 seconds.
 // Call this as a goroutine after daemon startup.
-func (s *supervisor) startPortPoller() {
+func (s *supervisor) startPortPoller(ctx context.Context) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		s.pollPorts()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pollPorts()
+		}
 	}
 }
 

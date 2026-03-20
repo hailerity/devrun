@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -43,8 +44,12 @@ func Run(socketPath string) error {
 
 	logger.Info("daemon started", "socket", socketPath)
 
+	// Create a context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Start port polling in background
-	go sup.startPortPoller()
+	go sup.startPortPoller(ctx)
 
 	// Handle SIGTERM/SIGINT for graceful shutdown
 	sigs := make(chan os.Signal, 1)
@@ -62,6 +67,7 @@ func Run(socketPath string) error {
 		go sup.handleConn(conn)
 	}
 
+	cancel()
 	sup.shutdown()
 	return nil
 }
