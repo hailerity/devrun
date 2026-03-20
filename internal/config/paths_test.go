@@ -29,4 +29,8 @@ func TestPaths_HomeDefault(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	assert.Equal(t, filepath.Join(home, ".config", "procet"), config.ConfigDir())
 	assert.Equal(t, filepath.Join(home, ".local", "share", "procet"), config.DataDir())
+	assert.Equal(t, filepath.Join(home, ".config", "procet", "services.yaml"), config.RegistryPath())
+	assert.Equal(t, filepath.Join(home, ".local", "share", "procet", "procet.sock"), config.SocketPath())
+	assert.Equal(t, filepath.Join(home, ".local", "share", "procet", "state.json"), config.StatePath())
+	assert.Equal(t, filepath.Join(home, ".local", "share", "procet", "logs", "web.log"), config.LogPath("web"))
 }

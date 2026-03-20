@@ -10,7 +10,10 @@ func ConfigDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "procet")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		panic("procet: cannot determine home directory: " + err.Error())
+	}
 	return filepath.Join(home, ".config", "procet")
 }
 
@@ -19,7 +22,10 @@ func DataDir() string {
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "procet")
 	}
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		panic("procet: cannot determine home directory: " + err.Error())
+	}
 	return filepath.Join(home, ".local", "share", "procet")
 }
 
