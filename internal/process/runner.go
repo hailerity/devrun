@@ -37,21 +37,31 @@ func Start(command, cwd string, env map[string]string) (*Process, error) {
 	return &Process{PTY: ptmx, Cmd: cmd}, nil
 }
 
-// Stop sends SIGTERM and waits up to 5 seconds, then sends SIGKILL.
+// Stop sends SIGTERM to the process. If the process does not exit within 5s,
+// it sends SIGKILL. Stop does NOT call Process.Wait — watchExit in the daemon
+// supervisor is the sole owner of Wait, preventing a double-waitpid deadlock.
 func (p *Process) Stop() error {
+	if p.Cmd.Process == nil {
+		return nil
+	}
 	if err := p.Cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		return fmt.Errorf("sigterm: %w", err)
 	}
-	done := make(chan error, 1)
-	go func() { _, err := p.Cmd.Process.Wait(); done <- err }()
-	select {
-	case <-done:
-		p.PTY.Close()
-		return nil
-	case <-time.After(5 * time.Second):
+	done := make(chan struct{})
+	go func() {
+		// Poll via kill -0 (does not reap the process) for up to 5s.
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if err := syscall.Kill(p.Cmd.Process.Pid, 0); err != nil {
+				// Process is gone — watchExit will call Wait.
+				close(done)
+				return
+			}
+		}
+		// Still alive after 5s — escalate to SIGKILL.
 		_ = p.Cmd.Process.Signal(syscall.SIGKILL)
-		<-done
-		p.PTY.Close()
-		return nil
-	}
+		close(done)
+	}()
+	<-done
+	return nil
 }
