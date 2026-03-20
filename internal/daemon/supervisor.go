@@ -30,6 +30,7 @@ type supervisor struct {
 	mu         sync.RWMutex
 	services   map[string]*managedService
 	statePath  string
+	registry   *config.Registry
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -52,6 +53,7 @@ func (s *supervisor) loadState() error {
 	if err != nil {
 		return err
 	}
+	s.registry = reg
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
