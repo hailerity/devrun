@@ -1,10 +1,10 @@
 package cli
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -62,40 +62,40 @@ func runFgByName(socketPath, name string) error {
 	}()
 
 	// stdin → socket (with Ctrl+P, Q detection)
-	var ctrlPSeen bool
+	// We buffer bytes to suppress the Ctrl+P byte if a detach sequence follows.
+	var ctrlPPending bool
 	buf := make([]byte, 256)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
 			break
 		}
-		data := buf[:n]
-
-		// Detect Ctrl+P (0x10) followed by Q (0x71)
-		for i, b := range data {
-			if ctrlPSeen && b == 0x71 { // 'q'
-				// Send detach request as a length-prefixed JSON frame
-				sendDetachRequest(conn, name)
-				term.Restore(int(os.Stdin.Fd()), oldState)
-				fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", name)
-				conn.Close()
-				return nil
+		for _, b := range buf[:n] {
+			if ctrlPPending {
+				ctrlPPending = false
+				if b == 0x71 { // Q — complete Ctrl+P, Q detach sequence
+					sendDetachRequest(conn, name)
+					term.Restore(int(os.Stdin.Fd()), oldState)
+					fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", name)
+					conn.Close()
+					return nil
+				}
+				// Not a detach — forward the suppressed Ctrl+P then the current byte
+				conn.Write([]byte{0x10, b})
+				continue
 			}
-			ctrlPSeen = (b == 0x10) // Ctrl+P
-			_ = i
+			if b == 0x10 { // Ctrl+P — hold it, don't forward yet
+				ctrlPPending = true
+				continue
+			}
+			conn.Write([]byte{b})
 		}
-		conn.Write(data)
 	}
 	return nil
 }
 
-func sendDetachRequest(conn io.Writer, name string) {
+func sendDetachRequest(conn net.Conn, name string) {
 	p, _ := json.Marshal(ipc.DetachPayload{Name: name})
 	req := ipc.Request{Type: "detach", Payload: json.RawMessage(p)}
-	data, _ := json.Marshal(req)
-	// Write length-prefixed frame
-	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(data)))
-	conn.Write(lenBuf[:])
-	conn.Write(data)
+	_ = ipc.WriteMessage(conn, &req)
 }
