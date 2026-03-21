@@ -176,6 +176,7 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 }
 
 func (s *supervisor) teeOutput(name string, svc *managedService, logPath string) {
+	defer svc.proc.PTY.Close()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		s.logger.Error("mkdir logs dir", "name", name, "err", err)
 		return
@@ -233,7 +234,7 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	svc := s.services[p.Name]
-	if svc == nil || svc.state.Status == config.StatusStopped || svc.state.Status == config.StatusCrashed {
+	if svc == nil || svc.state.Status == config.StatusStopped || svc.state.Status == config.StatusCrashed || svc.state.Status == config.StatusStopping {
 		s.mu.Unlock()
 		return errResp(fmt.Sprintf("%s is not running", p.Name))
 	}
@@ -241,8 +242,37 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 	_ = s.saveStateLocked()
 	s.mu.Unlock()
 
+	// Re-adopted services have nil proc (PTY master is gone after daemon restart).
+	// Send SIGTERM directly to the PID and poll for exit.
+	if svc.proc == nil {
+		if svc.state.PID == nil {
+			s.mu.Lock()
+			svc.state.Status = config.StatusStopped
+			_ = s.saveStateLocked()
+			s.mu.Unlock()
+			return &ipc.Response{OK: true}
+		}
+		pid := *svc.state.PID
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		// Poll up to 5s for the process to exit
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if err := syscall.Kill(pid, 0); err != nil {
+				break // process is gone
+			}
+		}
+		// Force-kill if still alive
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		s.mu.Lock()
+		svc.state.Status = config.StatusStopped
+		svc.state.PID = nil
+		_ = s.saveStateLocked()
+		s.mu.Unlock()
+		return &ipc.Response{OK: true}
+	}
+
 	if err := svc.proc.Stop(); err != nil {
-		return errResp(fmt.Sprintf("stop %s: %v", p.Name, err))
+		return errResp(fmt.Sprintf("stop: %v", err))
 	}
 	return &ipc.Response{OK: true}
 }
