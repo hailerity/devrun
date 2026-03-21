@@ -3,7 +3,6 @@ package process_test
 import (
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/hailerity/procet/internal/process"
 	"github.com/stretchr/testify/assert"
@@ -23,8 +22,11 @@ func TestRunner_StartStop(t *testing.T) {
 
 	require.NoError(t, proc.Stop())
 
-	// Give it a moment to exit
-	time.Sleep(100 * time.Millisecond)
+	// In production the daemon's watchExit goroutine calls Wait() to reap the
+	// child. Here there is no supervisor, so we reap it ourselves; without this
+	// the shell becomes a zombie whose PID still responds to kill -0.
+	proc.Cmd.Wait() //nolint:errcheck // ignoring wait error in test cleanup
+
 	err = syscall.Kill(proc.Cmd.Process.Pid, 0)
 	assert.Error(t, err, "process should be dead after stop")
 }
