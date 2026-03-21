@@ -79,7 +79,7 @@ func stateDot(state string) string {
 	}
 }
 
-func (s *sidebar) render(width, height int, focused bool) string {
+func (s *sidebar) render(width, height int) string {
 	if len(s.services) == 0 {
 		return styleMuted.Render("No services — run procet add <name>")
 	}
@@ -131,8 +131,5 @@ func renderCPUPct(pct float64) string {
 	if pct > 80 {
 		return styleRed.Render(s)
 	}
-	if pct > 50 {
-		return styleYellow.Render(s)
-	}
-	return styleYellow.Render(s) // always yellow for visibility in mini stats
+	return styleYellow.Render(s)
 }
