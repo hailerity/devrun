@@ -48,6 +48,7 @@ func (dp detailsPanel) render(svc *ipc.ServiceInfo, cfg *config.ServiceConfig, w
 	}
 	sb.WriteString(renderTable(cfgRows))
 
+	// ENV section: KEY (muted) = value (accent), matching the design mockup.
 	// ENV (omit section if empty)
 	if len(cfg.Env) > 0 {
 		sb.WriteString("\n" + styleMuted.Render("ENV") + "\n")
@@ -99,6 +100,8 @@ func renderCPUFull(pct float64) string {
 	return s
 }
 
+// computeStarted approximates the service start time as now - uptime.
+// This is intentionally approximate (±2s) since ServiceInfo carries no StartedAt field.
 func computeStarted(uptimeSec int64) string {
 	if uptimeSec <= 0 {
 		return styleMuted.Render("—")
