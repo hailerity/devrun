@@ -19,7 +19,7 @@ procet        # launches TUI (no arguments = TUI mode)
 procet list   # still works as a plain CLI command
 ```
 
-`cmd/procet/main.go` checks `len(os.Args) == 1` (no subcommand) and delegates to `internal/tui`.
+The TUI implementation adds a `RunE` to `rootCmd` in `internal/cli/root.go` that launches the TUI when no subcommand is provided. This preserves `procet --help` and flag-only invocations correctly (cobra only calls `RunE` when no subcommand is matched). `cmd/procet/main.go` remains unchanged.
 
 ---
 
@@ -75,7 +75,7 @@ procet list   # still works as a plain CLI command
 
 ## Sidebar
 
-Always visible. Lists all registered services in registration order (order in `services.yaml`).
+Always visible. Lists all registered services in alphabetical order by name. (`Registry.Services` is a map; alphabetical sort ensures deterministic, predictable ordering.)
 
 Each row:
 ```
@@ -83,7 +83,7 @@ Each row:
 ```
 
 - Status dot: green (running), red (crashed), grey (stopped/stopping/starting)
-- Port shown only when detected; otherwise state label (crashed / stopped / starting)
+- Port shown only when detected (non-zero in `ListResponse`); while running but port not yet detected, show `"detecting"`; otherwise show state label (crashed / stopped / starting / stopping)
 - Selected service highlighted with left border `│` in accent blue and darker background
 
 **Mini stats panel** below the service list (for selected service only):
@@ -114,7 +114,7 @@ Two tabs switched with `Tab`:
 - Reads the file directly (no daemon required) — same as `procet logs`
 - **Follow mode** (default on): auto-scrolls to newest line; indicator `● follow` shown in tab bar
 - **Scroll mode**: mouse wheel or `j`/`k` disables follow mode automatically; `f` re-enables it
-- Log lines rendered in muted text; HTTP status codes colorized (2xx green, 4xx yellow, 5xx red)
+- Log lines rendered in muted text; HTTP status codes colorized using the palette: 2xx → `#3fb950` (green), 4xx → `#f0e68c` (yellow), 5xx → `#f85149` (red)
 
 ### DETAILS tab
 
@@ -131,14 +131,14 @@ mem      182M
 started  10:00:04
 ```
 
-**CONFIG** (from `services.yaml`, static):
+**CONFIG** (from `services.yaml`, static; maps `ServiceConfig` fields: `Command`→`cmd`, `CWD`→`cwd`, `Group`→`group`):
 ```
 cmd      yarn dev
 cwd      ~/projects/api
 group    backend
 ```
 
-**ENV** (from `services.yaml`, static):
+**ENV** (from `services.yaml`, static; one entry per line in `KEY=value` format; if ENV is empty the section is omitted):
 ```
 NODE_ENV=development
 PORT=8080
@@ -166,7 +166,7 @@ Selection highlights lines with `#1f3a5f` background and a blue left border.
 ### Clipboard backend
 - macOS: `pbcopy`
 - Linux: `xclip -selection clipboard` (fallback: `xsel --clipboard`)
-- Detection at startup; if no clipboard backend found, show `"No clipboard available"` in footer
+- Detection runs once at TUI startup (cached for the session); if no backend found, every copy attempt shows `"No clipboard available"` as a 1.5s footer toast
 
 ---
 
@@ -177,7 +177,9 @@ Selection highlights lines with `#1f3a5f` background and a blue left border.
 |---|---|
 | `j` / `↓` | Move selection down (service list or log lines, whichever is focused) |
 | `k` / `↑` | Move selection up |
-| `Tab` | Switch between LOGS and DETAILS tabs |
+| `←` | Move focus to sidebar |
+| `→` | Move focus to main panel |
+| `Tab` | Switch between LOGS and DETAILS tabs (when main panel focused); moves focus to main panel first if sidebar is focused |
 | `s` | Start selected service |
 | `x` | Stop selected service |
 | `q` / `Ctrl+C` | Quit TUI |
@@ -197,7 +199,8 @@ Selection highlights lines with `#1f3a5f` background and a blue left border.
 ### Panel focus
 - Clicking the sidebar focuses service navigation
 - Clicking the main panel focuses log scroll / line selection
-- `Tab` switches tabs (not focus); sidebar is always reachable via mouse or `←`/`→` arrows
+- `Tab` switches tabs (not focus) and only applies when the main panel is focused; pressing `Tab` while the sidebar is focused first moves focus to the main panel, then switches tabs on the next press
+- Sidebar is always reachable via mouse click or `←` arrow; `→` moves focus from sidebar to main panel
 
 ---
 
@@ -217,7 +220,8 @@ No confirmation dialog — actions are instant (matching `procet start` / `proce
 - Service list and mini stats: polled every **2 seconds** via `ListRequest` to daemon
 - Log file: read continuously via file polling (100ms interval, same as `procet logs -f`)
 - Details tab: polled every **2 seconds** (same `ListRequest`)
-- Refresh spinner `●` in header animates while waiting for daemon response
+- Refresh spinner in header animates through frames `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (Braille dot sequence, 100ms per frame) while waiting for daemon response; shows `●` when idle
+- Bubbletea's model-diff rendering means 2s polls re-render only changed cells and do not interrupt log scrolling or visual selection
 
 ---
 
@@ -256,6 +260,7 @@ The TUI runs in the same process as the CLI; no new binary or daemon involved.
 | Log file missing | Show `"No logs yet for <name>"` in log panel |
 | No clipboard backend | Show `"No clipboard available"` on copy attempt |
 | Start/stop error | Show error in footer toast for 3s |
+| No services registered | Sidebar shows `"No services — run procet add <name>"` placeholder; main panel is empty |
 
 ---
 
