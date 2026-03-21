@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -57,7 +58,12 @@ func (lp *logsPanel) poll() bool {
 	}
 	defer f.Close()
 
-	f.Seek(lp.fileOffset, io.SeekStart) //nolint:errcheck
+	if _, err := f.Seek(lp.fileOffset, io.SeekStart); err != nil {
+		// File was likely rotated or truncated — re-read from scratch
+		lp.fileOffset = 0
+		lp.lines = nil
+		f.Seek(0, io.SeekStart) //nolint:errcheck
+	}
 	scanner := bufio.NewScanner(f)
 	var added bool
 	for scanner.Scan() {
@@ -98,7 +104,7 @@ func (lp *logsPanel) renderLine(idx int, line string) string {
 	if idx == lp.cursor {
 		return styleSelectedLine.Render(colored)
 	}
-	return styleMuted.Render(colored)
+	return colored // no wrapper — preserve embedded color codes
 }
 
 // colorizeLog wraps HTTP status codes (2xx/4xx/5xx) with palette colors.
@@ -124,7 +130,7 @@ func (lp *logsPanel) copyLine() string {
 }
 
 func (lp *logsPanel) copySelection() string {
-	if !lp.visualMode {
+	if !lp.visualMode || len(lp.lines) == 0 {
 		return ""
 	}
 	start, end := lp.selStart, lp.selEnd
@@ -174,10 +180,5 @@ func (lp *logsPanel) resize(w, h int) {
 
 // logName extracts "myservice" from "/path/to/logs/myservice.log".
 func logName(path string) string {
-	base := path
-	if i := strings.LastIndex(path, "/"); i >= 0 {
-		base = path[i+1:]
-	}
-	base = strings.TrimSuffix(base, ".log")
-	return base
+	return strings.TrimSuffix(filepath.Base(path), ".log")
 }

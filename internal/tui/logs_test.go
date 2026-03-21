@@ -108,3 +108,20 @@ func TestLogsPanel_ExitVisualClearsMode(t *testing.T) {
 	lp.exitVisual()
 	assert.False(t, lp.visualMode)
 }
+
+func TestLogsPanel_CopySelectionReversed(t *testing.T) {
+	lp := newLogsPanel()
+	lp.lines = []string{"line 0", "line 1", "line 2", "line 3"}
+	lp.visualMode = true
+	lp.selStart = 2
+	lp.selEnd = 1 // reversed — selEnd < selStart
+	assert.Equal(t, "line 1\nline 2", lp.copySelection())
+}
+
+func TestLogsPanel_MoveUpDoesNotGoBelowZero(t *testing.T) {
+	lp := newLogsPanel()
+	lp.lines = []string{"a", "b"}
+	lp.cursor = 0
+	lp.moveUp()
+	assert.Equal(t, 0, lp.cursor)
+}
