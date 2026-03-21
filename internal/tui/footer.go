@@ -7,20 +7,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Temporary placeholder types — will be moved to model.go in Task 8.
-// DO NOT remove the comment; it signals these move to model.go.
-type tabKind int
-type focusKind int
-
-const (
-	tabLogs    tabKind = iota
-	tabDetails
-)
-const (
-	focusSidebar focusKind = iota
-	focusMain
-)
-
 const toastDuration = 1500 * time.Millisecond
 
 type footerBar struct {
