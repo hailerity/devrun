@@ -20,12 +20,13 @@ const (
 type level struct {
 	name  string
 	color string
+	pad   string // spacing after closing bracket for alignment
 }
 
 var (
-	INFO  = level{"INFO ", colorGreen}
-	WARN  = level{"WARN ", colorYellow}
-	ERROR = level{"ERROR", colorRed}
+	INFO  = level{"INFO", colorGreen, "  "}
+	WARN  = level{"WARN", colorYellow, "  "}
+	ERROR = level{"ERROR", colorRed, " "}
 )
 
 var levels = []level{INFO, WARN, ERROR}
@@ -59,7 +60,7 @@ func emit(r *rand.Rand) {
 		lvl := levels[r.Intn(len(levels))]
 		msg := messages[r.Intn(len(messages))]
 		ts := time.Now().Format("2006-01-02 15:04:05")
-		fmt.Printf("%s [%s%s%s] %s\n", ts, lvl.color, lvl.name, colorReset, msg)
+		fmt.Printf("%s [%s%s%s]%s%s\n", ts, lvl.color, lvl.name, colorReset, lvl.pad, msg)
 	}
 }
 
