@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/procet/internal/client"
 	"github.com/hailerity/procet/internal/config"
 	"github.com/hailerity/procet/internal/daemon"
 	"github.com/hailerity/procet/internal/tui"
@@ -20,11 +19,6 @@ var rootCmd = &cobra.Command{
 		if err := daemon.EnsureDaemon(socketPath); err != nil {
 			return fmt.Errorf("start daemon: %w", err)
 		}
-		c, err := client.Connect(socketPath)
-		if err != nil {
-			return fmt.Errorf("connect to daemon: %w", err)
-		}
-		defer c.Close()
 
 		reg, err := config.LoadRegistry(config.RegistryPath())
 		if err != nil {
@@ -33,7 +27,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		logDir := config.DataDir()
-		return tui.Run(c, reg, logDir)
+		return tui.Run(socketPath, reg, logDir)
 	},
 }
 

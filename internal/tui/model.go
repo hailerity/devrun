@@ -14,6 +14,17 @@ import (
 	"github.com/hailerity/procet/internal/ipc"
 )
 
+// dial opens a fresh connection to the daemon and executes fn, closing on return.
+// The daemon handles one request per connection, so callers must not reuse connections.
+func dial(socketPath string, fn func(*client.Client) tea.Msg) tea.Msg {
+	c, err := client.Connect(socketPath)
+	if err != nil {
+		return daemonErrMsg{err}
+	}
+	defer c.Close()
+	return fn(c)
+}
+
 type tabKind int
 
 const (
@@ -51,9 +62,9 @@ type model struct {
 	headerC  headerBar
 	footerC  footerBar
 
-	c        *client.Client
-	registry *config.Registry
-	logDir   string
+	socketPath string
+	registry   *config.Registry
+	logDir     string
 
 	spinFrame int
 	spinning  bool
@@ -61,13 +72,13 @@ type model struct {
 	cb clipboard
 }
 
-func newModel(c *client.Client, reg *config.Registry, logDir string, cb clipboard) model {
+func newModel(socketPath string, reg *config.Registry, logDir string, cb clipboard) model {
 	return model{
-		logsC:    newLogsPanel(),
-		c:        c,
-		registry: reg,
-		logDir:   logDir,
-		cb:       cb,
+		logsC:      newLogsPanel(),
+		socketPath: socketPath,
+		registry:   reg,
+		logDir:     logDir,
+		cb:         cb,
 	}
 }
 
@@ -254,64 +265,71 @@ func (m *model) updateLogFile() {
 }
 
 func (m model) pollDaemon() tea.Cmd {
-	if m.c == nil {
+	if m.socketPath == "" {
 		return tickDaemon()
 	}
+	sp := m.socketPath
 	return func() tea.Msg {
-		resp, err := m.c.Send("list", struct{}{})
-		if err != nil {
-			return daemonErrMsg{err}
-		}
-		if !resp.OK {
-			return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
-		}
-		var payload ipc.ListResponsePayload
-		if err := json.Unmarshal(resp.Payload, &payload); err != nil {
-			return daemonErrMsg{err}
-		}
-		return daemonRespMsg{payload}
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("list", struct{}{})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			var payload ipc.ListResponsePayload
+			if err := json.Unmarshal(resp.Payload, &payload); err != nil {
+				return daemonErrMsg{err}
+			}
+			return daemonRespMsg{payload}
+		})
 	}
 }
 
 func (m model) doStart() tea.Cmd {
-	if m.c == nil {
+	if m.socketPath == "" {
 		return nil
 	}
 	svc := m.sidebarC.selectedService()
 	if svc == nil {
 		return nil
 	}
-	name := svc.Name
+	sp, name := m.socketPath, svc.Name
 	return func() tea.Msg {
-		resp, err := m.c.Send("start", ipc.StartPayload{Name: name})
-		if err != nil {
-			return daemonErrMsg{err}
-		}
-		if !resp.OK {
-			return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
-		}
-		return daemonTickMsg{}
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("start", ipc.StartPayload{Name: name})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
 	}
 }
 
 func (m model) doStop() tea.Cmd {
-	if m.c == nil {
+	if m.socketPath == "" {
 		return nil
 	}
 	svc := m.sidebarC.selectedService()
 	if svc == nil {
 		return nil
 	}
-	name := svc.Name
+	sp, name := m.socketPath, svc.Name
 	return func() tea.Msg {
-		resp, err := m.c.Send("stop", ipc.StopPayload{Name: name})
-		if err != nil {
-			return daemonErrMsg{err}
-		}
-		if !resp.OK {
-			return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
-		}
-		return daemonTickMsg{}
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("stop", ipc.StopPayload{Name: name})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
 	}
 }
 
@@ -362,10 +380,10 @@ func (m model) View() string {
 }
 
 // Run starts the procet TUI. Called from cli/root.go.
-// c must already be connected; caller owns c.Close().
-func Run(c *client.Client, reg *config.Registry, logDir string) error {
+// The daemon must be running at socketPath; a fresh connection is dialed per request.
+func Run(socketPath string, reg *config.Registry, logDir string) error {
 	cb := detectClipboard()
-	m := newModel(c, reg, logDir, cb)
+	m := newModel(socketPath, reg, logDir, cb)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
