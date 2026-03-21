@@ -7,16 +7,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const toastDuration = 1500 * time.Millisecond
+const (
+	toastDurationShort = 1500 * time.Millisecond
+	toastDurationLong  = 3000 * time.Millisecond
+)
 
 type footerBar struct {
 	toast    string
 	toastAge time.Duration
+	toastDur time.Duration
 }
 
 func (f *footerBar) showToast(msg string) {
 	f.toast = msg
 	f.toastAge = 0
+	f.toastDur = toastDurationShort
+}
+
+func (f *footerBar) showToastLong(msg string) {
+	f.toast = msg
+	f.toastAge = 0
+	f.toastDur = toastDurationLong
 }
 
 func (f *footerBar) tick(dt time.Duration) {
@@ -24,7 +35,7 @@ func (f *footerBar) tick(dt time.Duration) {
 		return
 	}
 	f.toastAge += dt
-	if f.toastAge >= toastDuration {
+	if f.toastAge >= f.toastDur {
 		f.toast = ""
 		f.toastAge = 0
 	}

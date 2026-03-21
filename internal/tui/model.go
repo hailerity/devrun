@@ -33,10 +33,8 @@ const (
 type daemonTickMsg struct{}
 type logTickMsg    struct{}
 type spinTickMsg   struct{}
-type toastTickMsg  struct{ dt time.Duration }
 type daemonRespMsg struct{ payload ipc.ListResponsePayload }
 type daemonErrMsg  struct{ err error }
-type logPollMsg    struct{ changed bool }
 
 // --- Model ---
 
@@ -101,8 +99,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		sidebarW := 22
 		mainW := m.width - sidebarW - 1
-		mainH := m.height - 3
-		m.logsC.resize(mainW, mainH-2)
+		bodyH := m.height - 2
+		m.logsC.resize(mainW, bodyH-2)
 		return m, nil
 
 	case daemonTickMsg:
@@ -122,7 +120,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonErrMsg:
 		m.spinning = false
-		m.footerC.showToast(fmt.Sprintf("error: %s", msg.err))
+		m.footerC.showToastLong(fmt.Sprintf("error: %s", msg.err))
 		return m, tickDaemon()
 
 	case logTickMsg:
@@ -230,7 +228,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if !m.cb.Available() {
 				m.footerC.showToast("No clipboard available")
 			} else if err := m.cb.Copy(text); err != nil {
-				m.footerC.showToast("Copy failed")
+				m.footerC.showToastLong("Copy failed")
 			} else {
 				m.footerC.showToast("Copied!")
 			}
@@ -256,6 +254,9 @@ func (m *model) updateLogFile() {
 }
 
 func (m model) pollDaemon() tea.Cmd {
+	if m.c == nil {
+		return tickDaemon()
+	}
 	return func() tea.Msg {
 		resp, err := m.c.Send("list", struct{}{})
 		if err != nil {
@@ -273,6 +274,9 @@ func (m model) pollDaemon() tea.Cmd {
 }
 
 func (m model) doStart() tea.Cmd {
+	if m.c == nil {
+		return nil
+	}
 	svc := m.sidebarC.selectedService()
 	if svc == nil {
 		return nil
@@ -291,6 +295,9 @@ func (m model) doStart() tea.Cmd {
 }
 
 func (m model) doStop() tea.Cmd {
+	if m.c == nil {
+		return nil
+	}
 	svc := m.sidebarC.selectedService()
 	if svc == nil {
 		return nil
