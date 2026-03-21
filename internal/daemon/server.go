@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,13 +17,22 @@ import (
 // Run is the daemon entry point. Called from main when --_daemon flag is detected.
 // socketPath is the Unix socket path to listen on.
 func Run(socketPath string) error {
+	return RunWithContext(context.Background(), socketPath)
+}
+
+// RunWithContext is like Run but exits when ctx is cancelled. This is useful for
+// in-process testing where the caller needs to stop the daemon programmatically.
+func RunWithContext(ctx context.Context, socketPath string) error {
 	if socketPath == "" {
 		socketPath = config.SocketPath()
 	}
 
-	// Ensure data directory exists
+	// Ensure data directory and socket parent directory exist.
 	if err := os.MkdirAll(config.DataDir(), 0755); err != nil {
 		return fmt.Errorf("mkdir data dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0755); err != nil {
+		return fmt.Errorf("mkdir socket dir: %w", err)
 	}
 
 	logger := slog.Default()
@@ -45,17 +55,20 @@ func Run(socketPath string) error {
 	logger.Info("daemon started", "socket", socketPath)
 
 	// Create a context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	shutdownCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Start port polling in background
-	go sup.startPortPoller(ctx)
+	go sup.startPortPoller(shutdownCtx)
 
 	// Handle SIGTERM/SIGINT for graceful shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		<-sigs
+		select {
+		case <-sigs:
+		case <-ctx.Done():
+		}
 		ln.Close()
 	}()
 
@@ -91,9 +104,13 @@ func isSocketAlive(socketPath string) bool {
 }
 
 func launchDaemon(socketPath string) error {
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("find executable: %w", err)
+	self := os.Getenv("PROCET_DAEMON_BIN")
+	if self == "" {
+		var err error
+		self, err = os.Executable()
+		if err != nil {
+			return fmt.Errorf("find executable: %w", err)
+		}
 	}
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
@@ -102,8 +119,18 @@ func launchDaemon(socketPath string) error {
 	}
 	defer devNull.Close()
 
+	// If PROCET_DAEMON_LOG is set, redirect daemon stderr to that file for debugging.
+	stderr := devNull
+	if logFile := os.Getenv("PROCET_DAEMON_LOG"); logFile != "" {
+		if f, err2 := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err2 == nil {
+			stderr = f
+			defer f.Close()
+		}
+	}
+
 	proc, err := os.StartProcess(self, []string{self, "--_daemon", socketPath}, &os.ProcAttr{
-		Files: []*os.File{devNull, devNull, devNull},
+		Env:   os.Environ(),
+		Files: []*os.File{devNull, devNull, stderr},
 		Sys:   &syscall.SysProcAttr{Setsid: true},
 	})
 	if err != nil {
