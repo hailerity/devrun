@@ -1,10 +1,8 @@
 package daemon
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 
 	"github.com/hailerity/procet/internal/config"
@@ -57,47 +55,16 @@ func (s *supervisor) handleAttach(conn net.Conn, raw json.RawMessage) {
 }
 
 // proxyClientToPTY reads raw bytes from the client socket and writes them to the PTY.
-// It exits when it receives a DetachRequest JSON frame or the connection closes.
-//
-// Protocol: raw bytes flow freely until the client sends a length-prefixed DetachRequest.
-// We use a bufio.Reader so we can reliably read the full 4-byte length prefix and body
-// even if the TCP stack fragments the write across multiple Read() calls.
+// It exits when the connection closes (client detached or stopped the service).
 func proxyClientToPTY(conn net.Conn, svc *managedService) {
-	r := bufio.NewReader(conn)
+	buf := make([]byte, 256)
 	for {
-		// Read the 4-byte length prefix using Peek so we don't consume bytes yet.
-		header, err := r.Peek(4)
-		if err != nil {
-			break // connection closed or error
+		n, err := conn.Read(buf)
+		if n > 0 && svc.proc != nil {
+			_, _ = svc.proc.PTY.Write(buf[:n])
 		}
-		msgLen := int(header[0])<<24 | int(header[1])<<16 | int(header[2])<<8 | int(header[3])
-
-		// Check if this could be a control frame (DetachRequest is ~40 bytes).
-		// We treat frames under 1KB as potential control frames; larger is definitely PTY data.
-		if msgLen > 0 && msgLen < 1024 {
-			// Try to read the full frame
-			frameBuf := make([]byte, 4+msgLen)
-			if _, readErr := io.ReadFull(r, frameBuf); readErr == nil {
-				var req ipc.Request
-				if json.Unmarshal(frameBuf[4:], &req) == nil && req.Type == "detach" {
-					_ = ipc.WriteMessage(conn, ipc.Response{OK: true})
-					return
-				}
-				// Not a detach frame — forward raw bytes to PTY
-				if svc.proc != nil {
-					_, _ = svc.proc.PTY.Write(frameBuf)
-				}
-				continue
-			}
-		}
-
-		// Read one byte at a time for raw PTY data (avoids blocking on partial reads)
-		b, err := r.ReadByte()
 		if err != nil {
 			break
-		}
-		if svc.proc != nil {
-			_, _ = svc.proc.PTY.Write([]byte{b})
 		}
 	}
 }

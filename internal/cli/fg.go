@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -74,7 +72,6 @@ func runFgByName(socketPath, name string) error {
 			if ctrlPPending {
 				ctrlPPending = false
 				if b == 0x71 { // Q — complete Ctrl+P, Q detach sequence
-					sendDetachRequest(conn, name)
 					term.Restore(int(os.Stdin.Fd()), oldState)
 					fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", name)
 					conn.Close()
@@ -88,14 +85,19 @@ func runFgByName(socketPath, name string) error {
 				ctrlPPending = true
 				continue
 			}
+			if b == 0x03 { // Ctrl+C — stop the service
+				term.Restore(int(os.Stdin.Fd()), oldState)
+				fmt.Fprintf(os.Stderr, "\r\n[stopping %s]\r\n", name)
+				conn.Close()
+				if sc, err := client.Connect(socketPath); err == nil {
+					_, _ = sc.Send("stop", ipc.StopPayload{Name: name})
+					sc.Close()
+				}
+				return nil
+			}
 			conn.Write([]byte{b})
 		}
 	}
 	return nil
 }
 
-func sendDetachRequest(conn net.Conn, name string) {
-	p, _ := json.Marshal(ipc.DetachPayload{Name: name})
-	req := ipc.Request{Type: "detach", Payload: json.RawMessage(p)}
-	_ = ipc.WriteMessage(conn, &req)
-}
