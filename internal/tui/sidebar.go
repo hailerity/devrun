@@ -111,8 +111,8 @@ func (s *sidebar) render(width, height int, focused bool) string {
 
 	// Mini stats for selected
 	if svc := s.selectedService(); svc != nil {
-		rows = append(rows, strings.Repeat("─", width))
-		rows = append(rows, styleMuted.Render(svc.Name))
+		sep := fmt.Sprintf("── %s ──", svc.Name)
+		rows = append(rows, styleMuted.Render(sep))
 		rows = append(rows, fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)))
 		rows = append(rows, fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)))
 		rows = append(rows, fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)))

@@ -12,13 +12,13 @@ func formatBytes(b int64) string {
 	)
 	switch {
 	case b >= GB:
-		return fmt.Sprintf("%.1f GB", float64(b)/float64(GB))
+		return fmt.Sprintf("%.0fG", float64(b)/float64(GB))
 	case b >= MB:
-		return fmt.Sprintf("%.1f MB", float64(b)/float64(MB))
+		return fmt.Sprintf("%.0fM", float64(b)/float64(MB))
 	case b >= KB:
-		return fmt.Sprintf("%.1f KB", float64(b)/float64(KB))
+		return fmt.Sprintf("%.0fK", float64(b)/float64(KB))
 	default:
-		return fmt.Sprintf("%d B", b)
+		return fmt.Sprintf("%dB", b)
 	}
 }
 
