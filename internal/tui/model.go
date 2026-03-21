@@ -361,6 +361,19 @@ func (m model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
+// Run starts the procet TUI. Called from cli/root.go.
+// c must already be connected; caller owns c.Close().
+func Run(c *client.Client, reg *config.Registry, logDir string) error {
+	cb := detectClipboard()
+	m := newModel(c, reg, logDir, cb)
+	p := tea.NewProgram(m,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
+	_, err := p.Run()
+	return err
+}
+
 func (m model) renderMain(w, h int) string {
 	// Tab bar
 	logsLabel := styleMuted.Render("LOGS")
