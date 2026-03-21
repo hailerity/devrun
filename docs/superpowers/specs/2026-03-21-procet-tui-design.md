@@ -82,8 +82,18 @@ Each row:
 ● <name>    :<port>
 ```
 
-- Status dot: green (running), red (crashed), grey (stopped/stopping/starting)
-- Port shown only when detected (non-zero in `ListResponse`); while running but port not yet detected, show `"detecting"`; otherwise show state label (crashed / stopped / starting / stopping)
+**Service states** (from `config.Status*` constants) and their visual treatment:
+
+| State | Dot color | Right-side label |
+|---|---|---|
+| `running` | `#3fb950` green | `:<port>` if detected, else `"detecting"` |
+| `starting` | `#6e7681` grey | `"starting"` |
+| `stopping` | `#6e7681` grey | `"stopping"` |
+| `stopped` | `#6e7681` grey | `"stopped"` |
+| `crashed` | `#f85149` red | `"crashed"` |
+
+- `"detecting"` is shown when `ServiceInfo.Port == 0` and state is `running`; the daemon polls ports every 5s so this resolves automatically; no TUI-side timeout
+- Selected service highlighted with left border `│` in accent blue and darker background
 - Selected service highlighted with left border `│` in accent blue and darker background
 
 **Mini stats panel** below the service list (for selected service only):
@@ -138,7 +148,7 @@ cwd      ~/projects/api
 group    backend
 ```
 
-**ENV** (from `services.yaml`, static; one entry per line in `KEY=value` format; if ENV is empty the section is omitted):
+**ENV** (from `services.yaml`, static; shows only the explicit `ServiceConfig.Env` map — not inherited shell environment, since `ServiceInfo` carries no inherited env; one entry per line in `KEY=value` format; section is omitted entirely if `Env` is empty or nil):
 ```
 NODE_ENV=development
 PORT=8080
