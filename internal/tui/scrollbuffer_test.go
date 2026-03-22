@@ -237,7 +237,7 @@ func TestScrollBuffer_MouseWheelUpScrolls(t *testing.T) {
 	sb := newFilledScrollBuffer(30, 10)
 	sb.yOffset = 10
 	sb.followMode = true
-	msg := tea.MouseMsg{Button: tea.MouseButtonWheelUp}
+	msg := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp}
 	sb.handleMouse(msg, 3, 23)
 	assert.Equal(t, 7, sb.yOffset)
 	assert.False(t, sb.followMode)
@@ -246,7 +246,7 @@ func TestScrollBuffer_MouseWheelUpScrolls(t *testing.T) {
 func TestScrollBuffer_MouseWheelDownScrolls(t *testing.T) {
 	sb := newFilledScrollBuffer(30, 10)
 	sb.yOffset = 0
-	msg := tea.MouseMsg{Button: tea.MouseButtonWheelDown}
+	msg := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown}
 	sb.handleMouse(msg, 3, 23)
 	assert.Equal(t, 3, sb.yOffset)
 }
@@ -289,7 +289,7 @@ func TestScrollBuffer_MouseDragNoopWhenNotMouseDown(t *testing.T) {
 func TestScrollBuffer_MouseReleaseClears(t *testing.T) {
 	sb := newFilledScrollBuffer(20, 10)
 	sb.mouseDown = true
-	msg := tea.MouseMsg{Action: tea.MouseActionRelease}
+	msg := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}
 	sb.handleMouse(msg, 3, 23)
 	assert.False(t, sb.mouseDown)
 }

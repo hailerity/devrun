@@ -169,12 +169,12 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 // Returns true if state changed.
 func (sb *scrollBuffer) handleMouse(msg tea.MouseMsg, topOffset, leftOffset int) bool {
 	switch {
-	case msg.Button == tea.MouseButtonWheelUp:
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp:
 		sb.scrollUp(3)
 		sb.followMode = false
 		return true
 
-	case msg.Button == tea.MouseButtonWheelDown:
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelDown:
 		sb.scrollDown(3)
 		sb.followMode = false
 		return true
@@ -200,7 +200,8 @@ func (sb *scrollBuffer) handleMouse(msg tea.MouseMsg, topOffset, leftOffset int)
 		sb.cursor = sb.selEnd
 		return true
 
-	case msg.Action == tea.MouseActionRelease:
+	case msg.Action == tea.MouseActionRelease &&
+		(msg.Button == tea.MouseButtonLeft || msg.Button == tea.MouseButtonNone):
 		sb.mouseDown = false
 		return true
 	}
