@@ -3,6 +3,8 @@ package tui
 import (
 	"regexp"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // scrollBuffer is a self-contained scrollable line buffer. It owns the log
@@ -96,6 +98,8 @@ func (sb *scrollBuffer) enterVisual() {
 
 func (sb *scrollBuffer) exitVisual() {
 	sb.visualMode = false
+	sb.selStart = 0
+	sb.selEnd = 0
 }
 
 // copyLine returns the current cursor line with ANSI codes stripped.
@@ -126,6 +130,35 @@ func (sb *scrollBuffer) copySelection() string {
 	return strings.Join(parts, "\n")
 }
 
-// View, renderLine, handleMouse are added in subsequent tasks.
-// Stub View() so the file compiles.
-func (sb *scrollBuffer) View() string { return strings.Join(sb.lines, "\n") }
+func (sb *scrollBuffer) View() string {
+	if len(sb.lines) == 0 {
+		return ""
+	}
+	end := min(sb.yOffset+sb.height, len(sb.lines))
+	visible := sb.lines[sb.yOffset:end]
+	var out strings.Builder
+	for i, line := range visible {
+		out.WriteString(sb.renderLine(sb.yOffset+i, line))
+		out.WriteByte('\n')
+	}
+	return out.String()
+}
+
+func (sb *scrollBuffer) renderLine(idx int, line string) string {
+	colored := colorizeLog(line)
+	lo := min(sb.selStart, sb.selEnd)
+	hi := max(sb.selStart, sb.selEnd)
+	if sb.visualMode && idx >= lo && idx <= hi {
+		// styleVisualLine has BorderLeft(true) which adds 1 column.
+		// Truncate to width-1 so border+content fits within sb.width.
+		truncated := ansi.Truncate(colored, sb.width-1, "")
+		return styleVisualLine.Render(truncated)
+	}
+	truncated := ansi.Truncate(colored, sb.width, "")
+	if idx == sb.cursor {
+		return styleSelectedLine.Render(truncated)
+	}
+	return truncated
+}
+
+// handleMouse is added in a subsequent task.

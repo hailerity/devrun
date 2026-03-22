@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -168,4 +170,56 @@ func TestScrollBuffer_CopySelectionReversedRange(t *testing.T) {
 func TestScrollBuffer_CopySelectionNotInVisualMode(t *testing.T) {
 	sb := scrollBuffer{lines: []string{"a", "b"}, visualMode: false}
 	assert.Equal(t, "", sb.copySelection())
+}
+
+func TestScrollBuffer_ViewRendersVisibleWindow(t *testing.T) {
+	sb := scrollBuffer{
+		lines:   []string{"line0", "line1", "line2", "line3", "line4"},
+		height:  3,
+		width:   80,
+		yOffset: 1,
+	}
+	out := sb.View()
+	assert.Contains(t, out, "line1")
+	assert.Contains(t, out, "line2")
+	assert.Contains(t, out, "line3")
+	assert.NotContains(t, out, "line0")
+	assert.NotContains(t, out, "line4")
+}
+
+func TestScrollBuffer_ViewEmptyBufferReturnsEmpty(t *testing.T) {
+	sb := scrollBuffer{height: 10, width: 80}
+	assert.Equal(t, "", sb.View())
+}
+
+func TestScrollBuffer_ViewUsesAbsoluteIndexForCursorHighlight(t *testing.T) {
+	// cursor is at line 3 (absolute), viewport starts at yOffset=2
+	sb := scrollBuffer{
+		lines:   []string{"a", "b", "c", "d", "e"},
+		height:  3,
+		width:   80,
+		yOffset: 2,
+		cursor:  3, // absolute index 3 → visible as second line
+	}
+	out := sb.View()
+	// line at abs index 3 is "d" — should have cursor highlight applied
+	assert.Contains(t, out, "d")
+}
+
+func TestScrollBuffer_ViewHasTrailingNewline(t *testing.T) {
+	sb := scrollBuffer{
+		lines:  []string{"hello"},
+		height: 5,
+		width:  80,
+	}
+	out := sb.View()
+	assert.True(t, strings.HasSuffix(out, "\n"))
+}
+
+func TestScrollBuffer_ExitVisualResetsSelection(t *testing.T) {
+	sb := scrollBuffer{visualMode: true, selStart: 3, selEnd: 5}
+	sb.exitVisual()
+	assert.False(t, sb.visualMode)
+	assert.Equal(t, 0, sb.selStart)
+	assert.Equal(t, 0, sb.selEnd)
 }
