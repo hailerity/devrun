@@ -147,9 +147,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if m.activeTab == tabLogs {
-			// topOffset=1: bubbletea clips the 2-row header from the render output
-			// (total render = header(2)+body+footer(2) > terminal height, clips top 2 rows),
-			// leaving tab-bar at terminal row 0 and log content starting at terminal row 2.
+			// topOffset=1: the rendered view overflows the terminal height by 3 rows;
+			// bubbletea clips the top 3 rows (header content, header border, tab-bar label),
+			// leaving tab-bar border at terminal row 0 and log content starting at row 1.
 			// leftOffset=23: sidebarW(22) + divider(1); reserved for future character-level selection.
 			_ = m.logsC.sb.handleMouse(msg, 1, 23)
 			// A left-click in the log area auto-focuses the main panel so that
@@ -169,6 +169,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
+	// ctrl+c with an active visual selection copies instead of quitting.
+	// This handles Cmd+C on macOS and Ctrl+Shift+C on Ubuntu when the
+	// terminal forwards them as ctrl+c to the running process.
+	case msg.Type == tea.KeyCtrlC &&
+		m.focus == focusMain &&
+		m.activeTab == tabLogs &&
+		m.logsC.sb.visualMode:
+		text := m.logsC.sb.copySelection()
+		m.logsC.sb.exitVisual()
+		if !m.cb.Available() {
+			m.footerC.showToast("No clipboard available")
+		} else if err := m.cb.Copy(text); err != nil {
+			m.footerC.showToastLong("Copy failed")
+		} else {
+			m.footerC.showToast("Copied!")
+		}
+
 	case key.Matches(msg, keys.Quit):
 		return m, tea.Quit
 

@@ -55,7 +55,7 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, 
 	var hints []string
 	hints = append(hints, renderHint("Tab", "switch"))
 	if focus == focusMain && activeTab == tabLogs {
-		hints = append(hints, renderHint("y", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
+		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
 	}
 	if visualMode {
 		hints = append(hints, renderHint("Esc", "cancel"))

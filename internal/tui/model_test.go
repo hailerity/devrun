@@ -36,30 +36,60 @@ func setupLogModel() model {
 	return m
 }
 
-// TestModel_MouseClick_SetsCorrectCursor verifies topOffset=2 (bubbletea clips
-// the 2-row header from the top; tab bar occupies terminal rows 0-1; log
-// content starts at terminal row 2).
+// TestModel_MouseClick_SetsCorrectCursor verifies topOffset=1 (bubbletea clips
+// 3 rows from the top of the render; tab bar border is at terminal row 0; log
+// content starts at terminal row 1).
 func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	m := setupLogModel()
 	m.focus = focusMain
 
-	// Click on the first visible log line (terminal row 2).
+	// Click on the first visible log line (terminal row 1).
 	m2, _ := m.Update(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		Y:      2, // first log line: topOffset(2) + lineIdx(0)
+		Y:      1, // first log line: topOffset(1) + lineIdx(0)
 	})
 	mm := m2.(model)
-	assert.Equal(t, 0, mm.logsC.sb.cursor, "clicking terminal row 2 should select log line index 0")
+	assert.Equal(t, 0, mm.logsC.sb.cursor, "clicking terminal row 1 should select log line index 0")
 
-	// Click on the fifth visible log line (terminal row 6 = topOffset 2 + index 4).
+	// Click on the fifth visible log line (terminal row 5 = topOffset 1 + index 4).
 	m3, _ := m.Update(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		Y:      6, // topOffset(2) + lineIdx(4)
+		Y:      5, // topOffset(1) + lineIdx(4)
 	})
 	mm3 := m3.(model)
-	assert.Equal(t, 4, mm3.logsC.sb.cursor, "clicking terminal row 6 should select log line index 4")
+	assert.Equal(t, 4, mm3.logsC.sb.cursor, "clicking terminal row 5 should select log line index 4")
+}
+
+// TestModel_CtrlC_CopiesWhenVisualModeActive verifies that ctrl+c (Cmd+C on
+// macOS / Ctrl+Shift+C on Ubuntu when forwarded by the terminal) copies the
+// visual selection rather than quitting, when focus is on the log panel.
+func TestModel_CtrlC_CopiesWhenVisualModeActive(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	m.logsC.sb.visualMode = true
+	m.logsC.sb.selStart = 1
+	m.logsC.sb.selEnd = 3
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	mm := m2.(model)
+
+	assert.Nil(t, cmd, "ctrl+c with visual selection should not quit")
+	assert.False(t, mm.logsC.sb.visualMode, "visual mode should be exited after copy")
+	// clipboard{} has no backend, so the toast is "No clipboard available"
+	assert.Equal(t, "No clipboard available", mm.footerC.toast)
+}
+
+// TestModel_CtrlC_QuitsWhenNoVisualMode verifies that ctrl+c without an active
+// visual selection still quits as normal.
+func TestModel_CtrlC_QuitsWhenNoVisualMode(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	// visualMode is false (default)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	assert.NotNil(t, cmd, "ctrl+c without visual selection should quit")
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area
