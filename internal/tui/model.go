@@ -147,11 +147,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if m.activeTab == tabLogs {
-			// topOffset=2: bubbletea clips the 2-row header from the render output
+			// topOffset=1: bubbletea clips the 2-row header from the render output
 			// (total render = header(2)+body+footer(2) > terminal height, clips top 2 rows),
 			// leaving tab-bar at terminal row 0 and log content starting at terminal row 2.
 			// leftOffset=23: sidebarW(22) + divider(1); reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, 2, 23)
+			_ = m.logsC.sb.handleMouse(msg, 1, 23)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
