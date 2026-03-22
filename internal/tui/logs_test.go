@@ -31,97 +31,107 @@ func TestColorizeLog_NoStatusUnchanged(t *testing.T) {
 
 func TestLogsPanel_CopyLine(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"line 0", "line 1", "line 2"}
-	lp.cursor = 1
-	assert.Equal(t, "line 1", lp.copyLine())
+	lp.sb.lines = []string{"line 0", "line 1", "line 2"}
+	lp.sb.cursor = 1
+	assert.Equal(t, "line 1", lp.sb.copyLine())
 }
 
 func TestLogsPanel_CopyLineEmpty(t *testing.T) {
 	lp := newLogsPanel()
-	assert.Equal(t, "", lp.copyLine())
+	assert.Equal(t, "", lp.sb.copyLine())
 }
 
 func TestLogsPanel_CopySelection(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"line 0", "line 1", "line 2", "line 3"}
-	lp.visualMode = true
-	lp.selStart = 1
-	lp.selEnd = 2
-	assert.Equal(t, "line 1\nline 2", lp.copySelection())
+	lp.sb.lines = []string{"line 0", "line 1", "line 2", "line 3"}
+	lp.sb.visualMode = true
+	lp.sb.selStart = 1
+	lp.sb.selEnd = 2
+	assert.Equal(t, "line 1\nline 2", lp.sb.copySelection())
 }
 
 func TestLogsPanel_MoveUpDisablesFollow(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b", "c"}
-	lp.cursor = 2
-	lp.followMode = true
+	lp.sb.lines = []string{"a", "b", "c"}
+	lp.sb.cursor = 2
+	lp.sb.followMode = true
+	lp.sb.height = 10
 
-	lp.moveUp()
-	assert.Equal(t, 1, lp.cursor)
-	assert.False(t, lp.followMode)
+	lp.sb.moveUp()
+	assert.Equal(t, 1, lp.sb.cursor)
+	assert.False(t, lp.sb.followMode)
 }
 
 func TestLogsPanel_MoveDownDisablesFollow(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b", "c"}
-	lp.cursor = 0
-	lp.followMode = true
+	lp.sb.lines = []string{"a", "b", "c"}
+	lp.sb.cursor = 0
+	lp.sb.followMode = true
+	lp.sb.height = 10
 
-	lp.moveDown()
-	assert.Equal(t, 1, lp.cursor)
-	assert.False(t, lp.followMode)
+	lp.sb.moveDown()
+	assert.Equal(t, 1, lp.sb.cursor)
+	assert.False(t, lp.sb.followMode)
 }
 
 func TestLogsPanel_MoveDownDoesNotExceedBounds(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b"}
-	lp.cursor = 1
-	lp.moveDown()
-	assert.Equal(t, 1, lp.cursor)
+	lp.sb.lines = []string{"a", "b"}
+	lp.sb.cursor = 1
+	lp.sb.height = 10
+	lp.sb.moveDown()
+	assert.Equal(t, 1, lp.sb.cursor)
 }
 
 func TestLogsPanel_EnterVisualSetsRange(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b", "c"}
-	lp.cursor = 1
-	lp.enterVisual()
-	assert.True(t, lp.visualMode)
-	assert.Equal(t, 1, lp.selStart)
-	assert.Equal(t, 1, lp.selEnd)
+	lp.sb.lines = []string{"a", "b", "c"}
+	lp.sb.cursor = 1
+	lp.sb.enterVisual()
+	assert.True(t, lp.sb.visualMode)
+	assert.Equal(t, 1, lp.sb.selStart)
+	assert.Equal(t, 1, lp.sb.selEnd)
 }
 
 func TestLogsPanel_VisualMoveExtendsSelection(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b", "c", "d"}
-	lp.cursor = 1
-	lp.enterVisual()
-	lp.moveDown()
-	assert.Equal(t, 2, lp.selEnd)
-	assert.Equal(t, 2, lp.cursor)
+	lp.sb.lines = []string{"a", "b", "c", "d"}
+	lp.sb.cursor = 1
+	lp.sb.height = 10
+	lp.sb.enterVisual()
+	lp.sb.moveDown()
+	assert.Equal(t, 2, lp.sb.selEnd)
+	assert.Equal(t, 2, lp.sb.cursor)
 }
 
 func TestLogsPanel_ExitVisualClearsMode(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b"}
-	lp.cursor = 0
-	lp.enterVisual()
-	lp.exitVisual()
-	assert.False(t, lp.visualMode)
+	lp.sb.lines = []string{"a", "b"}
+	lp.sb.cursor = 0
+	lp.sb.enterVisual()
+	lp.sb.exitVisual()
+	assert.False(t, lp.sb.visualMode)
 }
 
 func TestLogsPanel_CopySelectionReversed(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"line 0", "line 1", "line 2", "line 3"}
-	lp.visualMode = true
-	lp.selStart = 2
-	lp.selEnd = 1 // reversed — selEnd < selStart
-	assert.Equal(t, "line 1\nline 2", lp.copySelection())
+	lp.sb.lines = []string{"line 0", "line 1", "line 2", "line 3"}
+	lp.sb.visualMode = true
+	lp.sb.selStart = 2
+	lp.sb.selEnd = 1
+	assert.Equal(t, "line 1\nline 2", lp.sb.copySelection())
 }
 
 func TestLogsPanel_MoveUpDoesNotGoBelowZero(t *testing.T) {
 	lp := newLogsPanel()
-	lp.lines = []string{"a", "b"}
-	lp.cursor = 0
-	lp.moveUp()
-	assert.Equal(t, 0, lp.cursor)
+	lp.sb.lines = []string{"a", "b"}
+	lp.sb.cursor = 0
+	lp.sb.height = 10
+	lp.sb.moveUp()
+	assert.Equal(t, 0, lp.sb.cursor)
+}
+
+func TestLogsPanel_NewLogsPanelFollowModeIsTrue(t *testing.T) {
+	lp := newLogsPanel()
+	assert.True(t, lp.sb.followMode)
 }

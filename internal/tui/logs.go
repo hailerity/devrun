@@ -8,38 +8,18 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-
-	"github.com/charmbracelet/bubbles/viewport"
 )
 
-var httpStatusRe = regexp.MustCompile(`\b([2-5]\d{2})\b`)
-
-// logsAnsiRe and logsStripANSI are temporary; they will be removed in Task 5
-// when logs.go is migrated to use the canonical stripANSI from scrollbuffer.go.
-var logsAnsiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-func logsStripANSI(s string) string {
-	return logsAnsiRe.ReplaceAllString(s, "")
-}
-
 type logsPanel struct {
-	vp         viewport.Model
-	lines      []string
-	cursor     int  // line index under cursor (for single-line copy)
-	selStart   int  // visual selection start index
-	selEnd     int  // visual selection end index
-	visualMode bool
-	followMode bool
-
-	// file state
+	sb         scrollBuffer
 	filePath   string
 	fileOffset int64
-	noLogMsg   string // set when file is missing
+	noLogMsg   string
 }
 
 func newLogsPanel() logsPanel {
 	return logsPanel{
-		followMode: true,
+		sb: scrollBuffer{followMode: true},
 	}
 }
 
@@ -47,14 +27,15 @@ func newLogsPanel() logsPanel {
 func (lp *logsPanel) setFile(path string) {
 	lp.filePath = path
 	lp.fileOffset = 0
-	lp.lines = nil
-	lp.cursor = 0
-	lp.visualMode = false
+	lp.sb.lines = nil
+	lp.sb.cursor = 0
+	lp.sb.yOffset = 0
+	lp.sb.visualMode = false
+	lp.sb.followMode = true
 	lp.noLogMsg = ""
 }
 
 // poll reads any new lines appended to the log file since the last poll.
-// Returns true if new lines were added.
 func (lp *logsPanel) poll() bool {
 	if lp.filePath == "" {
 		return false
@@ -67,55 +48,36 @@ func (lp *logsPanel) poll() bool {
 	defer f.Close()
 
 	if _, err := f.Seek(lp.fileOffset, io.SeekStart); err != nil {
-		// File was likely rotated or truncated — re-read from scratch
 		lp.fileOffset = 0
-		lp.lines = nil
+		lp.sb.lines = nil
 		f.Seek(0, io.SeekStart) //nolint:errcheck
 	}
 	scanner := bufio.NewScanner(f)
 	var added bool
 	for scanner.Scan() {
-		lp.lines = append(lp.lines, logsStripANSI(scanner.Text()))
+		lp.sb.lines = append(lp.sb.lines, scanner.Text()) // raw, ANSI preserved
 		added = true
 	}
 	lp.fileOffset, _ = f.Seek(0, io.SeekCurrent)
 	lp.noLogMsg = ""
 
-	if added && lp.followMode {
-		lp.cursor = len(lp.lines) - 1
+	if added && lp.sb.followMode {
+		lp.sb.gotoBottom()
 	}
 	return added
 }
 
-// rebuildViewport refreshes the viewport content from lp.lines.
-func (lp *logsPanel) rebuildViewport() {
+// view renders the panel: shows noLogMsg if no file, otherwise delegates to scrollBuffer.
+func (lp *logsPanel) view() string {
 	if lp.noLogMsg != "" {
-		lp.vp.SetContent(styleMuted.Render(lp.noLogMsg))
-		return
+		return styleMuted.Render(lp.noLogMsg)
 	}
-	var sb strings.Builder
-	for i, line := range lp.lines {
-		sb.WriteString(lp.renderLine(i, line))
-		sb.WriteByte('\n')
-	}
-	lp.vp.SetContent(sb.String())
-	if lp.followMode {
-		lp.vp.GotoBottom()
-	}
-}
-
-func (lp *logsPanel) renderLine(idx int, line string) string {
-	colored := colorizeLog(line)
-	if lp.visualMode && idx >= lp.selStart && idx <= lp.selEnd {
-		return styleVisualLine.Render(colored)
-	}
-	if idx == lp.cursor {
-		return styleSelectedLine.Render(colored)
-	}
-	return colored // no wrapper — preserve embedded color codes
+	return lp.sb.View()
 }
 
 // colorizeLog wraps HTTP status codes (2xx/4xx/5xx) with palette colors.
+var httpStatusRe = regexp.MustCompile(`\b([2-5]\d{2})\b`)
+
 func colorizeLog(line string) string {
 	return httpStatusRe.ReplaceAllStringFunc(line, func(code string) string {
 		switch code[0] {
@@ -128,62 +90,6 @@ func colorizeLog(line string) string {
 		}
 		return code
 	})
-}
-
-func (lp *logsPanel) copyLine() string {
-	if len(lp.lines) == 0 || lp.cursor >= len(lp.lines) {
-		return ""
-	}
-	return lp.lines[lp.cursor]
-}
-
-func (lp *logsPanel) copySelection() string {
-	if !lp.visualMode || len(lp.lines) == 0 {
-		return ""
-	}
-	start, end := lp.selStart, lp.selEnd
-	if start > end {
-		start, end = end, start
-	}
-	if end >= len(lp.lines) {
-		end = len(lp.lines) - 1
-	}
-	return strings.Join(lp.lines[start:end+1], "\n")
-}
-
-func (lp *logsPanel) enterVisual() {
-	lp.visualMode = true
-	lp.selStart = lp.cursor
-	lp.selEnd = lp.cursor
-}
-
-func (lp *logsPanel) exitVisual() {
-	lp.visualMode = false
-}
-
-func (lp *logsPanel) moveUp() {
-	if lp.cursor > 0 {
-		lp.cursor--
-		lp.followMode = false
-		if lp.visualMode {
-			lp.selEnd = lp.cursor
-		}
-	}
-}
-
-func (lp *logsPanel) moveDown() {
-	if lp.cursor < len(lp.lines)-1 {
-		lp.cursor++
-		lp.followMode = false
-		if lp.visualMode {
-			lp.selEnd = lp.cursor
-		}
-	}
-}
-
-func (lp *logsPanel) resize(w, h int) {
-	lp.vp.Width = w
-	lp.vp.Height = h
 }
 
 // logName extracts "myservice" from "/path/to/logs/myservice.log".
