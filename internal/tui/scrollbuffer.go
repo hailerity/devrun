@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -161,4 +162,47 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 	return truncated
 }
 
-// handleMouse is added in a subsequent task.
+// handleMouse dispatches a bubbletea v1.3.10 tea.MouseMsg.
+// topOffset is the terminal row where log content starts (header+tabbar = 3).
+// leftOffset is the terminal column where the main panel starts (reserved for
+// future character-level work, unused for line-level selection).
+// Returns true if state changed.
+func (sb *scrollBuffer) handleMouse(msg tea.MouseMsg, topOffset, leftOffset int) bool {
+	switch {
+	case msg.Button == tea.MouseButtonWheelUp:
+		sb.scrollUp(3)
+		sb.followMode = false
+		return true
+
+	case msg.Button == tea.MouseButtonWheelDown:
+		sb.scrollDown(3)
+		sb.followMode = false
+		return true
+
+	case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+		if len(sb.lines) == 0 {
+			return false
+		}
+		sb.cursor = sb.clampLine(sb.yOffset + (msg.Y - topOffset))
+		sb.exitVisual()
+		sb.followMode = false
+		sb.mouseDown = true
+		return true
+
+	case msg.Action == tea.MouseActionMotion && sb.mouseDown:
+		if len(sb.lines) == 0 {
+			return false
+		}
+		if !sb.visualMode {
+			sb.enterVisual()
+		}
+		sb.selEnd = sb.clampLine(sb.yOffset + (msg.Y - topOffset))
+		sb.cursor = sb.selEnd
+		return true
+
+	case msg.Action == tea.MouseActionRelease:
+		sb.mouseDown = false
+		return true
+	}
+	return false
+}

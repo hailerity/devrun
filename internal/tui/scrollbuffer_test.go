@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -222,4 +223,80 @@ func TestScrollBuffer_ExitVisualResetsSelection(t *testing.T) {
 	assert.False(t, sb.visualMode)
 	assert.Equal(t, 0, sb.selStart)
 	assert.Equal(t, 0, sb.selEnd)
+}
+
+func newFilledScrollBuffer(nLines, height int) scrollBuffer {
+	lines := make([]string, nLines)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	return scrollBuffer{lines: lines, height: height, width: 80}
+}
+
+func TestScrollBuffer_MouseWheelUpScrolls(t *testing.T) {
+	sb := newFilledScrollBuffer(30, 10)
+	sb.yOffset = 10
+	sb.followMode = true
+	msg := tea.MouseMsg{Button: tea.MouseButtonWheelUp}
+	sb.handleMouse(msg, 3, 23)
+	assert.Equal(t, 7, sb.yOffset)
+	assert.False(t, sb.followMode)
+}
+
+func TestScrollBuffer_MouseWheelDownScrolls(t *testing.T) {
+	sb := newFilledScrollBuffer(30, 10)
+	sb.yOffset = 0
+	msg := tea.MouseMsg{Button: tea.MouseButtonWheelDown}
+	sb.handleMouse(msg, 3, 23)
+	assert.Equal(t, 3, sb.yOffset)
+}
+
+func TestScrollBuffer_MouseClickSetsCursor(t *testing.T) {
+	sb := newFilledScrollBuffer(20, 10)
+	sb.yOffset = 5
+	// topOffset=3, click at Y=6 → lineIdx = yOffset + (Y-topOffset) = 5+(6-3) = 8
+	msg := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6}
+	sb.handleMouse(msg, 3, 23)
+	assert.Equal(t, 8, sb.cursor)
+	assert.True(t, sb.mouseDown)
+	assert.False(t, sb.followMode)
+	assert.False(t, sb.visualMode)
+}
+
+func TestScrollBuffer_MouseDragEntersVisualAndExtendsSelection(t *testing.T) {
+	sb := newFilledScrollBuffer(20, 10)
+	sb.yOffset = 0
+	sb.cursor = 2
+	sb.mouseDown = true
+
+	// drag to Y=6 → lineIdx = 0+(6-3) = 3
+	msg := tea.MouseMsg{Action: tea.MouseActionMotion, Y: 6}
+	sb.handleMouse(msg, 3, 23)
+	assert.True(t, sb.visualMode)
+	assert.Equal(t, 2, sb.selStart)
+	assert.Equal(t, 3, sb.selEnd)
+	assert.Equal(t, 3, sb.cursor)
+}
+
+func TestScrollBuffer_MouseDragNoopWhenNotMouseDown(t *testing.T) {
+	sb := newFilledScrollBuffer(20, 10)
+	sb.mouseDown = false
+	msg := tea.MouseMsg{Action: tea.MouseActionMotion, Y: 5}
+	sb.handleMouse(msg, 3, 23)
+	assert.False(t, sb.visualMode)
+}
+
+func TestScrollBuffer_MouseReleaseClears(t *testing.T) {
+	sb := newFilledScrollBuffer(20, 10)
+	sb.mouseDown = true
+	msg := tea.MouseMsg{Action: tea.MouseActionRelease}
+	sb.handleMouse(msg, 3, 23)
+	assert.False(t, sb.mouseDown)
+}
+
+func TestScrollBuffer_MouseClickEmptyBufferNoopNoPanic(t *testing.T) {
+	var sb scrollBuffer
+	sb.height = 10
+	msg := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 5}
+	sb.handleMouse(msg, 3, 23) // must not panic
 }
