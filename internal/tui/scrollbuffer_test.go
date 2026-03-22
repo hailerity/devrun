@@ -104,3 +104,68 @@ func TestScrollBuffer_ClampLineClampsToRange(t *testing.T) {
 	assert.Equal(t, 9, sb.clampLine(20))
 	assert.Equal(t, 5, sb.clampLine(5))
 }
+
+func TestScrollBuffer_EnterVisualSetsRange(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"a", "b", "c"}, cursor: 1}
+	sb.enterVisual()
+	assert.True(t, sb.visualMode)
+	assert.Equal(t, 1, sb.selStart)
+	assert.Equal(t, 1, sb.selEnd)
+}
+
+func TestScrollBuffer_ExitVisualClearsMode(t *testing.T) {
+	sb := scrollBuffer{visualMode: true}
+	sb.exitVisual()
+	assert.False(t, sb.visualMode)
+}
+
+func TestScrollBuffer_MoveDownExtendsVisualSelection(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"a", "b", "c", "d"}, height: 10, cursor: 1}
+	sb.enterVisual()
+	sb.moveDown()
+	assert.Equal(t, 2, sb.selEnd)
+	assert.Equal(t, 2, sb.cursor)
+}
+
+func TestScrollBuffer_MoveUpExtendsVisualSelection(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"a", "b", "c"}, height: 10, cursor: 2}
+	sb.enterVisual()
+	sb.moveUp()
+	assert.Equal(t, 1, sb.selEnd)
+	assert.Equal(t, 1, sb.cursor)
+}
+
+func TestScrollBuffer_CopyLineReturnsStrippedText(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"line 0", "\x1b[32mline 1\x1b[0m", "line 2"}, cursor: 1}
+	assert.Equal(t, "line 1", sb.copyLine()) // ANSI stripped
+}
+
+func TestScrollBuffer_CopyLineEmptyBuffer(t *testing.T) {
+	var sb scrollBuffer
+	assert.Equal(t, "", sb.copyLine())
+}
+
+func TestScrollBuffer_CopySelectionStripsANSI(t *testing.T) {
+	sb := scrollBuffer{
+		lines:      []string{"line 0", "\x1b[32mline 1\x1b[0m", "line 2", "line 3"},
+		visualMode: true,
+		selStart:   1,
+		selEnd:     2,
+	}
+	assert.Equal(t, "line 1\nline 2", sb.copySelection())
+}
+
+func TestScrollBuffer_CopySelectionReversedRange(t *testing.T) {
+	sb := scrollBuffer{
+		lines:      []string{"line 0", "line 1", "line 2"},
+		visualMode: true,
+		selStart:   2,
+		selEnd:     0,
+	}
+	assert.Equal(t, "line 0\nline 1\nline 2", sb.copySelection())
+}
+
+func TestScrollBuffer_CopySelectionNotInVisualMode(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"a", "b"}, visualMode: false}
+	assert.Equal(t, "", sb.copySelection())
+}

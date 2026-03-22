@@ -1,6 +1,9 @@
 package tui
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // scrollBuffer is a self-contained scrollable line buffer. It owns the log
 // lines, scroll position, cursor, and selection state for the logs panel.
@@ -79,7 +82,50 @@ func (sb *scrollBuffer) moveDown() {
 	}
 }
 
-// View, renderLine, enterVisual, exitVisual, copyLine, copySelection,
-// handleMouse are added in subsequent tasks.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+func stripANSI(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
+
+func (sb *scrollBuffer) enterVisual() {
+	sb.visualMode = true
+	sb.selStart = sb.cursor
+	sb.selEnd = sb.cursor
+}
+
+func (sb *scrollBuffer) exitVisual() {
+	sb.visualMode = false
+}
+
+// copyLine returns the current cursor line with ANSI codes stripped.
+// Raw ANSI in stored lines must not reach the clipboard.
+func (sb *scrollBuffer) copyLine() string {
+	if len(sb.lines) == 0 || sb.cursor >= len(sb.lines) {
+		return ""
+	}
+	return stripANSI(sb.lines[sb.cursor])
+}
+
+// copySelection returns selected lines joined by \n, ANSI stripped.
+func (sb *scrollBuffer) copySelection() string {
+	if !sb.visualMode || len(sb.lines) == 0 {
+		return ""
+	}
+	start, end := sb.selStart, sb.selEnd
+	if start > end {
+		start, end = end, start
+	}
+	if end >= len(sb.lines) {
+		end = len(sb.lines) - 1
+	}
+	parts := make([]string, 0, end-start+1)
+	for _, l := range sb.lines[start : end+1] {
+		parts = append(parts, stripANSI(l))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// View, renderLine, handleMouse are added in subsequent tasks.
 // Stub View() so the file compiles.
 func (sb *scrollBuffer) View() string { return strings.Join(sb.lines, "\n") }

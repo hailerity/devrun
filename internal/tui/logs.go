@@ -14,13 +14,12 @@ import (
 
 var httpStatusRe = regexp.MustCompile(`\b([2-5]\d{2})\b`)
 
-// ansiRe matches ANSI escape sequences (e.g. \x1b[32m) so they can be stripped
-// from service log lines before display. Service output often includes its own
-// colors; embedded ANSI codes corrupt the TUI viewport's width calculations.
-var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+// logsAnsiRe and logsStripANSI are temporary; they will be removed in Task 5
+// when logs.go is migrated to use the canonical stripANSI from scrollbuffer.go.
+var logsAnsiRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-func stripANSI(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
+func logsStripANSI(s string) string {
+	return logsAnsiRe.ReplaceAllString(s, "")
 }
 
 type logsPanel struct {
@@ -76,7 +75,7 @@ func (lp *logsPanel) poll() bool {
 	scanner := bufio.NewScanner(f)
 	var added bool
 	for scanner.Scan() {
-		lp.lines = append(lp.lines, stripANSI(scanner.Text()))
+		lp.lines = append(lp.lines, logsStripANSI(scanner.Text()))
 		added = true
 	}
 	lp.fileOffset, _ = f.Seek(0, io.SeekCurrent)
