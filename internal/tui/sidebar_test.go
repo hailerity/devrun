@@ -43,18 +43,33 @@ func TestSidebar_SelectionFallsBackWhenServiceGone(t *testing.T) {
 	assert.Equal(t, 0, sb.selected) // "zoo" gone, falls back to 0
 }
 
-func TestSidebar_MoveUpDownClamps(t *testing.T) {
+func TestSidebar_MoveUpDownWraps(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}})
 
+	// moveUp from first wraps to last
+	sb.selected = 0
 	sb.moveUp()
-	assert.Equal(t, 0, sb.selected) // can't go above 0
+	assert.Equal(t, 2, sb.selected)
 
+	// moveDown from last wraps to first
+	sb.selected = 2
+	sb.moveDown()
+	assert.Equal(t, 0, sb.selected)
+
+	// normal movement still works
+	sb.selected = 0
 	sb.moveDown()
 	assert.Equal(t, 1, sb.selected)
 
-	sb.moveDown()
-	assert.Equal(t, 1, sb.selected) // can't go past last
+	sb.moveUp()
+	assert.Equal(t, 0, sb.selected)
+}
+
+func TestSidebar_MoveUpDownNoopWhenEmpty(t *testing.T) {
+	sb := &sidebar{}
+	sb.moveUp()   // must not panic
+	sb.moveDown() // must not panic
 }
 
 func TestStateLabel_RunningWithPort(t *testing.T) {

@@ -39,13 +39,23 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo) {
 }
 
 func (s *sidebar) moveUp() {
-	if s.selected > 0 {
+	if len(s.services) == 0 {
+		return
+	}
+	if s.selected == 0 {
+		s.selected = len(s.services) - 1
+	} else {
 		s.selected--
 	}
 }
 
 func (s *sidebar) moveDown() {
-	if s.selected < len(s.services)-1 {
+	if len(s.services) == 0 {
+		return
+	}
+	if s.selected == len(s.services)-1 {
+		s.selected = 0
+	} else {
 		s.selected++
 	}
 }
@@ -79,20 +89,28 @@ func stateDot(state string) string {
 	}
 }
 
-func (s *sidebar) render(width, height int) string {
+func (s *sidebar) render(width, height int, focused bool) string {
 	if len(s.services) == 0 {
 		return styleMuted.Render("No services — run procet add <name>")
 	}
 
 	var rows []string
-	// Header
-	rows = append(rows, styleMuted.Render("SERVICES"))
+
+	// Header — styled and bordered to align visually with the main tab bar.
+	svcLabel := styleMuted.Render("SERVICES")
+	if focused {
+		svcLabel = styleAccent.Underline(true).Render("SERVICES")
+	}
+	header := lipgloss.NewStyle().
+		Width(width).
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colorBorder).
+		Render(svcLabel)
+	rows = append(rows, header)
 
 	for i, svc := range s.services {
-		dot := stateDot(svc.State)
 		label := stateLabel(svc)
-
-		// Pad name and label to fill width
 		nameW := width - 4 - lipgloss.Width(label)
 		if nameW < 1 {
 			nameW = 1
@@ -101,16 +119,20 @@ func (s *sidebar) render(width, height int) string {
 		if len(name) > nameW {
 			name = name[:nameW]
 		}
-		line := dot + " " + fmt.Sprintf("%-*s", nameW, name) + styleMuted.Render(label)
 
+		var line string
 		if i == s.selected {
-			line = styleSelectedSidebar.Width(width).Render(line)
+			line = selectedServiceRow(width, svc.State, name, nameW, label)
+		} else {
+			dot := stateDot(svc.State)
+			line = dot + " " + fmt.Sprintf("%-*s", nameW, name) + styleMuted.Render(label)
 		}
 		rows = append(rows, line)
 	}
 
-	// Mini stats for selected
+	// Mini stats for selected service (blank line for visual separation).
 	if svc := s.selectedService(); svc != nil {
+		rows = append(rows, "")
 		sep := fmt.Sprintf("── %s ──", svc.Name)
 		rows = append(rows, styleMuted.Render(sep))
 		rows = append(rows, fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)))
@@ -124,6 +146,34 @@ func (s *sidebar) render(width, height int) string {
 	rows = append(rows, renderHint("x", "stop"))
 
 	return strings.Join(rows, "\n")
+}
+
+// selectedServiceRow builds a full-width highlighted row for the selected
+// service. Each segment explicitly carries the selection background so that
+// internal SGR resets from sub-styles do not clear it mid-line.
+func selectedServiceRow(width int, state, name string, nameW int, label string) string {
+	sel := lipgloss.NewStyle().Background(colorSelSidebar)
+
+	var dotFg lipgloss.Color
+	switch state {
+	case "running":
+		dotFg = colorGreen
+	case "crashed":
+		dotFg = colorRed
+	default:
+		dotFg = colorMuted
+	}
+
+	dot := sel.Foreground(dotFg).Render("●")
+	namePart := sel.Foreground(colorText).Render(fmt.Sprintf(" %-*s", nameW, name))
+	lbl := sel.Foreground(colorMuted).Render(label)
+	content := dot + namePart + lbl
+
+	// Fill remaining columns with the selection background.
+	if pad := width - lipgloss.Width(content); pad > 0 {
+		content += sel.Render(strings.Repeat(" ", pad))
+	}
+	return content
 }
 
 func renderCPUPct(pct float64) string {

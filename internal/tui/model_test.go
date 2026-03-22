@@ -36,30 +36,30 @@ func setupLogModel() model {
 	return m
 }
 
-// TestModel_MouseClick_SetsCorrectCursor verifies topOffset=1 (bubbletea clips
-// 3 rows from the top of the render; tab bar border is at terminal row 0; log
-// content starts at terminal row 1).
+// TestModel_MouseClick_SetsCorrectCursor verifies topOffset=4 (header 2 rows +
+// tab-bar label+border 2 rows = 4 rows above log content; no bubbletea clipping
+// since total render equals terminal height exactly).
 func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	m := setupLogModel()
 	m.focus = focusMain
 
-	// Click on the first visible log line (terminal row 1).
+	// Click on the first visible log line (terminal row 4).
 	m2, _ := m.Update(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		Y:      1, // first log line: topOffset(1) + lineIdx(0)
+		Y:      4, // first log line: topOffset(4) + lineIdx(0)
 	})
 	mm := m2.(model)
-	assert.Equal(t, 0, mm.logsC.sb.cursor, "clicking terminal row 1 should select log line index 0")
+	assert.Equal(t, 0, mm.logsC.sb.cursor, "clicking terminal row 4 should select log line index 0")
 
-	// Click on the fifth visible log line (terminal row 5 = topOffset 1 + index 4).
+	// Click on the fifth visible log line (terminal row 8 = topOffset 4 + index 4).
 	m3, _ := m.Update(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		Y:      5, // topOffset(1) + lineIdx(4)
+		Y:      8, // topOffset(4) + lineIdx(4)
 	})
 	mm3 := m3.(model)
-	assert.Equal(t, 4, mm3.logsC.sb.cursor, "clicking terminal row 5 should select log line index 4")
+	assert.Equal(t, 4, mm3.logsC.sb.cursor, "clicking terminal row 8 should select log line index 4")
 }
 
 // TestModel_CtrlC_CopiesWhenVisualModeActive verifies that ctrl+c (Cmd+C on
@@ -90,6 +90,33 @@ func TestModel_CtrlC_QuitsWhenNoVisualMode(t *testing.T) {
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	assert.NotNil(t, cmd, "ctrl+c without visual selection should quit")
+}
+
+// TestModel_TabCycles_SidebarLogsDetailsSidebar verifies the 3-state Tab cycle.
+func TestModel_TabCycles_SidebarLogsDetailsSidebar(t *testing.T) {
+	m := model{}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+
+	// Default state: focusSidebar
+	assert.Equal(t, focusSidebar, m.focus)
+
+	// Tab 1: sidebar → main/logs
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusMain, m.focus)
+	assert.Equal(t, tabLogs, m.activeTab)
+
+	// Tab 2: logs → details
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusMain, m.focus)
+	assert.Equal(t, tabDetails, m.activeTab)
+
+	// Tab 3: details → sidebar
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusSidebar, m.focus)
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area

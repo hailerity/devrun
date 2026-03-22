@@ -207,14 +207,21 @@ func TestScrollBuffer_ViewUsesAbsoluteIndexForCursorHighlight(t *testing.T) {
 	assert.Contains(t, out, "d")
 }
 
-func TestScrollBuffer_ViewHasTrailingNewline(t *testing.T) {
+func TestScrollBuffer_ViewNoTrailingNewline(t *testing.T) {
+	// View() uses newline-between (not newline-after) to avoid adding an extra
+	// row that would make the total render exceed the terminal height.
 	sb := scrollBuffer{
-		lines:  []string{"hello"},
+		lines:  []string{"hello", "world"},
 		height: 5,
 		width:  80,
+		cursor: 99, // no cursor highlight on visible lines
 	}
 	out := sb.View()
-	assert.True(t, strings.HasSuffix(out, "\n"))
+	assert.False(t, strings.HasSuffix(out, "\n"), "View() must not end with a newline")
+	// Both lines present (plain lines end with \x1b[m reset, separated by \n)
+	assert.Contains(t, out, "hello")
+	assert.Contains(t, out, "world")
+	assert.Contains(t, out, "\n") // lines separated by newline
 }
 
 func TestScrollBuffer_ExitVisualResetsSelection(t *testing.T) {
@@ -299,4 +306,49 @@ func TestScrollBuffer_MouseClickEmptyBufferNoopNoPanic(t *testing.T) {
 	sb.height = 10
 	msg := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 5}
 	sb.handleMouse(msg, 3, 23) // must not panic
+}
+
+// --- ANSI safety tests ---
+
+func TestStripUnsafe_RemovesCarriageReturn(t *testing.T) {
+	assert.Equal(t, "foobar", stripUnsafe("foo\rbar"))
+}
+
+func TestStripUnsafe_RemovesEraseLineCsi(t *testing.T) {
+	assert.Equal(t, "foo", stripUnsafe("foo\x1b[2K"))
+}
+
+func TestStripUnsafe_RemovesCursorMovementCsi(t *testing.T) {
+	assert.Equal(t, "foo", stripUnsafe("foo\x1b[1A"))
+}
+
+func TestStripUnsafe_RemovesHideCursorCsi(t *testing.T) {
+	assert.Equal(t, "foo", stripUnsafe("foo\x1b[?25l"))
+}
+
+func TestStripUnsafe_RemovesOscWindowTitle(t *testing.T) {
+	assert.Equal(t, "foo", stripUnsafe("foo\x1b]0;title\x07"))
+}
+
+func TestStripUnsafe_PreservesSgrSequences(t *testing.T) {
+	// SGR (ends in m) must NOT be stripped
+	assert.Equal(t, "\x1b[32mfoo\x1b[0m", stripUnsafe("\x1b[32mfoo\x1b[0m"))
+}
+
+func TestRenderLine_PlainLineEndsWithReset(t *testing.T) {
+	// Unclosed SGR in a plain line must not bleed — output must end with reset.
+	// Use idx=1 with cursor=0 (default) to exercise the plain (non-highlighted) path.
+	sb := scrollBuffer{width: 80, height: 10}
+	out := sb.renderLine(1, "\x1b[32mgreen text")
+	assert.True(t, strings.HasSuffix(out, "\x1b[m"), "plain line must end with SGR reset")
+}
+
+func TestRenderLine_NonSgrSequencesStripped(t *testing.T) {
+	// Non-SGR ANSI in a plain line must be removed from output
+	sb := scrollBuffer{width: 80, height: 10}
+	out := sb.renderLine(0, "foo\x1b[2Kbar\r")
+	assert.NotContains(t, out, "\x1b[2K")
+	assert.NotContains(t, out, "\r")
+	assert.Contains(t, out, "foo")
+	assert.Contains(t, out, "bar")
 }

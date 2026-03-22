@@ -91,6 +91,21 @@ func stripANSI(s string) string {
 	return ansiRe.ReplaceAllString(s, "")
 }
 
+// unsafeSeqRe matches control sequences that are not SGR colour codes.
+// These corrupt TUI layout or bleed colour into adjacent widgets when rendered raw:
+//   - Carriage return: physically moves cursor to column 0
+//   - Non-SGR CSI: cursor movement, erase, show/hide cursor, etc. (final byte ≠ 'm')
+//   - OSC: window title, hyperlinks (BEL or ST terminated)
+var unsafeSeqRe = regexp.MustCompile(
+	`\r` +
+		`|\x1b\[[0-9;?]*[A-Za-ln-z]` +
+		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`,
+)
+
+func stripUnsafe(s string) string {
+	return unsafeSeqRe.ReplaceAllString(s, "")
+}
+
 func (sb *scrollBuffer) enterVisual() {
 	sb.visualMode = true
 	sb.selStart = sb.cursor
@@ -139,14 +154,19 @@ func (sb *scrollBuffer) View() string {
 	visible := sb.lines[sb.yOffset:end]
 	var out strings.Builder
 	for i, line := range visible {
+		if i > 0 {
+			out.WriteByte('\n')
+		}
 		out.WriteString(sb.renderLine(sb.yOffset+i, line))
-		out.WriteByte('\n')
 	}
 	return out.String()
 }
 
 func (sb *scrollBuffer) renderLine(idx int, line string) string {
-	colored := colorizeLog(line)
+	// Strip non-SGR control sequences (cursor movement, erase, OSC, CR) before
+	// rendering. These would corrupt TUI layout or bleed into adjacent widgets.
+	safe := stripUnsafe(line)
+	colored := colorizeLog(safe)
 	lo := min(sb.selStart, sb.selEnd)
 	hi := max(sb.selStart, sb.selEnd)
 	if sb.visualMode && idx >= lo && idx <= hi {
@@ -159,7 +179,10 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 	if idx == sb.cursor {
 		return styleSelectedLine.Render(truncated)
 	}
-	return truncated
+	// Append SGR reset so unclosed colour sequences don't bleed into adjacent
+	// TUI widgets (header, sidebar, footer). ansi.Truncate only resets when
+	// truncation fires; for short lines it returns the raw string unchanged.
+	return truncated + "\x1b[m"
 }
 
 // handleMouse dispatches a bubbletea v1.3.10 tea.MouseMsg.

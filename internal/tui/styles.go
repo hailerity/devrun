@@ -12,8 +12,9 @@ var (
 	colorRed    = lipgloss.Color("#f85149")
 	colorYellow = lipgloss.Color("#f0e68c")
 	colorBorder = lipgloss.Color("#21262d")
-	colorSelBg  = lipgloss.Color("#161b22")
-	colorVisBg  = lipgloss.Color("#1f3a5f")
+	colorSelBg      = lipgloss.Color("#161b22") // subtle: logs cursor line
+	colorSelSidebar = lipgloss.Color("#2d333b") // visible: sidebar selection
+	colorVisBg      = lipgloss.Color("#1f3a5f")
 )
 
 var (
@@ -28,11 +29,9 @@ var (
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorBorder)
 
+	// Background-only highlight; no border so Width(width) fills cleanly.
 	styleSelectedSidebar = lipgloss.NewStyle().
-				Background(colorSelBg).
-				BorderLeft(true).
-				BorderStyle(lipgloss.NormalBorder()).
-				BorderForeground(colorAccent)
+				Background(colorSelBg)
 
 	styleVisualLine = lipgloss.NewStyle().
 			Background(colorVisBg).

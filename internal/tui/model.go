@@ -108,9 +108,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		sidebarW := 22
+		sidebarW := 26
 		mainW := m.width - sidebarW - 1
-		bodyH := m.height - 2
+		bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
 		m.logsC.sb.resize(mainW, bodyH-2)
 		return m, nil
 
@@ -147,11 +147,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if m.activeTab == tabLogs {
-			// topOffset=1: the rendered view overflows the terminal height by 3 rows;
-			// bubbletea clips the top 3 rows (header content, header border, tab-bar label),
-			// leaving tab-bar border at terminal row 0 and log content starting at row 1.
-			// leftOffset=23: sidebarW(22) + divider(1); reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, 1, 23)
+			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
+			// leftOffset=27: sidebarW(26) + divider(1); reserved for future character-level selection.
+			_ = m.logsC.sb.handleMouse(msg, 4, 27)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -196,14 +194,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusMain
 
 	case key.Matches(msg, keys.Tab):
-		if m.focus == focusSidebar {
+		switch {
+		case m.focus == focusSidebar:
 			m.focus = focusMain
-		} else {
-			if m.activeTab == tabLogs {
-				m.activeTab = tabDetails
-			} else {
-				m.activeTab = tabLogs
-			}
+			m.activeTab = tabLogs
+		case m.focus == focusMain && m.activeTab == tabLogs:
+			m.activeTab = tabDetails
+		case m.focus == focusMain && m.activeTab == tabDetails:
+			m.focus = focusSidebar
 		}
 
 	case key.Matches(msg, keys.Up):
@@ -358,9 +356,9 @@ func (m model) View() string {
 		return ""
 	}
 
-	sidebarW := 22
+	sidebarW := 26
 	mainW := m.width - sidebarW - 1
-	bodyH := m.height - 2
+	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
 
 	// Header
 	total := len(m.sidebarC.services)
@@ -372,8 +370,7 @@ func (m model) View() string {
 	}
 	header := m.headerC.render(total, running, m.spinFrame, m.spinning, m.width)
 
-	// Sidebar — render takes (width, height) only, no focused param
-	sb := m.sidebarC.render(sidebarW, bodyH)
+	sb := m.sidebarC.render(sidebarW, bodyH, m.focus == focusSidebar)
 
 	// Main panel (tabs + content)
 	main := m.renderMain(mainW, bodyH)
