@@ -111,7 +111,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sidebarW := 22
 		mainW := m.width - sidebarW - 1
 		bodyH := m.height - 2
-		m.logsC.resize(mainW, bodyH-2)
+		m.logsC.sb.resize(mainW, bodyH-2)
 		return m, nil
 
 	case daemonTickMsg:
@@ -135,10 +135,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickDaemon()
 
 	case logTickMsg:
-		changed := m.logsC.poll()
-		if changed {
-			m.logsC.rebuildViewport()
-		}
+		m.logsC.poll()
 		return m, tickLog()
 
 	case spinTickMsg:
@@ -147,6 +144,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.footerC.tick(100 * time.Millisecond)
 		return m, tickSpin()
+
+	case tea.MouseMsg:
+		if m.activeTab == tabLogs {
+			// topOffset=3: header(1) + tab-bar content(1) + tab-bar border(1)
+			// leftOffset=23: sidebarW(22) + divider(1); reserved for future character-level selection
+			_ = m.logsC.sb.handleMouse(msg, 3, 23)
+		}
+		return m, nil
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -182,8 +187,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sidebarC.moveUp()
 			m.updateLogFile()
 		} else if m.activeTab == tabLogs {
-			m.logsC.moveUp()
-			m.logsC.rebuildViewport()
+			m.logsC.sb.moveUp()
 		}
 
 	case key.Matches(msg, keys.Down):
@@ -191,50 +195,42 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sidebarC.moveDown()
 			m.updateLogFile()
 		} else if m.activeTab == tabLogs {
-			m.logsC.moveDown()
-			m.logsC.rebuildViewport()
+			m.logsC.sb.moveDown()
 		}
 
 	case key.Matches(msg, keys.Top):
 		if m.activeTab == tabLogs {
-			m.logsC.cursor = 0
-			m.logsC.followMode = false
-			m.logsC.vp.GotoTop()
-			m.logsC.rebuildViewport()
+			m.logsC.sb.gotoTop()
 		}
 
 	case key.Matches(msg, keys.Bottom):
 		if m.activeTab == tabLogs {
-			m.logsC.cursor = len(m.logsC.lines) - 1
-			m.logsC.followMode = true
-			m.logsC.vp.GotoBottom()
-			m.logsC.rebuildViewport()
+			m.logsC.sb.gotoBottom()
 		}
 
 	case key.Matches(msg, keys.Follow):
 		if m.focus == focusMain && m.activeTab == tabLogs {
-			m.logsC.followMode = !m.logsC.followMode
+			m.logsC.sb.followMode = !m.logsC.sb.followMode
 		}
 
 	case key.Matches(msg, keys.Visual):
 		if m.focus == focusMain && m.activeTab == tabLogs {
-			m.logsC.enterVisual()
-			m.logsC.rebuildViewport()
+			m.logsC.sb.enterVisual()
 		}
 
 	case key.Matches(msg, keys.Escape):
-		m.logsC.exitVisual()
-		m.logsC.rebuildViewport()
+		if m.focus == focusMain && m.activeTab == tabLogs {
+			m.logsC.sb.exitVisual()
+		}
 
 	case key.Matches(msg, keys.Copy):
 		if m.focus == focusMain && m.activeTab == tabLogs {
 			var text string
-			if m.logsC.visualMode {
-				text = m.logsC.copySelection()
-				m.logsC.exitVisual()
-				m.logsC.rebuildViewport()
+			if m.logsC.sb.visualMode {
+				text = m.logsC.sb.copySelection()
+				m.logsC.sb.exitVisual()
 			} else {
-				text = m.logsC.copyLine()
+				text = m.logsC.sb.copyLine()
 			}
 			if !m.cb.Available() {
 				m.footerC.showToast("No clipboard available")
@@ -374,7 +370,7 @@ func (m model) View() string {
 	)
 
 	// Footer
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.visualMode, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
@@ -403,7 +399,7 @@ func (m model) renderMain(w, h int) string {
 	}
 
 	followIndicator := ""
-	if m.activeTab == tabLogs && m.logsC.followMode {
+	if m.activeTab == tabLogs && m.logsC.sb.followMode {
 		followIndicator = styleMuted.Render("  ● follow")
 	}
 	tabBar := logsLabel + "  " + detailsLabel + followIndicator
@@ -412,7 +408,7 @@ func (m model) renderMain(w, h int) string {
 
 	var content string
 	if m.activeTab == tabLogs {
-		content = m.logsC.vp.View()
+		content = m.logsC.view()
 	} else {
 		svc := m.sidebarC.selectedService()
 		var cfg *config.ServiceConfig
