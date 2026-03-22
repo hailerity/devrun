@@ -34,7 +34,52 @@ func Start(command, cwd string, env map[string]string) (*Process, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pty start: %w", err)
 	}
+	// creack/pty opens /dev/ptmx without O_NONBLOCK, so os.NewFile creates a
+	// non-pollable *os.File and Go falls back to a blocking OS thread for every
+	// PTY read.  On macOS the thread scheduler can lag several milliseconds
+	// between a PTY echo arriving and the thread waking up, causing visible
+	// input lag when typing.  Dup the fd, set O_NONBLOCK, and re-wrap with
+	// os.NewFile so Go registers it with kqueue and wakes the goroutine the
+	// instant the kernel signals readability.
+	if nb := makePollable(ptmx); nb != nil {
+		return &Process{PTY: nb, Cmd: cmd}, nil
+	}
 	return &Process{PTY: ptmx, Cmd: cmd}, nil
+}
+
+// makePollable converts a blocking *os.File (e.g., a PTY master) into a
+// non-blocking, kqueue/epoll-pollable file.  It dups the underlying fd, sets
+// O_NONBLOCK on the dup, and wraps it with os.NewFile — which detects the
+// non-blocking flag and registers the fd with Go's netpoller.  The original
+// file is closed only after a valid replacement is ready; on any failure nil
+// is returned and the original file is left untouched.
+func makePollable(f *os.File) *os.File {
+	rawConn, err := f.SyscallConn()
+	if err != nil {
+		return nil
+	}
+	var rawFD int
+	_ = rawConn.Control(func(fd uintptr) { rawFD = int(fd) })
+
+	dupFD, err := syscall.Dup(rawFD)
+	if err != nil {
+		return nil
+	}
+	syscall.CloseOnExec(dupFD)
+
+	if err := syscall.SetNonblock(dupFD, true); err != nil {
+		_ = syscall.Close(dupFD)
+		return nil
+	}
+
+	nb := os.NewFile(uintptr(dupFD), f.Name())
+	if nb == nil {
+		_ = syscall.Close(dupFD)
+		return nil
+	}
+	// Close the original blocking file; the dup keeps the file description alive.
+	_ = f.Close()
+	return nb
 }
 
 // Stop sends SIGTERM to the process. If the process does not exit within 5s,

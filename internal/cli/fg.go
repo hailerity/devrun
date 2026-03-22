@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -56,7 +55,16 @@ func runFgByName(socketPath, name string) error {
 
 	// socket → stdout
 	go func() {
-		io.Copy(os.Stdout, conn)
+		rbuf := make([]byte, 4096)
+		for {
+			n, err := conn.Read(rbuf)
+			if n > 0 {
+				os.Stdout.Write(rbuf[:n])
+			}
+			if err != nil {
+				break
+			}
+		}
 	}()
 
 	// stdin → socket (with Ctrl+P, Q detection)
@@ -100,4 +108,3 @@ func runFgByName(socketPath, name string) error {
 	}
 	return nil
 }
-

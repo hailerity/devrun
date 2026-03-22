@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -41,8 +42,13 @@ func (s *supervisor) handleAttach(conn net.Conn, raw json.RawMessage) {
 	svc.attached = conn
 	svc.mu.Unlock()
 
-	// Send attach confirmation; raw byte stream begins immediately after
-	_ = ipc.WriteMessage(conn, ipc.Response{OK: true})
+	// Send attach confirmation as a single Write so teeOutput cannot inject
+	// PTY bytes between the 4-byte length prefix and the JSON body.
+	// ipc.WriteMessage makes two separate Write calls; buffering here ensures
+	// the entire frame is sent atomically under Go's socket write lock.
+	var okBuf bytes.Buffer
+	_ = ipc.WriteMessage(&okBuf, ipc.Response{OK: true})
+	_, _ = conn.Write(okBuf.Bytes())
 
 	// PTY → client: handled by teeOutput goroutine (already writing to svc.attached)
 	// Client → PTY: handled here
