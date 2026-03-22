@@ -52,9 +52,11 @@ func runFgByName(socketPath, name string) error {
 	fmt.Fprintf(os.Stderr, "\r\n[attached to %s — Ctrl+P, Q to detach]\r\n", name)
 
 	conn := c.Conn()
+	done := make(chan struct{})
 
-	// socket → stdout
+	// socket → stdout: closes done when the connection ends (service exited or detached).
 	go func() {
+		defer close(done)
 		rbuf := make([]byte, 4096)
 		for {
 			n, err := conn.Read(rbuf)
@@ -67,44 +69,49 @@ func runFgByName(socketPath, name string) error {
 		}
 	}()
 
-	// stdin → socket (with Ctrl+P, Q detection)
-	// We buffer bytes to suppress the Ctrl+P byte if a detach sequence follows.
-	var ctrlPPending bool
-	buf := make([]byte, 256)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			break
-		}
-		for _, b := range buf[:n] {
-			if ctrlPPending {
-				ctrlPPending = false
-				if b == 0x71 { // Q — complete Ctrl+P, Q detach sequence
+	// stdin → socket: runs in a goroutine so the main goroutine blocks on done.
+	// This allows fg to exit immediately when the service closes the connection,
+	// without waiting for the next keystroke from the user.
+	go func() {
+		var ctrlPPending bool
+		buf := make([]byte, 256)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil {
+				return
+			}
+			for _, b := range buf[:n] {
+				if ctrlPPending {
+					ctrlPPending = false
+					if b == 0x71 { // Q — complete Ctrl+P, Q detach sequence
+						term.Restore(int(os.Stdin.Fd()), oldState)
+						fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", name)
+						conn.Close()
+						return
+					}
+					// Not a detach — forward the suppressed Ctrl+P then the current byte
+					conn.Write([]byte{0x10, b})
+					continue
+				}
+				if b == 0x10 { // Ctrl+P — hold it, don't forward yet
+					ctrlPPending = true
+					continue
+				}
+				if b == 0x03 { // Ctrl+C — stop the service
 					term.Restore(int(os.Stdin.Fd()), oldState)
-					fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", name)
+					fmt.Fprintf(os.Stderr, "\r\n[stopping %s]\r\n", name)
 					conn.Close()
-					return nil
+					if sc, err := client.Connect(socketPath); err == nil {
+						_, _ = sc.Send("stop", ipc.StopPayload{Name: name})
+						sc.Close()
+					}
+					return
 				}
-				// Not a detach — forward the suppressed Ctrl+P then the current byte
-				conn.Write([]byte{0x10, b})
-				continue
+				conn.Write([]byte{b})
 			}
-			if b == 0x10 { // Ctrl+P — hold it, don't forward yet
-				ctrlPPending = true
-				continue
-			}
-			if b == 0x03 { // Ctrl+C — stop the service
-				term.Restore(int(os.Stdin.Fd()), oldState)
-				fmt.Fprintf(os.Stderr, "\r\n[stopping %s]\r\n", name)
-				conn.Close()
-				if sc, err := client.Connect(socketPath); err == nil {
-					_, _ = sc.Send("stop", ipc.StopPayload{Name: name})
-					sc.Close()
-				}
-				return nil
-			}
-			conn.Write([]byte{b})
 		}
-	}
+	}()
+
+	<-done
 	return nil
 }

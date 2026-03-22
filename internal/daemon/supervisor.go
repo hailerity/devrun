@@ -205,6 +205,14 @@ func (s *supervisor) teeOutput(name string, svc *managedService, logPath string)
 			break
 		}
 	}
+	// Service exited: notify any attached fg client so it can return to the
+	// terminal instead of hanging on a blocked conn.Read.
+	svc.mu.Lock()
+	if svc.attached != nil {
+		_ = svc.attached.Close()
+		svc.attached = nil
+	}
+	svc.mu.Unlock()
 }
 
 func (s *supervisor) watchExit(name string, svc *managedService) {

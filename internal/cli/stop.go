@@ -30,15 +30,14 @@ func runStop(_ *cobra.Command, args []string) error {
 	}
 
 	socketPath := config.SocketPath()
+	if stopFlags.all {
+		return stopAll(socketPath)
+	}
 	c, err := client.Connect(socketPath)
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer c.Close()
-
-	if stopFlags.all {
-		return stopAll(c)
-	}
 	return stopOne(c, args[0])
 }
 
@@ -55,7 +54,7 @@ func stopOne(c *client.Client, name string) error {
 	return nil
 }
 
-func stopAll(c *client.Client) error {
+func stopAll(socketPath string) error {
 	reg, err := config.LoadRegistry(config.RegistryPath())
 	if err != nil {
 		return err
@@ -70,10 +69,18 @@ func stopAll(c *client.Client) error {
 	}
 	exitCode := 0
 	for _, name := range names {
+		// The daemon handles one request per connection; create a fresh connection per service.
+		c, err := client.Connect(socketPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error stopping %s: connect: %v\n", name, err)
+			exitCode = 1
+			continue
+		}
 		if err := stopOne(c, name); err != nil {
 			fmt.Fprintf(os.Stderr, "error stopping %s: %v\n", name, err)
 			exitCode = 1
 		}
+		c.Close()
 	}
 	if exitCode != 0 {
 		os.Exit(exitCode)
