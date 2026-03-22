@@ -73,9 +73,15 @@ Renders the visible window on demand (called every frame by `model.View()`). No 
 
 ```
 visible = lines[yOffset : min(yOffset+height, len(lines))]
-for each line: renderLine(absIdx, line)
-join with \n
+for i, line := range visible:
+    absIdx = yOffset + i          // absolute index into lines; must be yOffset+i, not i
+    renderLine(absIdx, line)
+join rendered lines with \n, with a trailing \n after the last line
 ```
+
+`absIdx` must be `yOffset + i` (not the slice-local `i`) because `renderLine` compares against `cursor`, `selStart`, and `selEnd` which are all absolute line indices.
+
+The trailing `\n` matches the existing `rebuildViewport` behavior and prevents lipgloss height-padding from dropping the last log line when the content block has a fixed `Height` set.
 
 ### `scrollBuffer.renderLine(idx int, line string) string`
 
@@ -86,11 +92,14 @@ join with \n
 ```go
 func (sb *scrollBuffer) renderLine(idx int, line string) string {
     colored := colorizeLog(line)
-    truncated := ansi.Truncate(colored, sb.width, "")
     lo, hi := min(sb.selStart, sb.selEnd), max(sb.selStart, sb.selEnd)
     if sb.visualMode && idx >= lo && idx <= hi {
+        // styleVisualLine has BorderLeft(true) which adds 1 glyph of width.
+        // Truncate to width-1 so the border + content fits within sb.width total.
+        truncated := ansi.Truncate(colored, sb.width-1, "")
         return styleVisualLine.Render(truncated)
     }
+    truncated := ansi.Truncate(colored, sb.width, "")
     if idx == sb.cursor {
         return styleSelectedLine.Render(truncated)
     }
@@ -98,21 +107,42 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 }
 ```
 
-### `scrollBuffer.handleMouse(msg tea.Msg, topOffset, leftOffset int) bool`
+`styleSelectedLine` has no border, so it does not expand width. `styleVisualLine` has `BorderLeft(true)` (+1 glyph), requiring a `width-1` truncation before wrapping.
+
+### `scrollBuffer.handleMouse(msg tea.MouseMsg, topOffset, leftOffset int) bool`
 
 Returns `true` if the buffer state changed (view needs redraw). The model passes:
 - `topOffset = 3` (header 1 row + tab bar content 1 row + tab bar border 1 row)
 - `leftOffset = 23` (sidebarW 22 + divider 1; not used for line-level selection but available for future character-level work)
 
-| Event | Behavior |
-|---|---|
-| `tea.MouseWheelMsg` (up) | `scrollUp(3)`, `followMode = false` |
-| `tea.MouseWheelMsg` (down) | `scrollDown(3)`, `followMode = false` |
-| `tea.MouseClickMsg` (left) | Set `cursor = clamp(yOffset + (Y - topOffset))`, exit visual, disable follow, `mouseDown = true` |
-| `tea.MouseMotionMsg` (button held) | If `mouseDown` and not in visual: enter visual (`selStart = cursor`). Update `selEnd = clamp(yOffset + (Y - topOffset))`, `cursor = selEnd` |
-| `tea.MouseReleaseMsg` | `mouseDown = false` |
+bubbletea v1.3.10 uses a single `tea.MouseMsg` type with `Action` and `Button` fields. Dispatch by inspecting these fields:
 
-With `tea.WithMouseCellMotion()` (already enabled), `MouseMotionMsg` only fires when a button is held — no hover noise.
+| Condition | Behavior |
+|---|---|
+| `msg.Button == tea.MouseButtonWheelUp` | `scrollUp(3)`, `followMode = false` |
+| `msg.Button == tea.MouseButtonWheelDown` | `scrollDown(3)`, `followMode = false` |
+| `msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft` | Set `cursor = clampLine(yOffset + (msg.Y - topOffset))`, exit visual, disable follow, `mouseDown = true` |
+| `msg.Action == tea.MouseActionMotion && mouseDown` | If not in visual: enter visual (`selStart = cursor`). Update `selEnd = clampLine(yOffset + (msg.Y - topOffset))`, `cursor = selEnd` |
+| `msg.Action == tea.MouseActionRelease` | `mouseDown = false` |
+
+With `tea.WithMouseCellMotion()` (already enabled), `MouseActionMotion` only fires when a button is held — no hover noise.
+
+**`clampLine` helper** — clamps a line index to the valid range, guarding against an empty buffer:
+
+```go
+func (sb *scrollBuffer) clampLine(idx int) int {
+    if len(sb.lines) == 0 {
+        return 0
+    }
+    return max(0, min(idx, len(sb.lines)-1))
+}
+```
+
+When `lines` is empty, click/drag handlers clamp to 0 and are no-ops (cursor stays at 0, visual mode is entered but has no lines to highlight). `handleMouse` should early-return if `len(sb.lines) == 0` for press and motion actions.
+
+**Auto-scroll during drag** is declared a non-goal (see Non-goals). Dragging outside the visible window clamps to the nearest visible line.
+
+**Wheel scroll does not move the cursor.** `scrollUp`/`scrollDown` only adjust `yOffset`. The cursor may go off-screen after a wheel scroll; this is intentional. Pressing `j`/`k` will re-sync the viewport to the cursor position.
 
 **Shift+drag terminal-native selection:** No code needed. Most terminals (iTerm2, Terminal.app, kitty, alacritty) bypass mouse reporting for Shift+events even when mouse capture is enabled, passing them directly to the terminal's own text selection.
 
@@ -133,9 +163,92 @@ Same file-reading logic as before, but:
 - Appends `scanner.Text()` directly (no `stripANSI`)
 - On new lines with `sb.followMode`: calls `sb.gotoBottom()`
 
-### Scroll helpers on `scrollBuffer`
+### `scrollBuffer.moveUp()` and `scrollBuffer.moveDown()`
+
+Preserve the existing behavior (disable follow, extend visual selection) and additionally keep the cursor within the visible window by adjusting `yOffset`:
 
 ```go
+func (sb *scrollBuffer) moveUp() {
+    if sb.cursor > 0 {
+        sb.cursor--
+        sb.followMode = false
+        if sb.visualMode {
+            sb.selEnd = sb.cursor
+        }
+        // scroll up if cursor moved above visible window
+        if sb.cursor < sb.yOffset {
+            sb.yOffset = sb.cursor
+        }
+    }
+}
+
+func (sb *scrollBuffer) moveDown() {
+    if sb.cursor < len(sb.lines)-1 {
+        sb.cursor++
+        sb.followMode = false
+        if sb.visualMode {
+            sb.selEnd = sb.cursor
+        }
+        // scroll down if cursor moved below visible window
+        if sb.cursor >= sb.yOffset+sb.height {
+            sb.yOffset = sb.cursor - sb.height + 1
+        }
+    }
+}
+```
+
+### `scrollBuffer.enterVisual()`, `exitVisual()`, `copyLine()`, `copySelection()`
+
+```go
+func (sb *scrollBuffer) enterVisual() {
+    sb.visualMode = true
+    sb.selStart = sb.cursor
+    sb.selEnd = sb.cursor
+}
+
+func (sb *scrollBuffer) exitVisual() {
+    sb.visualMode = false
+}
+
+// copyLine and copySelection strip ANSI codes before returning text for the
+// clipboard. Stored lines now contain raw ANSI from service output; passing
+// those escape sequences to the clipboard would produce garbage in most apps.
+func (sb *scrollBuffer) copyLine() string {
+    if len(sb.lines) == 0 || sb.cursor >= len(sb.lines) {
+        return ""
+    }
+    return stripANSI(sb.lines[sb.cursor])
+}
+
+func (sb *scrollBuffer) copySelection() string {
+    if !sb.visualMode || len(sb.lines) == 0 {
+        return ""
+    }
+    start, end := sb.selStart, sb.selEnd
+    if start > end {
+        start, end = end, start
+    }
+    if end >= len(sb.lines) {
+        end = len(sb.lines) - 1
+    }
+    parts := make([]string, 0, end-start+1)
+    for _, l := range sb.lines[start : end+1] {
+        parts = append(parts, stripANSI(l))
+    }
+    return strings.Join(parts, "\n")
+}
+```
+
+`stripANSI` and `ansiRe` are **not** deleted from `logs.go` — they move to `scrollbuffer.go` where `copyLine`/`copySelection` still need them. Only `viewport.Model` usage is removed from `logs.go`.
+
+### Scroll and resize helpers on `scrollBuffer`
+
+```go
+func (sb *scrollBuffer) resize(w, h int) {
+    sb.width = w
+    sb.height = h
+}
+
 func (sb *scrollBuffer) scrollUp(n int) {
     sb.yOffset = max(0, sb.yOffset-n)
 }
@@ -156,6 +269,7 @@ func (sb *scrollBuffer) gotoBottom() {
     }
     sb.cursor = len(sb.lines) - 1
     sb.yOffset = max(0, len(sb.lines)-sb.height)
+    sb.followMode = true  // re-enable follow so new lines keep scrolling down
 }
 ```
 
@@ -165,8 +279,10 @@ func (sb *scrollBuffer) gotoBottom() {
 
 ### New mouse cases in `Update`
 
+bubbletea v1.3.10 delivers all mouse events as `tea.MouseMsg`:
+
 ```go
-case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseMsg:
+case tea.MouseMsg:
     if m.activeTab == tabLogs {
         m.logsC.sb.handleMouse(msg, 3, sidebarW+1)
     }
@@ -174,31 +290,82 @@ case tea.MouseWheelMsg, tea.MouseClickMsg, tea.MouseMotionMsg, tea.MouseReleaseM
 
 ### Removed from `Update`
 
-- All calls to `m.logsC.rebuildViewport()` (method deleted)
+- All calls to `m.logsC.rebuildViewport()` (method deleted), including in `logTickMsg`:
+
+```go
+// before:
+case logTickMsg:
+    changed := m.logsC.poll()
+    if changed {
+        m.logsC.rebuildViewport()
+    }
+    return m, tickLog()
+
+// after (rebuildViewport removed; View() renders on-demand each frame):
+case logTickMsg:
+    m.logsC.poll()
+    return m, tickLog()
+```
 
 ### Updated keyboard handlers
 
+All handlers that previously accessed `logsPanel` fields/methods now route through `scrollBuffer`:
+
 ```go
-case key.Matches(msg, keys.Top):
-    if m.activeTab == tabLogs {
-        m.logsC.sb.gotoTop()
+case key.Matches(msg, keys.Up):
+    if m.focus == focusSidebar { ... } else if m.activeTab == tabLogs {
+        m.logsC.sb.moveUp()
     }
+case key.Matches(msg, keys.Down):
+    if m.focus == focusSidebar { ... } else if m.activeTab == tabLogs {
+        m.logsC.sb.moveDown()
+    }
+case key.Matches(msg, keys.Top):
+    if m.activeTab == tabLogs { m.logsC.sb.gotoTop() }
 case key.Matches(msg, keys.Bottom):
-    if m.activeTab == tabLogs {
-        m.logsC.sb.gotoBottom()
+    if m.activeTab == tabLogs { m.logsC.sb.gotoBottom() }
+case key.Matches(msg, keys.Follow):
+    if m.focus == focusMain && m.activeTab == tabLogs {
+        m.logsC.sb.followMode = !m.logsC.sb.followMode
+    }
+case key.Matches(msg, keys.Visual):
+    if m.focus == focusMain && m.activeTab == tabLogs {
+        m.logsC.sb.enterVisual()
+    }
+case key.Matches(msg, keys.Escape):
+    m.logsC.sb.exitVisual()
+case key.Matches(msg, keys.Copy):
+    if m.focus == focusMain && m.activeTab == tabLogs {
+        var text string
+        if m.logsC.sb.visualMode {
+            text = m.logsC.sb.copySelection()
+            m.logsC.sb.exitVisual()
+        } else {
+            text = m.logsC.sb.copyLine()
+        }
+        // clipboard handling unchanged
     }
 ```
 
-### Updated `View()`
+### Updated `View()` / `renderMain()`
 
 ```go
-// was: content = m.logsC.vp.View()
+// log content
 content = m.logsC.view()
+
+// follow indicator — was m.logsC.followMode
+if m.activeTab == tabLogs && m.logsC.sb.followMode { ... }
+
+// footer — was m.logsC.visualMode
+footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.width)
 ```
 
 ### `WindowSizeMsg` handler
 
 ```go
+// bodyH = m.height - 2  (subtracts header row + footer row)
+// bodyH-2 subtracts tab bar content row + tab bar border row
+// → sb.height = m.height - 4, matching renderMain's contentH = bodyH-2
 m.logsC.sb.resize(mainW, bodyH-2)
 ```
 
@@ -210,8 +377,17 @@ m.logsC.sb.resize(mainW, bodyH-2)
 - Delete from `logsPanel`: `vp`, `lines`, `cursor`, `selStart`, `selEnd`, `visualMode`, `followMode`
 - Delete from `logsPanel`: `moveUp`, `moveDown`, `enterVisual`, `exitVisual`, `copyLine`, `copySelection`
 - These methods all move to `scrollBuffer`
-- `setFile` resets `sb` fields: `sb.lines = nil`, `sb.cursor = 0`, `sb.yOffset = 0`, `sb.visualMode = false`
+- `setFile` resets `sb` fields: `sb.lines = nil`, `sb.cursor = 0`, `sb.yOffset = 0`, `sb.visualMode = false`, `sb.followMode = true`
 - Add `logsPanel.view()` wrapper
+- `newLogsPanel()` must initialize `sb.followMode = true` (zero value is `false`, which would break initial follow-on-startup behaviour):
+
+```go
+func newLogsPanel() logsPanel {
+    return logsPanel{
+        sb: scrollBuffer{followMode: true},
+    }
+}
+```
 
 ---
 
@@ -229,15 +405,18 @@ New tests added for `scrollBuffer`:
 
 ---
 
-## Deleted
+## Deleted / Moved
 
-- `internal/tui/logs.go`: `ansiRe`, `stripANSI`, `rebuildViewport`
-- Dependency on `github.com/charmbracelet/bubbles/viewport` (no longer imported in `logs.go`)
+- `internal/tui/logs.go`: `rebuildViewport` deleted; `ansiRe` and `stripANSI` **moved** to `scrollbuffer.go` (still needed for clipboard copy)
+- `viewport.Model` usage removed from `logs.go`; `github.com/charmbracelet/bubbles/viewport` import removed from `logs.go`
+
+**Note:** `ansiRe` / `stripANSI` are still used in `scrollBuffer.copyLine()` and `scrollBuffer.copySelection()` to strip ANSI before writing to the clipboard. They are not deleted from the codebase.
 
 ---
 
 ## Non-goals
 
 - Character-level mouse selection (line-level is consistent with existing keyboard visual mode)
+- Auto-scroll during drag (selection clamps to visible window edges; keyboard `j`/`k` can extend after scrolling)
 - Log search / filtering
 - Horizontal scrolling
