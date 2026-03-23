@@ -9,9 +9,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hailerity/procet/internal/client"
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/client"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 // dial opens a fresh connection to the daemon and executes fn, closing on return.
@@ -396,7 +396,7 @@ func (m model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
-// Run starts the procet TUI. Called from cli/root.go.
+// Run starts the devrun TUI. Called from cli/root.go.
 // The daemon must be running at socketPath; a fresh connection is dialed per request.
 func Run(socketPath string, reg *config.Registry, logDir string) error {
 	cb := detectClipboard()

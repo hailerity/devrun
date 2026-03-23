@@ -6,13 +6,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/daemon"
-	"github.com/hailerity/procet/internal/tui"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/daemon"
+	"github.com/hailerity/devrun/internal/tui"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "procet",
+	Use:   "devrun",
 	Short: "A lightweight process manager for developers",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		socketPath := config.SocketPath()

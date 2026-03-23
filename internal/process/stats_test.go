@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/hailerity/procet/internal/process"
+	"github.com/hailerity/devrun/internal/process"
 	"github.com/stretchr/testify/assert"
 )
 

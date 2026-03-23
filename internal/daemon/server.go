@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hailerity/procet/internal/config"
+	"github.com/hailerity/devrun/internal/config"
 )
 
 // Run is the daemon entry point. Called from main when --_daemon flag is detected.
@@ -104,7 +104,7 @@ func isSocketAlive(socketPath string) bool {
 }
 
 func launchDaemon(socketPath string) error {
-	self := os.Getenv("PROCET_DAEMON_BIN")
+	self := os.Getenv("DEVRUN_DAEMON_BIN")
 	if self == "" {
 		var err error
 		self, err = os.Executable()
@@ -119,9 +119,9 @@ func launchDaemon(socketPath string) error {
 	}
 	defer devNull.Close()
 
-	// If PROCET_DAEMON_LOG is set, redirect daemon stderr to that file for debugging.
+	// If DEVRUN_DAEMON_LOG is set, redirect daemon stderr to that file for debugging.
 	stderr := devNull
-	if logFile := os.Getenv("PROCET_DAEMON_LOG"); logFile != "" {
+	if logFile := os.Getenv("DEVRUN_DAEMON_LOG"); logFile != "" {
 		if f, err2 := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644); err2 == nil {
 			stderr = f
 			defer f.Close()

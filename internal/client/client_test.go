@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/hailerity/procet/internal/client"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/client"
+	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

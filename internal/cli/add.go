@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/procet/internal/config"
+	"github.com/hailerity/devrun/internal/config"
 )
 
 var addCmd = &cobra.Command{

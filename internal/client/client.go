@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
-// Client is a connection to the procet daemon.
+// Client is a connection to the devrun daemon.
 type Client struct {
 	conn net.Conn
 }

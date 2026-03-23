@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 func (s *supervisor) handleAttach(conn net.Conn, raw json.RawMessage) {
@@ -23,12 +23,12 @@ func (s *supervisor) handleAttach(conn net.Conn, raw json.RawMessage) {
 
 	if svc == nil || svc.state.Status != config.StatusRunning {
 		_ = ipc.WriteMessage(conn, ipc.Response{OK: false,
-			Error: fmt.Sprintf("%s is not running. Start it with 'procet start %s'.", p.Name, p.Name)})
+			Error: fmt.Sprintf("%s is not running. Start it with 'devrun start %s'.", p.Name, p.Name)})
 		return
 	}
 	if svc.state.ReAdopted {
 		_ = ipc.WriteMessage(conn, ipc.Response{OK: false,
-			Error: fmt.Sprintf("%s was re-adopted after a daemon restart. Restart it with 'procet start %s' to enable attach.", p.Name, p.Name)})
+			Error: fmt.Sprintf("%s was re-adopted after a daemon restart. Restart it with 'devrun start %s' to enable attach.", p.Name, p.Name)})
 		return
 	}
 

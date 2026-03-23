@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/process"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/process"
 )
 
 // startPortPoller polls each running service's port every 5 seconds.

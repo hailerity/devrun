@@ -7,9 +7,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/hailerity/procet/internal/client"
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/client"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 var fgCmd = &cobra.Command{

@@ -1,7 +1,7 @@
 package config
 
 // ServiceConfig is the shared vocabulary across CLI, daemon, and config layer.
-// YAML tags match .procet.yaml and services.yaml schema.
+// YAML tags match .devrun.yaml and services.yaml schema.
 type ServiceConfig struct {
 	Name    string            `yaml:"name"`
 	Command string            `yaml:"command"`

@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/procet/internal/config"
+	"github.com/hailerity/devrun/internal/config"
 )
 
 var removeCmd = &cobra.Command{
@@ -27,7 +27,7 @@ func runRemove(_ *cobra.Command, args []string) error {
 
 	if svcState, ok := state.Services[name]; ok {
 		if svcState.Status == config.StatusRunning || svcState.Status == config.StatusStarting {
-			return fmt.Errorf("%s is running. Stop it first with 'procet stop %s'", name, name)
+			return fmt.Errorf("%s is running. Stop it first with 'devrun stop %s'", name, name)
 		}
 		// Double-check: if PID recorded, make sure it's actually dead
 		if svcState.PID != nil {

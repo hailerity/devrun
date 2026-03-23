@@ -11,9 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/ipc"
-	"github.com/hailerity/procet/internal/process"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
+	"github.com/hailerity/devrun/internal/process"
 )
 
 type managedService struct {
@@ -63,7 +63,7 @@ func (s *supervisor) loadState() error {
 			cfg = &config.ServiceConfig{Name: name}
 		}
 		// Re-adopted services have nil proc (PTY master fd is gone after daemon restart).
-		// They appear in list as running but procet fg is unavailable until restarted.
+		// They appear in list as running but devrun fg is unavailable until restarted.
 		s.services[name] = &managedService{cfg: cfg, state: svcState}
 	}
 	return s.saveStateLocked()
@@ -110,7 +110,7 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 	}
 	cfg := reg.Services[p.Name]
 	if cfg == nil {
-		return errResp(fmt.Sprintf("service %q not registered. Run 'procet add %s <cmd>' first.", p.Name, p.Name))
+		return errResp(fmt.Sprintf("service %q not registered. Run 'devrun add %s <cmd>' first.", p.Name, p.Name))
 	}
 
 	s.mu.Lock()

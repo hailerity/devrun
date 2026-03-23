@@ -12,7 +12,7 @@ var spinFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 type headerBar struct{}
 
 func (h headerBar) render(total, running, frame int, spinning bool, width int) string {
-	left := styleAccent.Bold(true).Render("⬡ procet")
+	left := styleAccent.Bold(true).Render("⬡ devrun")
 
 	indicator := "●"
 	if spinning {

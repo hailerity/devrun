@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 type detailsPanel struct{}

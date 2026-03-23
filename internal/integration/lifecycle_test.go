@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hailerity/procet/internal/client"
-	"github.com/hailerity/procet/internal/config"
-	"github.com/hailerity/procet/internal/daemon"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/client"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/daemon"
+	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestMain builds the procet binary once and sets PROCET_DAEMON_BIN so that
+// TestMain builds the devrun binary once and sets DEVRUN_DAEMON_BIN so that
 // EnsureDaemon re-execs the real binary rather than the test binary.
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "pt-bin-")
@@ -29,12 +29,12 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(tmp)
 
-	binPath := filepath.Join(tmp, "procet")
-	out, err := exec.Command("go", "build", "-o", binPath, "github.com/hailerity/procet/cmd/procet").CombinedOutput()
+	binPath := filepath.Join(tmp, "devrun")
+	out, err := exec.Command("go", "build", "-o", binPath, "github.com/hailerity/devrun/cmd/devrun").CombinedOutput()
 	if err != nil {
-		panic("build procet binary: " + err.Error() + "\n" + string(out))
+		panic("build devrun binary: " + err.Error() + "\n" + string(out))
 	}
-	os.Setenv("PROCET_DAEMON_BIN", binPath)
+	os.Setenv("DEVRUN_DAEMON_BIN", binPath)
 
 	os.Exit(m.Run())
 }

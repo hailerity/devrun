@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hailerity/procet/internal/ipc"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 type sidebar struct {
@@ -91,7 +91,7 @@ func stateDot(state string) string {
 
 func (s *sidebar) render(width, height int, focused bool) string {
 	if len(s.services) == 0 {
-		return styleMuted.Render("No services — run procet add <name>")
+		return styleMuted.Render("No services — run devrun add <name>")
 	}
 
 	var rows []string

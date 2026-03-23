@@ -3,8 +3,8 @@ package main
 import (
 	"os"
 
-	"github.com/hailerity/procet/internal/cli"
-	"github.com/hailerity/procet/internal/daemon"
+	"github.com/hailerity/devrun/internal/cli"
+	"github.com/hailerity/devrun/internal/daemon"
 )
 
 func main() {

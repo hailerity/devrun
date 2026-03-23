@@ -1,4 +1,4 @@
-module github.com/hailerity/procet
+module github.com/hailerity/devrun
 
 go 1.25.0
 
