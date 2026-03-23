@@ -23,12 +23,39 @@ with a live TUI dashboard and persistent logs.
 
 ## Installation
 
-```sh
-# Using Homebrew (macOS / Linux)
-brew install hailerity/tap/devrun
+### Homebrew (macOS / Linux) — recommended
 
-# Build from source (requires Go 1.22+)
-go install github.com/hailerity/devrun@latest
+```sh
+brew install hailerity/devrun/devrun
+```
+
+### curl installer (macOS / Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/hailerity/devrun/main/scripts/install.sh | sh
+```
+
+Installs to `/usr/local/bin` (or `~/.local/bin` if you don't have sudo).
+Pin a specific version with `DEVRUN_VERSION=v1.2.3 curl ... | sh`.
+
+### go install
+
+```sh
+go install github.com/hailerity/devrun/cmd/devrun@latest
+```
+
+Requires Go 1.22+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
+
+### Windows
+
+Download the `.zip` for your architecture from the
+[Releases](https://github.com/hailerity/devrun/releases) page,
+extract `devrun.exe`, and add its directory to your `PATH`.
+
+### Verify
+
+```sh
+devrun --version
 ```
 
 ---
