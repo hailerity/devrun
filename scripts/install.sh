@@ -65,9 +65,7 @@ fi
 
 # --- download and install ----------------------------------------------------
 
-# GoReleaser uses {{.Version}} (no leading "v") in archive names.
-VERSION_BARE="${DEVRUN_VERSION#v}"
-ARCHIVE="${BINARY}_${VERSION_BARE}_${OS}_${ARCH}.tar.gz"
+ARCHIVE="${BINARY}_${DEVRUN_VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/download/$DEVRUN_VERSION/$ARCHIVE"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
