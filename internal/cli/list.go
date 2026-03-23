@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -25,7 +27,7 @@ func runList(_ *cobra.Command, _ []string) error {
 	socketPath := config.SocketPath()
 	c, err := client.Connect(socketPath)
 	if err != nil {
-		return fmt.Errorf("connect to daemon: %w", err)
+		return listOffline()
 	}
 	defer c.Close()
 
@@ -42,9 +44,74 @@ func runList(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("parse list response: %w", err)
 	}
 
+	printServiceTable(payload.Services)
+	return nil
+}
+
+// listOffline reads the registry and last-saved state file directly.
+// It is called when the daemon is not running.
+func listOffline() error {
+	fmt.Fprintln(os.Stderr, "(daemon not running — showing last known state)")
+
+	reg, err := config.LoadRegistry(config.RegistryPath())
+	if err != nil {
+		return fmt.Errorf("load registry: %w", err)
+	}
+
+	state, err := config.LoadState(config.StatePath())
+	if err != nil {
+		return fmt.Errorf("load state: %w", err)
+	}
+
+	// Collect names from both registry and state so nothing is hidden.
+	seen := make(map[string]bool)
+	var names []string
+	for name := range reg.Services {
+		seen[name] = true
+		names = append(names, name)
+	}
+	for name := range state.Services {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	var svcs []ipc.ServiceInfo
+	for _, name := range names {
+		svcState := state.Services[name]
+		info := ipc.ServiceInfo{Name: name}
+
+		if reg.Services[name] != nil {
+			info.Group = reg.Services[name].Group
+		}
+
+		if svcState == nil {
+			info.State = string(config.StatusStopped)
+		} else {
+			status := svcState.Status
+			// If the state file says running/starting, verify the process is still alive.
+			if (status == config.StatusRunning || status == config.StatusStarting) && svcState.PID != nil {
+				if syscall.Kill(*svcState.PID, 0) != nil {
+					status = config.StatusCrashed
+				} else {
+					info.PID = svcState.PID
+					info.Port = svcState.Port
+				}
+			}
+			info.State = string(status)
+		}
+		svcs = append(svcs, info)
+	}
+
+	printServiceTable(svcs)
+	return nil
+}
+
+func printServiceTable(svcs []ipc.ServiceInfo) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "NAME\tGROUP\tSTATE\tPID\tPORT\tUPTIME\tCPU%\tMEM")
-	for _, svc := range payload.Services {
+	for _, svc := range svcs {
 		pid := "-"
 		if svc.PID != nil {
 			pid = fmt.Sprintf("%d", *svc.PID)
@@ -71,7 +138,6 @@ func runList(_ *cobra.Command, _ []string) error {
 			svc.Name, group, svc.State, pid, port, uptime, cpu, mem)
 	}
 	w.Flush()
-	return nil
 }
 
 func formatUptime(sec int64) string {
