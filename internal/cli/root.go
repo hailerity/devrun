@@ -40,6 +40,8 @@ func Execute() {
 
 func init() {
 	rootCmd.AddCommand(
+		upCmd,
+		downCmd,
 		addCmd,
 		removeCmd,
 		startCmd,
