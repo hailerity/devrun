@@ -23,13 +23,7 @@ with a live TUI dashboard and persistent logs.
 
 ## Installation
 
-### Homebrew (macOS / Linux) — recommended
-
-```sh
-brew install hailerity/devrun/devrun
-```
-
-### curl installer (macOS / Linux)
+### curl installer (macOS / Linux) — recommended
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hailerity/devrun/main/scripts/install.sh | sh
