@@ -12,8 +12,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "devrun",
-	Short: "A lightweight process manager for developers",
+	Use:     "devrun",
+	Short:   "A lightweight process manager for developers",
+	Version: Version,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		socketPath := config.SocketPath()
 		if err := daemon.EnsureDaemon(socketPath); err != nil {
@@ -39,6 +40,7 @@ func Execute() {
 }
 
 func init() {
+	rootCmd.SetVersionTemplate("devrun {{.Version}} (commit: " + Commit + ", built: " + Date + ")\n")
 	rootCmd.AddCommand(
 		upCmd,
 		downCmd,

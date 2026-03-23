@@ -1,0 +1,71 @@
+version: 2
+
+project_name: devrun
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: devrun
+    main: ./cmd/devrun
+    binary: devrun
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/hailerity/devrun/internal/cli.Version={{.Version}}
+      - -X github.com/hailerity/devrun/internal/cli.Commit={{.ShortCommit}}
+      - -X github.com/hailerity/devrun/internal/cli.Date={{.Date}}
+
+archives:
+  - id: default
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "Merge pull request"
+      - "Merge branch"
+
+release:
+  github:
+    owner: hailerity
+    name: devrun
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
+
+brews:
+  - name: devrun
+    repository:
+      owner: hailerity
+      name: homebrew-devrun
+    homepage: "https://github.com/hailerity/devrun"
+    description: "A lightweight process manager for developers"
+    license: "MIT"
+    install: |
+      bin.install "devrun"
+    test: |
+      system "#{bin}/devrun", "--version"
