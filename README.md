@@ -40,12 +40,6 @@ go install github.com/hailerity/devrun/cmd/devrun@latest
 
 Requires Go 1.22+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
 
-### Windows
-
-Download the `.zip` for your architecture from the
-[Releases](https://github.com/hailerity/devrun/releases) page,
-extract `devrun.exe`, and add its directory to your `PATH`.
-
 ### Verify
 
 ```sh
