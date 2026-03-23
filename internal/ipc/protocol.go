@@ -26,6 +26,7 @@ type Response struct {
 type StartPayload struct{ Name string `json:"name"` }
 type StartResponsePayload struct{ PID int `json:"pid"` }
 type StopPayload struct{ Name string `json:"name"` }
+type RemovePayload struct{ Name string `json:"name"` }
 type AttachPayload struct{ Name string `json:"name"` }
 type DetachPayload struct{ Name string `json:"name"` }
 

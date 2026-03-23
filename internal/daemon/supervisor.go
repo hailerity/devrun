@@ -89,6 +89,8 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleStart(req.Payload))
 	case "stop":
 		_ = ipc.WriteMessage(conn, s.handleStop(req.Payload))
+	case "remove":
+		_ = ipc.WriteMessage(conn, s.handleRemove(req.Payload))
 	case "list":
 		_ = ipc.WriteMessage(conn, s.handleList())
 	case "attach":
@@ -282,6 +284,23 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 	if err := svc.proc.Stop(); err != nil {
 		return errResp(fmt.Sprintf("stop: %v", err))
 	}
+	return &ipc.Response{OK: true}
+}
+
+func (s *supervisor) handleRemove(raw json.RawMessage) *ipc.Response {
+	var p ipc.RemovePayload
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return errResp("invalid remove payload")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	svc := s.services[p.Name]
+	if svc != nil && (svc.state.Status == config.StatusRunning || svc.state.Status == config.StatusStarting) {
+		return errResp(fmt.Sprintf("%s is running; stop it before removing", p.Name))
+	}
+	delete(s.services, p.Name)
+	_ = s.saveStateLocked()
 	return &ipc.Response{OK: true}
 }
 

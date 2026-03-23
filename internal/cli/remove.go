@@ -6,7 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
 
 var removeCmd = &cobra.Command{
@@ -52,6 +54,12 @@ func runRemove(_ *cobra.Command, args []string) error {
 	delete(reg.Services, name)
 	if err := config.SaveRegistry(config.RegistryPath(), reg); err != nil {
 		return fmt.Errorf("save registry: %w", err)
+	}
+
+	// Notify a running daemon so it evicts the service from its in-memory map.
+	if c, err := client.Connect(config.SocketPath()); err == nil {
+		_, _ = c.Send("remove", ipc.RemovePayload{Name: name})
+		c.Close()
 	}
 
 	fmt.Printf("removed %s\n", name)
