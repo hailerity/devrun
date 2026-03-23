@@ -50,15 +50,3 @@ release:
   prerelease: auto
   name_template: "v{{.Version}}"
 
-brews:
-  - name: devrun
-    repository:
-      owner: hailerity
-      name: homebrew-devrun
-    homepage: "https://github.com/hailerity/devrun"
-    description: "A lightweight process manager for developers"
-    license: "MIT"
-    install: |
-      bin.install "devrun"
-    test: |
-      system "#{bin}/devrun", "--version"
