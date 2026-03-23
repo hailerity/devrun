@@ -168,7 +168,7 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 	s.mu.Unlock()
 
 	if currentStatus != config.StatusRunning {
-		return errResp(fmt.Sprintf("process exited before confirming running state"))
+		return errResp("process exited before confirming running state")
 	}
 
 	payload, _ := json.Marshal(ipc.StartResponsePayload{PID: pid})

@@ -54,10 +54,10 @@ func (dp detailsPanel) render(svc *ipc.ServiceInfo, cfg *config.ServiceConfig, w
 		sb.WriteString("\n" + styleMuted.Render("ENV") + "\n")
 		keys := sortedStringKeys(cfg.Env)
 		for _, k := range keys {
-			sb.WriteString(fmt.Sprintf("  %s=%s\n",
+			fmt.Fprintf(&sb, "  %s=%s\n",
 				styleMuted.Render(k),
 				styleAccent.Render(cfg.Env[k]),
-			))
+			)
 		}
 	}
 

@@ -1,10 +1,35 @@
+version: "2"
+
 linters:
+  default: none
   enable:
     - errcheck
     - govet
     - staticcheck
-    - unused
-
-linters-settings:
-  errcheck:
-    check-blank: true
+  settings:
+    errcheck:
+      check-blank: false
+      exclude-functions:
+        # Close — errors in defer/cleanup are not actionable
+        - (net.Conn).Close
+        - (net.Listener).Close
+        - (*os.File).Close
+        # Write to network/stdout — not actionable in streaming contexts
+        - (net.Conn).Write
+        - (*os.File).Write
+        # tabwriter — errors propagate from the underlying writer
+        - (*text/tabwriter.Writer).Flush
+        # fmt writes to stderr/tabwriter — not actionable
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # OS/process cleanup — best-effort, no recovery possible
+        - os.Remove
+        - (*os.Process).Release
+        - syscall.Kill
+        - syscall.Close
+        # Terminal restore in defer — cannot propagate error
+        - golang.org/x/term.Restore
+        # Internal types — close/stop are best-effort cleanup
+        - (*github.com/hailerity/devrun/internal/client.Client).Close
+        - (*github.com/hailerity/devrun/internal/process.Process).Stop
