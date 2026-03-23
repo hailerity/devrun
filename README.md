@@ -11,7 +11,6 @@ with a live TUI dashboard and persistent logs.
 ## Features
 
 - **Register once, run anywhere** — save commands with names, no more muscle memory required
-- **Group services** — start/stop your entire stack with one command (`@group`)
 - **Project-local configs** — commit a `.devrun.yaml` so your team shares the same setup
 - **Live TUI dashboard** — see all services, CPU/mem, uptime, and tail logs in one view
 - **Persistent logs** — every service writes to its own log file; inspect anytime
@@ -38,7 +37,7 @@ Pin a specific version with `DEVRUN_VERSION=v1.2.3 curl ... | sh`.
 go install github.com/hailerity/devrun/cmd/devrun@latest
 ```
 
-Requires Go 1.22+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
+Requires Go 1.25+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
 
 ### Verify
 
@@ -50,23 +49,34 @@ devrun --version
 
 ## Quick Start
 
+### Global services
+
 ```sh
 # 1. Register your services
-devrun add web   "yarn dev"           --cwd ~/projects/app --group fullstack
-devrun add api   "yarn nx serve api"  --cwd ~/projects/app --group fullstack
-devrun add db    "docker run --rm -p 5432:5432 postgres:16" --group fullstack
+devrun add web "yarn dev"         --cwd ~/projects/app --group fullstack
+devrun add api "go run ./cmd/api" --cwd ~/projects/app --group fullstack
 
 # 2. Start everything
-devrun start @fullstack
+devrun start --all
 
 # 3. Check what's running
 devrun list
 
 # 4. Open the live dashboard
-devrun ui
+devrun
 
 # 5. When you're done
-devrun stop @fullstack
+devrun stop --all
+```
+
+### Project-local workflow
+
+```sh
+# In any directory with a .devrun.yaml
+devrun up       # register + start all services
+devrun list     # check status
+devrun          # open dashboard
+devrun down     # stop all project services
 ```
 
 ---
@@ -79,28 +89,25 @@ devrun stop @fullstack
 |---|---|
 | `devrun add <name> <cmd>` | Register a new service |
 | `devrun remove <name>` | Remove a service |
-| `devrun edit <name>` | Open service config in `$EDITOR` |
 | `devrun list` | List all services with status |
-| `devrun status` | Compact status table (name, state, pid, port, uptime) |
 
 **`devrun add` options:**
 
 ```
---cwd <path>          Working directory (default: current dir)
---env KEY=VALUE       Set environment variable (repeatable)
---env-file <path>     Load env vars from file
---group <name>        Assign to a group
---restart <policy>    Restart policy: never | on-failure | always (default: never)
---desc <text>         Human-readable description
+--cwd <path>      Working directory (default: current dir)
+--env KEY=VALUE   Set environment variable (repeatable)
+--group <name>    Assign to a group
 ```
 
 ### Lifecycle
 
 | Command | Description |
 |---|---|
-| `devrun start <name\|@group\|--all>` | Start one, a group, or all services |
-| `devrun stop <name\|@group\|--all>` | Stop one, a group, or all services |
-| `devrun restart <name\|@group>` | Restart one or a group |
+| `devrun start <name>` | Start a service |
+| `devrun start --all` | Start all registered services |
+| `devrun start <name> --fg` | Start and attach terminal |
+| `devrun stop <name>` | Stop a service |
+| `devrun stop --all` | Stop all running services |
 
 ### Observability
 
@@ -114,25 +121,15 @@ devrun stop @fullstack
 
 | Command | Description |
 |---|---|
-| `devrun ui` | Open interactive TUI dashboard |
-| `devrun attach <name>` | Attach stdin/stdout to a running service |
+| `devrun` | Open interactive TUI dashboard |
+| `devrun fg <name>` | Attach stdin/stdout to a running service |
 
 ### Project-local Workflow
 
 | Command | Description |
 |---|---|
-| `devrun init` | Scaffold `.devrun.yaml` in current directory |
-| `devrun up` | Start all services defined in `.devrun.yaml` |
-| `devrun down` | Stop all services defined in `.devrun.yaml` |
-
-### Daemon
-
-| Command | Description |
-|---|---|
-| `devrun daemon start` | Start the background daemon |
-| `devrun daemon stop` | Stop the daemon (and all services) |
-| `devrun daemon status` | Check daemon health |
-| `devrun daemon restart` | Restart the daemon |
+| `devrun up` | Register + start all services from `.devrun.yaml` |
+| `devrun down` | Stop all services from `.devrun.yaml` |
 
 ---
 
@@ -140,74 +137,76 @@ devrun stop @fullstack
 
 ### Project-local: `.devrun.yaml`
 
-Place this file in your project root and commit it.
+Place this file in your project root and commit it. Running `devrun up` registers all services into the global daemon with the project name as their group.
 
 ```yaml
-version: "1"
+name: myapp      # optional — defaults to directory name
 
 services:
   web:
     command: yarn dev
-    cwd: .
-    group: fullstack
+    cwd: ./frontend  # relative to .devrun.yaml; defaults to project root
     env:
       PORT: "3000"
       NODE_ENV: development
 
   api:
-    command: yarn nx serve api
-    cwd: .
-    group: fullstack
-    depends_on:
-      - db
+    command: go run ./cmd/api
     env:
       PORT: "4000"
-    restart: on-failure
-
-  db:
-    command: docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=dev postgres:16
-    group: fullstack
-    restart: always
 ```
 
 ### Global registry: `~/.config/devrun/services.yaml`
 
-Managed automatically by `devrun add/remove`. Same schema as `.devrun.yaml`.
+Managed automatically by `devrun add/remove`. You can also edit it directly.
 
 ---
 
-## TUI Dashboard (`devrun ui`)
+## TUI Dashboard (`devrun`)
 
 ```
-┌─ devrun ──────────────────────────────────────────────────────────┐
-│  NAME     GROUP       STATE    PID    PORT   UPTIME    CPU   MEM  │
-│  ──────────────────────────────────────────────────────────────── │
-│▶ web       fullstack   running  12041  :3000  2h 14m    2%   180M │
-│  api       fullstack   running  12055  :4000  2h 14m    0%   240M │
-│  db        fullstack   running  11980  :5432  2h 15m    0%    64M │
-│  worker    –           stopped  –      –      –         –    –    │
-│                                                                    │
-│  [s]tart  [x]stop  [r]estart  [l]ogs  [a]ttach  [?]help  [q]quit │
-└────────────────────────────────────────────────────────────────────┘
-│ Logs: web                                        [j/k scroll] [c]lear│
-│  → GET  /api/users    200  12ms                                    │
-│  → POST /api/auth     201  45ms                                    │
-│  → GET  /api/profile  200   8ms                                    │
-└────────────────────────────────────────────────────────────────────┘
+⬡ devrun  3 running / 4 total
+──────────────────────────────────────────────────────────────
+SERVICES │ LOGS          DETAILS
+─────────│─────────────────────────────────────────────────────
+● web    │ → GET  /api/users    200  12ms
+● api    │ → POST /api/auth     201  45ms
+○ db     │ → GET  /api/profile  200   8ms
+○ worker │
+─────────────────────────────────────────────────────────────
+s start  x stop  q quit
 ```
 
-Keyboard shortcuts:
+**Navigation:**
 
 | Key | Action |
 |---|---|
-| `j/k` or `↑/↓` | Navigate service list |
+| `k` / `↑` | Move up |
+| `j` / `↓` | Move down |
+| `←` / `→` | Focus sidebar / main panel |
+| `Tab` | Cycle: sidebar → Logs → Details → sidebar |
+
+**Service control (sidebar focused):**
+
+| Key | Action |
+|---|---|
 | `s` | Start selected service |
 | `x` | Stop selected service |
-| `r` | Restart selected service |
-| `l` | Toggle log panel for selected service |
-| `a` | Attach to selected service |
-| `f` | Filter by group |
-| `?` | Show help |
+
+**Log panel (main panel focused, Logs tab):**
+
+| Key | Action |
+|---|---|
+| `f` | Toggle follow mode |
+| `g` / `G` | Jump to top / bottom |
+| `v` | Enter visual selection mode |
+| `y` / `Ctrl+C` | Copy selection (or current line) |
+| `Esc` | Exit visual mode |
+
+**Global:**
+
+| Key | Action |
+|---|---|
 | `q` / `Ctrl+C` | Quit |
 
 ---
@@ -217,7 +216,7 @@ Keyboard shortcuts:
 | Path | Purpose |
 |---|---|
 | `~/.config/devrun/services.yaml` | Global service registry |
-| `~/.local/share/devrun/pids/` | PID files per service |
+| `~/.local/share/devrun/state.json` | Runtime state (PID, status, port) |
 | `~/.local/share/devrun/logs/` | Log files per service (`<name>.log`) |
 | `~/.local/share/devrun/devrun.sock` | Daemon Unix socket |
 | `.devrun.yaml` | Project-local service definitions |
