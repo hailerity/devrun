@@ -6,7 +6,7 @@ Stop opening new terminal tabs. Stop forgetting start commands. Stop wondering w
 `devrun` gives you a single place to register, start, and monitor all your development services —
 with a live TUI dashboard and persistent logs.
 
----
+![Screenshot](./assets/screenshot.png)
 
 ## Features
 
