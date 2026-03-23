@@ -1,7 +1,7 @@
 .PHONY: build test test-integration lint install clean
 
 build:
-	go build -o bin/procet ./cmd/procet
+	go build -o bin/devrun ./cmd/devrun
 
 test:
 	go test ./... -v -count=1
@@ -13,7 +13,7 @@ lint:
 	golangci-lint run
 
 install:
-	go install ./cmd/procet
+	go install ./cmd/devrun
 
 clean:
 	rm -rf bin/
