@@ -247,6 +247,56 @@ func TestLifecycle_DaemonAutoStart(t *testing.T) {
 	t.Cleanup(func() { os.Remove(socketPath) })
 }
 
+// TestLifecycle_ListShowsRegistryOnlyServices verifies that a service registered
+// via `devrun add` (registry write) but never started appears as "stopped" in the
+// list response without requiring a start/stop cycle first.
+func TestLifecycle_ListShowsRegistryOnlyServices(t *testing.T) {
+	socketPath, _ := testEnv(t)
+
+	registerService(t, "api", "go run ./cmd/api", t.TempDir())
+	registerService(t, "web", "npm run dev", t.TempDir())
+
+	resp := send(t, socketPath, "list", struct{}{})
+	require.True(t, resp.OK)
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 2)
+
+	states := map[string]string{}
+	for _, svc := range payload.Services {
+		states[svc.Name] = svc.State
+	}
+	assert.Equal(t, "stopped", states["api"])
+	assert.Equal(t, "stopped", states["web"])
+}
+
+// TestLifecycle_ListMixesRunningAndRegistryOnlyServices verifies that the list
+// correctly shows a running service alongside a service that was added to the
+// registry after the daemon started but has never been started.
+func TestLifecycle_ListMixesRunningAndRegistryOnlyServices(t *testing.T) {
+	socketPath, _ := testEnv(t)
+
+	registerService(t, "runner", "while true; do sleep 1; done", t.TempDir())
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "runner"})
+	require.True(t, resp.OK, "start: %s", resp.Error)
+
+	// Add a second service after the daemon is already running.
+	registerService(t, "idle", "echo hello", t.TempDir())
+
+	resp = send(t, socketPath, "list", struct{}{})
+	require.True(t, resp.OK)
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 2)
+
+	states := map[string]string{}
+	for _, svc := range payload.Services {
+		states[svc.Name] = svc.State
+	}
+	assert.Equal(t, "running", states["runner"])
+	assert.Equal(t, "stopped", states["idle"])
+}
+
 func TestLifecycle_LogsWithoutDaemon(t *testing.T) {
 	_, _ = testEnv(t)
 	// Write a fake log file

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/daemon"
 	"github.com/hailerity/devrun/internal/ipc"
 )
 
@@ -25,6 +26,10 @@ var listCmd = &cobra.Command{
 
 func runList(_ *cobra.Command, _ []string) error {
 	socketPath := config.SocketPath()
+	// Start daemon if not running so the list always reflects live state.
+	// If it fails to start, fall through to the offline fallback below.
+	_ = daemon.EnsureDaemon(socketPath)
+
 	c, err := client.Connect(socketPath)
 	if err != nil {
 		return listOffline()

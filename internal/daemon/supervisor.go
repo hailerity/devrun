@@ -305,6 +305,10 @@ func (s *supervisor) handleRemove(raw json.RawMessage) *ipc.Response {
 }
 
 func (s *supervisor) handleList() *ipc.Response {
+	// Fresh registry read so services added via `devrun add` appear immediately,
+	// even before they have been started for the first time.
+	reg, _ := config.LoadRegistry(config.RegistryPath())
+
 	// Collect a snapshot of state fields under the read lock so that blocking
 	// syscalls (CPUPercent, MemBytes) do not hold the lock and stall writers.
 	type snapshot struct {
@@ -318,7 +322,9 @@ func (s *supervisor) handleList() *ipc.Response {
 
 	s.mu.RLock()
 	snaps := make([]snapshot, 0, len(s.services))
+	seen := make(map[string]bool, len(s.services))
 	for name, svc := range s.services {
+		seen[name] = true
 		snap := snapshot{
 			name:      name,
 			state:     string(svc.state.Status),
@@ -332,6 +338,23 @@ func (s *supervisor) handleList() *ipc.Response {
 		snaps = append(snaps, snap)
 	}
 	s.mu.RUnlock()
+
+	// Append registry-only services (never started, so not in s.services).
+	if reg != nil {
+		for name, cfg := range reg.Services {
+			if seen[name] {
+				continue
+			}
+			snap := snapshot{
+				name:  name,
+				state: string(config.StatusStopped),
+			}
+			if cfg != nil {
+				snap.group = cfg.Group
+			}
+			snaps = append(snaps, snap)
+		}
+	}
 
 	// Compute CPU/mem outside the lock — these do blocking system calls.
 	services := make([]ipc.ServiceInfo, 0, len(snaps))
