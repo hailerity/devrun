@@ -74,5 +74,6 @@ func init() {
 		logsCmd,
 		fgCmd,
 		infoCmd,
+		daemonCmd,
 	)
 }

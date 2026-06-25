@@ -29,9 +29,10 @@ func DataDir() string {
 	return filepath.Join(home, ".local", "share", "devrun")
 }
 
-func RegistryPath() string { return filepath.Join(ConfigDir(), "services.yaml") }
-func SocketPath() string   { return filepath.Join(DataDir(), "devrun.sock") }
-func StatePath() string    { return filepath.Join(DataDir(), "state.json") }
+func RegistryPath() string  { return filepath.Join(ConfigDir(), "services.yaml") }
+func SocketPath() string    { return filepath.Join(DataDir(), "devrun.sock") }
+func StatePath() string     { return filepath.Join(DataDir(), "state.json") }
+func DaemonPIDPath() string { return filepath.Join(DataDir(), "daemon.pid") }
 func LogPath(name string) string {
 	return filepath.Join(DataDir(), "logs", name+".log")
 }

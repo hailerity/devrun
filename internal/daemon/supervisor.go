@@ -31,6 +31,7 @@ type supervisor struct {
 	services   map[string]*managedService
 	statePath  string
 	registry   *config.Registry
+	stopDaemon func() // called by IPC daemon-stop; set by server.go
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -95,6 +96,12 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleList())
 	case "attach":
 		s.handleAttach(conn, req.Payload)
+	case "daemon-stop":
+		_ = ipc.WriteMessage(conn, &ipc.Response{OK: true})
+		if s.stopDaemon != nil {
+			go s.stopDaemon()
+		}
+		return
 	default:
 		_ = ipc.WriteMessage(conn, errResp(fmt.Sprintf("unknown request type: %s", req.Type)))
 	}

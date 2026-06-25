@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -52,7 +53,26 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	defer os.Remove(socketPath)
 	defer ln.Close()
 
+	// Write pidfile so CLI can identify the daemon process.
+	pidPath := config.DaemonPIDPath()
+	_ = os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	defer os.Remove(pidPath)
+
 	logger.Info("daemon started", "socket", socketPath)
+
+	// shutdownKeepServices carries whether to leave managed services running on exit.
+	// IPC "daemon-stop" sends true (restart use case); SIGTERM/SIGINT sends false.
+	shutdownKeepServices := make(chan bool, 1)
+	var shutdownOnce sync.Once
+	doShutdown := func(keepServices bool) {
+		shutdownOnce.Do(func() {
+			shutdownKeepServices <- keepServices
+			ln.Close()
+		})
+	}
+
+	// Wire the IPC-triggered shutdown into the supervisor.
+	sup.stopDaemon = func() { doShutdown(true) }
 
 	// Create a context for graceful shutdown
 	shutdownCtx, cancel := context.WithCancel(context.Background())
@@ -61,15 +81,16 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	// Start port polling in background
 	go sup.startPortPoller(shutdownCtx)
 
-	// Handle SIGTERM/SIGINT for graceful shutdown
+	// Handle SIGTERM/SIGINT: shut down and stop managed services.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		select {
 		case <-sigs:
+			doShutdown(false)
 		case <-ctx.Done():
+			doShutdown(true)
 		}
-		ln.Close()
 	}()
 
 	for {
@@ -81,7 +102,9 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	}
 
 	cancel()
-	sup.shutdown()
+	if keepServices := <-shutdownKeepServices; !keepServices {
+		sup.shutdown()
+	}
 	return nil
 }
 
