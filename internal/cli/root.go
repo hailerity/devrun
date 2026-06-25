@@ -73,5 +73,6 @@ func init() {
 		listCmd,
 		logsCmd,
 		fgCmd,
+		infoCmd,
 	)
 }
