@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"syscall"
-	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/hailerity/devrun/internal/client"
@@ -113,36 +114,94 @@ func listOffline() error {
 	return nil
 }
 
-func printServiceTable(svcs []ipc.ServiceInfo) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tGROUP\tSTATE\tPID\tPORT\tUPTIME\tCPU%\tMEM")
-	for _, svc := range svcs {
-		pid := "-"
-		if svc.PID != nil {
-			pid = fmt.Sprintf("%d", *svc.PID)
-		}
-		port := "-"
-		if svc.Port != nil {
-			port = fmt.Sprintf(":%d", *svc.Port)
-		}
-		uptime := "-"
-		if svc.UptimeSec > 0 {
-			uptime = formatUptime(svc.UptimeSec)
-		}
-		cpu := "-"
-		mem := "-"
-		if svc.CPUPct > 0 || svc.MemBytes > 0 {
-			cpu = fmt.Sprintf("%.1f%%", svc.CPUPct)
-			mem = formatBytes(svc.MemBytes)
-		}
-		group := svc.Group
-		if group == "" {
-			group = "-"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			svc.Name, group, svc.State, pid, port, uptime, cpu, mem)
+var listHeaders = []string{"NAME", "GROUP", "STATE", "PID", "PORT", "UPTIME", "CPU%", "MEM"}
+
+func serviceRowCells(svc ipc.ServiceInfo) []string {
+	pid := "-"
+	if svc.PID != nil {
+		pid = fmt.Sprintf("%d", *svc.PID)
 	}
-	w.Flush()
+	port := "-"
+	if svc.Port != nil {
+		port = fmt.Sprintf(":%d", *svc.Port)
+	}
+	uptime := "-"
+	if svc.UptimeSec > 0 {
+		uptime = formatUptime(svc.UptimeSec)
+	}
+	cpu, mem := "-", "-"
+	if svc.CPUPct > 0 || svc.MemBytes > 0 {
+		cpu = fmt.Sprintf("%.1f%%", svc.CPUPct)
+		mem = formatBytes(svc.MemBytes)
+	}
+	group := svc.Group
+	if group == "" {
+		group = "-"
+	}
+	return []string{svc.Name, group, svc.State, pid, port, uptime, cpu, mem}
+}
+
+func printServiceTable(svcs []ipc.ServiceInfo) {
+	const gap = "  "
+
+	// Collect raw cell values and compute column widths.
+	rows := make([][]string, len(svcs))
+	widths := make([]int, len(listHeaders))
+	for i, h := range listHeaders {
+		widths[i] = len(h)
+	}
+	for i, svc := range svcs {
+		rows[i] = serviceRowCells(svc)
+		for j, cell := range rows[i] {
+			if len(cell) > widths[j] {
+				widths[j] = len(cell)
+			}
+		}
+	}
+
+	// Header row.
+	parts := make([]string, len(listHeaders))
+	for i, h := range listHeaders {
+		parts[i] = styleLabel.Render(fmt.Sprintf("%-*s", widths[i], h))
+	}
+	fmt.Fprintln(os.Stdout, strings.Join(parts, gap))
+
+	// Data rows.
+	for ri, row := range rows {
+		for i, cell := range row {
+			pad := widths[i]
+			switch i {
+			case 0: // NAME
+				parts[i] = styleBold.Render(fmt.Sprintf("%-*s", pad, cell))
+			case 2: // STATE
+				parts[i] = stateStyle(svcs[ri].State).Render(fmt.Sprintf("%-*s", pad, cell))
+			case len(row) - 1: // MEM — last column, no trailing pad
+				if cell == "-" {
+					parts[i] = styleLabel.Render(cell)
+				} else {
+					parts[i] = styleValue.Render(cell)
+				}
+			default:
+				if cell == "-" {
+					parts[i] = styleLabel.Render(fmt.Sprintf("%-*s", pad, cell))
+				} else {
+					parts[i] = styleValue.Render(fmt.Sprintf("%-*s", pad, cell))
+				}
+			}
+		}
+		fmt.Fprintln(os.Stdout, strings.Join(parts, gap))
+	}
+}
+
+func stateStyle(state string) lipgloss.Style {
+	switch config.ServiceStatus(state) {
+	case config.StatusRunning:
+		return styleGreen
+	case config.StatusCrashed:
+		return styleRed
+	default:
+		return styleLabel
+	}
 }
 
 func formatUptime(sec int64) string {
