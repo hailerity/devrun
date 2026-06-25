@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -40,6 +42,26 @@ func Execute() {
 }
 
 func init() {
+	// Fallback for `go install`: ldflags are not applied, but Go embeds module
+	// metadata we can read via debug.ReadBuildInfo.
+	if Version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			if v := info.Main.Version; v != "" && v != "(devel)" {
+				Version = strings.TrimPrefix(v, "v")
+				rootCmd.Version = Version
+			}
+			for _, s := range info.Settings {
+				switch s.Key {
+				case "vcs.revision":
+					if len(s.Value) >= 7 {
+						Commit = s.Value[:7]
+					}
+				case "vcs.time":
+					Date = s.Value
+				}
+			}
+		}
+	}
 	rootCmd.SetVersionTemplate("devrun {{.Version}} (commit: " + Commit + ", built: " + Date + ")\n")
 	rootCmd.AddCommand(
 		upCmd,
