@@ -139,6 +139,38 @@ func TestLifecycle_StartListStop(t *testing.T) {
 	assert.Equal(t, "stopped", payload.Services[0].State)
 }
 
+// TestLifecycle_StartWithInlineConfig verifies a service can be started from a
+// full ServiceConfig sent in the start request, without being written to the
+// global registry first — the path project devrun.yaml services take.
+func TestLifecycle_StartWithInlineConfig(t *testing.T) {
+	socketPath, _ := testEnv(t)
+
+	cfg := &config.ServiceConfig{
+		Name:    "proj-svc",
+		Command: "while true; do echo hi; sleep 1; done",
+		CWD:     t.TempDir(),
+		Group:   "myproj",
+	}
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "proj-svc", Config: cfg})
+	require.True(t, resp.OK, "start with inline config: %s", resp.Error)
+
+	// Registry file must not have been touched.
+	reg, err := config.LoadRegistry(config.RegistryPath())
+	require.NoError(t, err)
+	assert.NotContains(t, reg.Services, "proj-svc")
+
+	resp = send(t, socketPath, "list", struct{}{})
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	assert.Equal(t, "proj-svc", payload.Services[0].Name)
+	assert.Equal(t, "running", payload.Services[0].State)
+	assert.Equal(t, "myproj", payload.Services[0].Group)
+
+	resp = send(t, socketPath, "stop", ipc.StopPayload{Name: "proj-svc"})
+	assert.True(t, resp.OK, resp.Error)
+}
+
 func TestLifecycle_ProcessCrash(t *testing.T) {
 	socketPath, _ := testEnv(t)
 	// Command starts, passes the 100ms alive check, then crashes.

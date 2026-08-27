@@ -31,7 +31,11 @@ func runStop(_ *cobra.Command, args []string) error {
 
 	socketPath := config.SocketPath()
 	if stopFlags.all {
-		return stopAll(socketPath)
+		reg, _, err := activeRegistry()
+		if err != nil {
+			return err
+		}
+		return stopAll(socketPath, reg)
 	}
 	c, err := client.Connect(socketPath)
 	if err != nil {
@@ -54,11 +58,7 @@ func stopOne(c *client.Client, name string) error {
 	return nil
 }
 
-func stopAll(socketPath string) error {
-	reg, err := config.LoadRegistry(config.RegistryPath())
-	if err != nil {
-		return err
-	}
+func stopAll(socketPath string, reg *config.Registry) error {
 	names := make([]string, 0, len(reg.Services))
 	for name := range reg.Services {
 		names = append(names, name)

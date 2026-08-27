@@ -52,10 +52,22 @@ func runSysInfo() error {
 	)
 
 	fmt.Println(styleBold.Render("paths"))
-	fmt.Printf("  %s  %s\n",
-		styleLabel.Render("config"),
-		styleValue.Render(config.RegistryPath()),
-	)
+	if _, src, err := activeRegistry(); err == nil && src.IsLocal() {
+		fmt.Printf("  %s  %s  %s\n",
+			styleLabel.Render("config"),
+			styleValue.Render(src.Local),
+			styleLabel.Render("(local)"),
+		)
+		fmt.Printf("  %s  %s\n",
+			styleLabel.Render("global"),
+			styleValue.Render(config.RegistryPath()),
+		)
+	} else {
+		fmt.Printf("  %s  %s\n",
+			styleLabel.Render("config"),
+			styleValue.Render(config.RegistryPath()),
+		)
+	}
 	fmt.Printf("  %s   %s\n",
 		styleLabel.Render("state"),
 		styleValue.Render(config.StatePath()),
@@ -69,9 +81,9 @@ func runSysInfo() error {
 }
 
 func runServiceInfo(name string) error {
-	reg, err := config.LoadRegistry(config.RegistryPath())
+	reg, _, err := activeRegistry()
 	if err != nil {
-		return fmt.Errorf("load registry: %w", err)
+		return err
 	}
 
 	svc := reg.Services[name]

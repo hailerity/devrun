@@ -26,6 +26,13 @@ var listCmd = &cobra.Command{
 }
 
 func runList(_ *cobra.Command, _ []string) error {
+	// activeRegistry already scopes to the local devrun.yaml, or — for the global
+	// registry — to services the user registered directly (project mirrors hidden).
+	reg, _, err := activeRegistry()
+	if err != nil {
+		return err
+	}
+
 	socketPath := config.SocketPath()
 	// Start daemon if not running so the list always reflects live state.
 	// If it fails to start, fall through to the offline fallback below.
@@ -33,7 +40,7 @@ func runList(_ *cobra.Command, _ []string) error {
 
 	c, err := client.Connect(socketPath)
 	if err != nil {
-		return listOffline()
+		return listOffline(reg)
 	}
 	defer c.Close()
 
@@ -50,36 +57,53 @@ func runList(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("parse list response: %w", err)
 	}
 
-	printServiceTable(payload.Services)
+	// Scope the daemon's full list to the active config, filling in services that
+	// have never been started as "stopped".
+	printServiceTable(scopeToRegistry(payload.Services, reg))
 	return nil
 }
 
-// listOffline reads the registry and last-saved state file directly.
-// It is called when the daemon is not running.
-func listOffline() error {
-	fmt.Fprintln(os.Stderr, "(daemon not running — showing last known state)")
-
-	reg, err := config.LoadRegistry(config.RegistryPath())
-	if err != nil {
-		return fmt.Errorf("load registry: %w", err)
+// scopeToRegistry filters daemon-reported services down to the names present in
+// reg, appending registry-only services as "stopped", sorted by name.
+func scopeToRegistry(svcs []ipc.ServiceInfo, reg *config.Registry) []ipc.ServiceInfo {
+	byName := make(map[string]ipc.ServiceInfo, len(svcs))
+	for _, s := range svcs {
+		byName[s.Name] = s
 	}
+	names := make([]string, 0, len(reg.Services))
+	for name := range reg.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]ipc.ServiceInfo, 0, len(names))
+	for _, name := range names {
+		info, ok := byName[name]
+		if !ok {
+			info = ipc.ServiceInfo{Name: name, State: string(config.StatusStopped)}
+		}
+		if cfg := reg.Services[name]; cfg != nil && cfg.Group != "" {
+			info.Group = cfg.Group
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+// listOffline reads the active registry and last-saved state file directly.
+// It is called when the daemon is not running. The table is scoped to the
+// services defined in reg.
+func listOffline(reg *config.Registry) error {
+	fmt.Fprintln(os.Stderr, "(daemon not running — showing last known state)")
 
 	state, err := config.LoadState(config.StatePath())
 	if err != nil {
 		return fmt.Errorf("load state: %w", err)
 	}
 
-	// Collect names from both registry and state so nothing is hidden.
-	seen := make(map[string]bool)
-	var names []string
+	names := make([]string, 0, len(reg.Services))
 	for name := range reg.Services {
-		seen[name] = true
 		names = append(names, name)
-	}
-	for name := range state.Services {
-		if !seen[name] {
-			names = append(names, name)
-		}
 	}
 	sort.Strings(names)
 

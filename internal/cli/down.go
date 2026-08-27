@@ -12,12 +12,16 @@ import (
 
 var downCmd = &cobra.Command{
 	Use:   "down",
-	Short: "Stop all services defined in .devrun.yaml",
+	Short: "Stop all services defined in devrun.yaml",
 	Args:  cobra.NoArgs,
 	RunE:  runDown,
 }
 
 func runDown(_ *cobra.Command, _ []string) error {
+	if globalFlag {
+		return fmt.Errorf("--global does not apply to 'devrun down'")
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)

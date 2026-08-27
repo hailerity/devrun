@@ -11,7 +11,7 @@ with a live TUI dashboard and persistent logs.
 ## Features
 
 - **Register once, run anywhere** — save commands with names, no more muscle memory required
-- **Project-local configs** — commit a `.devrun.yaml` so your team shares the same setup
+- **Project-local configs** — commit a `devrun.yaml` and every command auto-uses it in that directory
 - **Live TUI dashboard** — see all services, CPU/mem, uptime, and tail logs in one view
 - **Persistent logs** — every service writes to its own log file; inspect anytime
 - **Daemon-backed** — services stay alive after you close the terminal
@@ -72,11 +72,13 @@ devrun stop --all
 ### Project-local workflow
 
 ```sh
-# In any directory with a .devrun.yaml
+# In any directory with a devrun.yaml, every command uses it automatically
 devrun up       # register + start all services
-devrun list     # check status
+devrun list     # check status (scoped to this project)
 devrun          # open dashboard
 devrun down     # stop all project services
+
+devrun list --global   # ignore devrun.yaml, act on the global registry
 ```
 
 ---
@@ -96,7 +98,7 @@ devrun down     # stop all project services
 ```
 --cwd <path>      Working directory (default: current dir)
 --env KEY=VALUE   Set environment variable (repeatable)
---group <name>    Assign to a group
+--group <name>    Assign to a group (ignored when writing to a devrun.yaml)
 ```
 
 ### Lifecycle
@@ -128,14 +130,24 @@ devrun down     # stop all project services
 
 | Command | Description |
 |---|---|
-| `devrun up` | Register + start all services from `.devrun.yaml` |
-| `devrun down` | Stop all services from `.devrun.yaml` |
+| `devrun up` | Register + start all services from `devrun.yaml` |
+| `devrun down` | Stop all services from `devrun.yaml` |
 
 ---
 
 ## Configuration
 
-### Project-local: `.devrun.yaml`
+### Config resolution
+
+Every command picks its config automatically:
+
+- If the current directory contains a `devrun.yaml`, that file is the config — `list`, `start`, `stop`, `info`, `add`, `remove`, and the TUI dashboard all operate only on its services, and `add`/`remove` edit the file in place.
+- Otherwise the global registry (`~/.config/devrun/services.yaml`) is used, which holds only services you registered with `devrun add`.
+- `--global` / `-g` forces the global registry even when a `devrun.yaml` is present (not valid for `up`/`down`).
+
+Project services are sent to the daemon with their full definition inline and are never written to `services.yaml`. One consequence: if the daemon restarts while a project service is running, it keeps running but the daemon no longer knows its command until you re-run `devrun up` in that directory.
+
+### Project-local: `devrun.yaml`
 
 Place this file in your project root and commit it. Running `devrun up` registers all services into the global daemon with the project name as their group.
 
@@ -145,7 +157,7 @@ name: myapp      # optional — defaults to directory name
 services:
   web:
     command: yarn dev
-    cwd: ./frontend  # relative to .devrun.yaml; defaults to project root
+    cwd: ./frontend  # relative to devrun.yaml; defaults to project root
     env:
       PORT: "3000"
       NODE_ENV: development
@@ -219,7 +231,7 @@ s start  x stop  q quit
 | `~/.local/share/devrun/state.json` | Runtime state (PID, status, port) |
 | `~/.local/share/devrun/logs/` | Log files per service (`<name>.log`) |
 | `~/.local/share/devrun/devrun.sock` | Daemon Unix socket |
-| `.devrun.yaml` | Project-local service definitions |
+| `devrun.yaml` | Project-local service definitions |
 
 ---
 

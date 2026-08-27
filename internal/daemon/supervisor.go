@@ -113,13 +113,21 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 		return errResp("invalid start payload")
 	}
 
-	reg, err := config.LoadRegistry(config.RegistryPath())
-	if err != nil {
-		return errResp(fmt.Sprintf("load registry: %v", err))
+	// A project devrun.yaml service ships its full config inline; a globally
+	// registered one is looked up by name in the registry.
+	cfg := p.Config
+	if cfg == nil {
+		reg, err := config.LoadRegistry(config.RegistryPath())
+		if err != nil {
+			return errResp(fmt.Sprintf("load registry: %v", err))
+		}
+		cfg = reg.Services[p.Name]
 	}
-	cfg := reg.Services[p.Name]
 	if cfg == nil {
 		return errResp(fmt.Sprintf("service %q not registered. Run 'devrun add %s <cmd>' first.", p.Name, p.Name))
+	}
+	if cfg.Name == "" {
+		cfg.Name = p.Name
 	}
 
 	s.mu.Lock()
