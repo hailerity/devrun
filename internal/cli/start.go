@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -80,6 +81,11 @@ func startOne(socketPath, name string, cfg *config.ServiceConfig, attach bool) e
 			fmt.Println(resp.Error)
 			return nil
 		}
+		// We sent the full definition inline, so "not registered" can only mean
+		// the running daemon is an older build that ignores it.
+		if cfg != nil && containsNotRegistered(resp.Error) {
+			return fmt.Errorf("the running daemon is from an older devrun and does not understand project %s services; run 'devrun daemon restart' and try again", config.ProjectFileName)
+		}
 		return fmt.Errorf("%s", resp.Error)
 	}
 	fmt.Printf("started %s\n", name)
@@ -94,6 +100,10 @@ func startOne(socketPath, name string, cfg *config.ServiceConfig, attach bool) e
 func containsAlreadyRunning(msg string) bool {
 	suffix := "is already running"
 	return len(msg) >= len(suffix) && msg[len(msg)-len(suffix):] == suffix
+}
+
+func containsNotRegistered(msg string) bool {
+	return strings.Contains(msg, "not registered")
 }
 
 func startAll(socketPath string, reg *config.Registry, local bool) error {

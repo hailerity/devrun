@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -363,6 +364,9 @@ func (m model) doStart() tea.Cmd {
 				return daemonErrMsg{err}
 			}
 			if !resp.OK {
+				if cfg != nil && strings.Contains(resp.Error, "not registered") {
+					return daemonErrMsg{fmt.Errorf("daemon is an older build — run 'devrun daemon restart'")}
+				}
 				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
 			}
 			return daemonTickMsg{}
