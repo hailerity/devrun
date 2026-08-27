@@ -179,14 +179,14 @@ Managed automatically by `devrun add/remove`. You can also edit it directly.
 ```
 ⬡ devrun  3 running / 4 total
 ──────────────────────────────────────────────────────────────
-SERVICES │ LOGS          DETAILS
+SERVICES │ LOGS
 ─────────│─────────────────────────────────────────────────────
 ● web    │ → GET  /api/users    200  12ms
 ● api    │ → POST /api/auth     201  45ms
 ○ db     │ → GET  /api/profile  200   8ms
 ○ worker │
 ─────────────────────────────────────────────────────────────
-s start  x stop  q quit
+Tab switch  ↵ details  s start  x stop  q quit
 ```
 
 **Navigation:**
@@ -196,7 +196,9 @@ s start  x stop  q quit
 | `k` / `↑` | Move up |
 | `j` / `↓` | Move down |
 | `←` / `→` | Focus sidebar / main panel |
-| `Tab` | Cycle: sidebar → Logs → Details → sidebar |
+| `Tab` | Toggle focus between sidebar and main panel |
+| `↵` | Show DETAILS for the selected service |
+| `Esc` | Back out of DETAILS to LOGS |
 
 **Service control (sidebar focused):**
 

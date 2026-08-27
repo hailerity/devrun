@@ -126,31 +126,98 @@ func TestModel_CtrlC_QuitsWhenNoVisualMode(t *testing.T) {
 	assert.NotNil(t, cmd, "ctrl+c without visual selection should quit")
 }
 
-// TestModel_TabCycles_SidebarLogsDetailsSidebar verifies the 3-state Tab cycle.
-func TestModel_TabCycles_SidebarLogsDetailsSidebar(t *testing.T) {
+// TestModel_TabTogglesFocus verifies Tab is a 2-way focus toggle between the
+// sidebar and the main panel, and that the main panel is always LOGS.
+func TestModel_TabTogglesFocus(t *testing.T) {
 	m := model{}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = m2.(model)
 
-	// Default state: focusSidebar
 	assert.Equal(t, focusSidebar, m.focus)
+	assert.Equal(t, tabLogs, m.activeTab)
 
-	// Tab 1: sidebar → main/logs
 	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = m2.(model)
 	assert.Equal(t, focusMain, m.focus)
 	assert.Equal(t, tabLogs, m.activeTab)
 
-	// Tab 2: logs → details
-	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = m2.(model)
-	assert.Equal(t, focusMain, m.focus)
-	assert.Equal(t, tabDetails, m.activeTab)
-
-	// Tab 3: details → sidebar
 	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = m2.(model)
 	assert.Equal(t, focusSidebar, m.focus)
+}
+
+// TestModel_EnterShowsDetailsWithoutFocus verifies Enter shows DETAILS while
+// leaving focus on the sidebar — DETAILS is a read-only overlay, not focusable.
+func TestModel_EnterShowsDetailsWithoutFocus(t *testing.T) {
+	m := model{}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabDetails, m.activeTab)
+	assert.Equal(t, focusSidebar, m.focus, "DETAILS is not a focus target")
+
+	// Esc back to LOGS.
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab)
+	assert.Equal(t, focusSidebar, m.focus)
+}
+
+// TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
+// from the focused LOGS panel hands focus back to the sidebar.
+func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {
+	m := model{focus: focusMain, activeTab: tabLogs}
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabDetails, m.activeTab)
+	assert.Equal(t, focusSidebar, m.focus)
+}
+
+// TestModel_EscCollapsesDetails verifies Esc backs DETAILS out to LOGS.
+func TestModel_EscCollapsesDetails(t *testing.T) {
+	m := model{focus: focusSidebar, activeTab: tabDetails}
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab)
+	assert.Equal(t, focusSidebar, m.focus)
+}
+
+// TestModel_TabCollapsesDetails verifies Tabbing into the main panel collapses
+// DETAILS back to LOGS, since DETAILS is not focusable.
+func TestModel_TabCollapsesDetails(t *testing.T) {
+	m := model{focus: focusSidebar, activeTab: tabDetails}
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusMain, m.focus)
+	assert.Equal(t, tabLogs, m.activeTab, "Tab into the main panel collapses DETAILS")
+}
+
+// TestModel_EscCancelsVisualBeforeCollapsing verifies Esc cancels an active
+// visual selection first and only collapses DETAILS on a later press.
+func TestModel_EscCancelsVisualBeforeCollapsing(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	m.logsC.sb.visualMode = true
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.False(t, m.logsC.sb.visualMode, "first Esc exits visual mode")
+	assert.Equal(t, tabLogs, m.activeTab, "first Esc does not touch the view")
+}
+
+// TestModel_EnterIgnoredDuringVisualSelection verifies Enter does not jump to
+// DETAILS while a visual selection is in progress.
+func TestModel_EnterIgnoredDuringVisualSelection(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	m.logsC.sb.visualMode = true
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab, "Enter is ignored mid visual-selection")
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area

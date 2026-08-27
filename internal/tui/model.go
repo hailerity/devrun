@@ -194,16 +194,25 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Right):
 		m.focus = focusMain
+		m.activeTab = tabLogs
 
+	// Tab toggles focus between the sidebar and the main panel. The main panel
+	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
-		switch {
-		case m.focus == focusSidebar:
+		if m.focus == focusSidebar {
 			m.focus = focusMain
 			m.activeTab = tabLogs
-		case m.focus == focusMain && m.activeTab == tabLogs:
-			m.activeTab = tabDetails
-		case m.focus == focusMain && m.activeTab == tabDetails:
+		} else {
 			m.focus = focusSidebar
+		}
+
+	// Enter shows DETAILS for the selected service. DETAILS is a read-only
+	// overlay, not a focus target: focus stays on the sidebar so j/k keeps
+	// walking services and the panel updates live. Ignored mid-selection.
+	case key.Matches(msg, keys.Enter):
+		if m.activeTab == tabLogs && !m.logsC.sb.visualMode {
+			m.focus = focusSidebar
+			m.activeTab = tabDetails
 		}
 
 	case key.Matches(msg, keys.Up):
@@ -242,9 +251,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.enterVisual()
 		}
 
+	// Esc backs out one level: it cancels an active visual selection first,
+	// otherwise it collapses DETAILS back to LOGS.
 	case key.Matches(msg, keys.Escape):
-		if m.focus == focusMain && m.activeTab == tabLogs {
+		switch {
+		case m.focus == focusMain && m.activeTab == tabLogs && m.logsC.sb.visualMode:
 			m.logsC.sb.exitVisual()
+		case m.activeTab == tabDetails:
+			m.activeTab = tabLogs
 		}
 
 	case key.Matches(msg, keys.Copy):
@@ -456,20 +470,22 @@ func Run(socketPath string, reg *config.Registry, logDir string) error {
 }
 
 func (m model) renderMain(w, h int) string {
-	// Tab bar
-	logsLabel := styleMuted.Render("LOGS")
-	detailsLabel := styleMuted.Render("DETAILS")
+	// Tab bar: only the active view's label is shown. LOGS is accented only
+	// while the main panel holds focus; DETAILS is never accented — it is a
+	// read-only overlay, not a focus target.
+	var tabBar string
 	if m.activeTab == tabLogs {
-		logsLabel = styleAccent.Underline(true).Render("LOGS")
+		if m.focus == focusMain {
+			tabBar = styleAccent.Underline(true).Render("LOGS")
+		} else {
+			tabBar = styleMuted.Render("LOGS")
+		}
+		if m.logsC.sb.followMode {
+			tabBar += styleMuted.Render("  ● follow")
+		}
 	} else {
-		detailsLabel = styleAccent.Underline(true).Render("DETAILS")
+		tabBar = styleMuted.Render("DETAILS")
 	}
-
-	followIndicator := ""
-	if m.activeTab == tabLogs && m.logsC.sb.followMode {
-		followIndicator = styleMuted.Render("  ● follow")
-	}
-	tabBar := logsLabel + "  " + detailsLabel + followIndicator
 
 	contentH := h - 2
 
