@@ -5,7 +5,41 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 )
+
+func TestModel_ScopedServices_FiltersToRegistry(t *testing.T) {
+	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{
+		"web": {Name: "web", Group: "proj"},
+		"api": {Name: "api", Group: "proj"},
+	}}}
+
+	got := m.scopedServices([]ipc.ServiceInfo{
+		{Name: "web", State: "running"},
+		{Name: "other", State: "running"}, // not in registry — dropped
+	})
+
+	assert.Len(t, got, 2)
+	assert.Equal(t, "api", got[0].Name) // sorted, filled in as stopped
+	assert.Equal(t, string(config.StatusStopped), got[0].State)
+	assert.Equal(t, "proj", got[0].Group)
+	assert.Equal(t, "web", got[1].Name)
+	assert.Equal(t, "running", got[1].State)
+}
+
+func TestModel_ScopedServices_NilRegistryPassesThrough(t *testing.T) {
+	m := model{}
+	in := []ipc.ServiceInfo{{Name: "a"}, {Name: "b"}}
+	assert.Equal(t, in, m.scopedServices(in))
+}
+
+func TestModel_ScopedServices_EmptyRegistryHidesEverything(t *testing.T) {
+	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{}}}
+	got := m.scopedServices([]ipc.ServiceInfo{{Name: "a", State: "running"}})
+	assert.Empty(t, got)
+}
 
 func TestModel_WindowSizeSetsWidthHeight(t *testing.T) {
 	m := model{}

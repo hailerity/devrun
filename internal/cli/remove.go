@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -44,16 +45,42 @@ func runRemove(_ *cobra.Command, args []string) error {
 		}
 	}
 
-	reg, err := config.LoadRegistry(config.RegistryPath())
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("load registry: %w", err)
+		return fmt.Errorf("get working directory: %w", err)
 	}
-	if _, ok := reg.Services[name]; !ok {
-		return fmt.Errorf("service %q not registered", name)
+	_, src, err := config.Resolve(cwd, globalFlag)
+	if err != nil {
+		return err
 	}
-	delete(reg.Services, name)
-	if err := config.SaveRegistry(config.RegistryPath(), reg); err != nil {
-		return fmt.Errorf("save registry: %w", err)
+
+	if src.IsLocal() {
+		proj, err := config.LoadProject(src.Dir)
+		if err != nil {
+			return err
+		}
+		if proj == nil {
+			return fmt.Errorf("no %s in %s", config.ProjectFileName, src.Dir)
+		}
+		if _, ok := proj.Services[name]; !ok {
+			return fmt.Errorf("service %q not defined in %s", name, config.ProjectFileName)
+		}
+		delete(proj.Services, name)
+		if err := config.SaveProject(src.Dir, proj); err != nil {
+			return err
+		}
+	} else {
+		reg, err := config.LoadRegistry(config.RegistryPath())
+		if err != nil {
+			return fmt.Errorf("load registry: %w", err)
+		}
+		if _, ok := reg.Services[name]; !ok {
+			return fmt.Errorf("service %q not registered", name)
+		}
+		delete(reg.Services, name)
+		if err := config.SaveRegistry(config.RegistryPath(), reg); err != nil {
+			return fmt.Errorf("save registry: %w", err)
+		}
 	}
 
 	// Notify a running daemon so it evicts the service from its in-memory map.

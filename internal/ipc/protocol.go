@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/hailerity/devrun/internal/config"
 )
 
 // Request is the envelope for all CLI→daemon requests.
@@ -23,7 +25,13 @@ type Response struct {
 
 // --- Specific payload types ---
 
-type StartPayload struct{ Name string `json:"name"` }
+// StartPayload names the service to start. Config, when set, carries the full
+// service definition inline (used for project devrun.yaml services that are not
+// in the global registry); when nil the daemon resolves Name from the registry.
+type StartPayload struct {
+	Name   string                `json:"name"`
+	Config *config.ServiceConfig `json:"config,omitempty"`
+}
 type StartResponsePayload struct{ PID int `json:"pid"` }
 type StopPayload struct{ Name string `json:"name"` }
 type RemovePayload struct{ Name string `json:"name"` }

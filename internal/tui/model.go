@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -120,7 +121,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonRespMsg:
 		m.spinning = false
-		m.sidebarC.update(msg.payload.Services)
+		m.sidebarC.update(m.scopedServices(msg.payload.Services))
 		if svc := m.sidebarC.selectedService(); svc != nil {
 			path := filepath.Join(m.logDir, "logs", svc.Name+".log")
 			if path != m.logsC.filePath {
@@ -273,6 +274,41 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// scopedServices restricts the daemon's full service list to the active config:
+// the local devrun.yaml when one is present, otherwise the services registered
+// directly in the global registry (project mirrors are already excluded by
+// config.Resolve). Configured services the daemon has not reported are shown as
+// "stopped". Only a nil registry (tests, no config context) passes through.
+func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
+	if m.registry == nil {
+		return all
+	}
+
+	byName := make(map[string]ipc.ServiceInfo, len(all))
+	for _, s := range all {
+		byName[s.Name] = s
+	}
+
+	names := make([]string, 0, len(m.registry.Services))
+	for name := range m.registry.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]ipc.ServiceInfo, 0, len(names))
+	for _, name := range names {
+		s, ok := byName[name]
+		if !ok {
+			s = ipc.ServiceInfo{Name: name, State: string(config.StatusStopped)}
+		}
+		if cfg := m.registry.Services[name]; cfg != nil && cfg.Group != "" {
+			s.Group = cfg.Group
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 func (m *model) updateLogFile() {
 	if svc := m.sidebarC.selectedService(); svc != nil {
 		path := filepath.Join(m.logDir, "logs", svc.Name+".log")
@@ -314,9 +350,15 @@ func (m model) doStart() tea.Cmd {
 		return nil
 	}
 	sp, name := m.socketPath, svc.Name
+	// Ship the resolved definition inline so the daemon can start a project
+	// devrun.yaml service it has never seen; nil for a registry service.
+	var cfg *config.ServiceConfig
+	if m.registry != nil {
+		cfg = m.registry.Services[name]
+	}
 	return func() tea.Msg {
 		return dial(sp, func(c *client.Client) tea.Msg {
-			resp, err := c.Send("start", ipc.StartPayload{Name: name})
+			resp, err := c.Send("start", ipc.StartPayload{Name: name, Config: cfg})
 			if err != nil {
 				return daemonErrMsg{err}
 			}

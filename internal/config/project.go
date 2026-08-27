@@ -10,9 +10,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const ProjectFileName = ".devrun.yaml"
+const ProjectFileName = "devrun.yaml"
 
-// ProjectServiceConfig is a service entry in a .devrun.yaml file.
+// ProjectServiceConfig is a service entry in a devrun.yaml file.
 type ProjectServiceConfig struct {
 	Command string            `yaml:"command"`
 	CWD     string            `yaml:"cwd,omitempty"`
@@ -20,13 +20,13 @@ type ProjectServiceConfig struct {
 	Desc    string            `yaml:"desc,omitempty"`
 }
 
-// ProjectConfig is the top-level structure of .devrun.yaml.
+// ProjectConfig is the top-level structure of devrun.yaml.
 type ProjectConfig struct {
 	Name     string                          `yaml:"name,omitempty"`
 	Services map[string]*ProjectServiceConfig `yaml:"services"`
 }
 
-// LoadProject reads .devrun.yaml from dir.
+// LoadProject reads devrun.yaml from dir.
 // Returns nil, nil if the file does not exist.
 // If Name is empty it defaults to the sanitised base name of dir.
 func LoadProject(dir string) (*ProjectConfig, error) {
@@ -49,6 +49,20 @@ func LoadProject(dir string) (*ProjectConfig, error) {
 		p.Name = sanitizeName(filepath.Base(dir))
 	}
 	return &p, nil
+}
+
+// SaveProject writes p to devrun.yaml in dir. The file is re-marshalled from the
+// in-memory structure, so hand-written comments and key ordering are not
+// preserved.
+func SaveProject(dir string, p *ProjectConfig) error {
+	data, err := yaml.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal %s: %w", ProjectFileName, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ProjectFileName), data, 0644); err != nil {
+		return fmt.Errorf("write %s: %w", ProjectFileName, err)
+	}
+	return nil
 }
 
 // ToServiceConfigs converts a ProjectConfig to ServiceConfig entries ready for

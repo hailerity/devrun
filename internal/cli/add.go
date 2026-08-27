@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -31,11 +32,6 @@ func init() {
 func runAdd(cmd *cobra.Command, args []string) error {
 	name, command := args[0], args[1]
 
-	cwd := addFlags.cwd
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-
 	envMap := make(map[string]string)
 	for _, e := range addFlags.env {
 		// Parse KEY=VALUE
@@ -47,6 +43,23 @@ func runAdd(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working directory: %w", err)
+	}
+
+	// A project devrun.yaml, when present, is the config all commands write to.
+	if _, src, err := config.Resolve(cwd, globalFlag); err != nil {
+		return err
+	} else if src.IsLocal() {
+		return addToProject(src.Dir, name, command, envMap)
+	}
+
+	svcCWD := addFlags.cwd
+	if svcCWD == "" {
+		svcCWD = cwd
+	}
+
 	reg, err := config.LoadRegistry(config.RegistryPath())
 	if err != nil {
 		return fmt.Errorf("load registry: %w", err)
@@ -55,7 +68,7 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	reg.Services[name] = &config.ServiceConfig{
 		Name:    name,
 		Command: command,
-		CWD:     cwd,
+		CWD:     svcCWD,
 		Group:   addFlags.group,
 		Env:     envMap,
 	}
@@ -68,5 +81,50 @@ func runAdd(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("added %s\n", name)
+	return nil
+}
+
+// addToProject appends a service to the project devrun.yaml in dir. --group is
+// ignored here because a project file's group is its top-level name.
+func addToProject(dir, name, command string, env map[string]string) error {
+	if addFlags.group != "" {
+		fmt.Fprintln(os.Stderr, "note: --group is ignored for a project "+config.ProjectFileName+
+			" (the group is its top-level name)")
+	}
+
+	proj, err := config.LoadProject(dir)
+	if err != nil {
+		return err
+	}
+	if proj == nil || proj.Services == nil {
+		return fmt.Errorf("no %s in %s", config.ProjectFileName, dir)
+	}
+	if _, exists := proj.Services[name]; exists {
+		return fmt.Errorf("service %q already defined in %s", name, config.ProjectFileName)
+	}
+
+	// Store cwd relative to the project dir; leave empty when it is the project root.
+	svcCWD := addFlags.cwd
+	if svcCWD != "" {
+		if abs, err := filepath.Abs(svcCWD); err == nil {
+			if rel, err := filepath.Rel(dir, abs); err == nil {
+				svcCWD = rel
+			}
+		}
+	}
+	if svcCWD == "." {
+		svcCWD = ""
+	}
+
+	proj.Services[name] = &config.ProjectServiceConfig{
+		Command: command,
+		CWD:     svcCWD,
+		Env:     env,
+	}
+	if err := config.SaveProject(dir, proj); err != nil {
+		return err
+	}
+
+	fmt.Printf("added %s to %s\n", name, config.ProjectFileName)
 	return nil
 }

@@ -37,25 +37,41 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("specify a service name or --all")
 	}
 
+	reg, src, err := activeRegistry()
+	if err != nil {
+		return err
+	}
+
 	socketPath := config.SocketPath()
 	if err := daemon.EnsureDaemon(socketPath); err != nil {
 		return fmt.Errorf("could not start daemon: %w", err)
 	}
 
 	if startFlags.all {
-		return startAll(socketPath)
+		return startAll(socketPath, reg, src.IsLocal())
 	}
-	return startOne(socketPath, args[0], startFlags.fg)
+	return startOne(socketPath, args[0], inlineConfig(reg, args[0], src.IsLocal()), startFlags.fg)
 }
 
-func startOne(socketPath, name string, attach bool) error {
+// inlineConfig returns the ServiceConfig to ship in a start request. For a
+// project devrun.yaml service it is the resolved definition (the daemon has no
+// other way to see it); for a globally registered service it is nil, leaving the
+// daemon to resolve the name from ~/.config/devrun/services.yaml.
+func inlineConfig(reg *config.Registry, name string, local bool) *config.ServiceConfig {
+	if !local || reg == nil {
+		return nil
+	}
+	return reg.Services[name]
+}
+
+func startOne(socketPath, name string, cfg *config.ServiceConfig, attach bool) error {
 	c, err := client.Connect(socketPath)
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer c.Close()
 
-	resp, err := c.Send("start", ipc.StartPayload{Name: name})
+	resp, err := c.Send("start", ipc.StartPayload{Name: name, Config: cfg})
 	if err != nil {
 		return fmt.Errorf("start request: %w", err)
 	}
@@ -80,14 +96,10 @@ func containsAlreadyRunning(msg string) bool {
 	return len(msg) >= len(suffix) && msg[len(msg)-len(suffix):] == suffix
 }
 
-func startAll(socketPath string) error {
-	reg, err := config.LoadRegistry(config.RegistryPath())
-	if err != nil {
-		return fmt.Errorf("load registry: %w", err)
-	}
+func startAll(socketPath string, reg *config.Registry, local bool) error {
 	exitCode := 0
 	for name := range reg.Services {
-		if err := startOne(socketPath, name, false); err != nil {
+		if err := startOne(socketPath, name, inlineConfig(reg, name, local), false); err != nil {
 			fmt.Fprintf(os.Stderr, "error starting %s: %v\n", name, err)
 			exitCode = 1
 		}

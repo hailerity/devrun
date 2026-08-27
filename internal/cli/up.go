@@ -12,12 +12,16 @@ import (
 
 var upCmd = &cobra.Command{
 	Use:   "up",
-	Short: "Start all services defined in .devrun.yaml",
+	Short: "Start all services defined in devrun.yaml",
 	Args:  cobra.NoArgs,
 	RunE:  runUp,
 }
 
 func runUp(_ *cobra.Command, _ []string) error {
+	if globalFlag {
+		return fmt.Errorf("--global does not apply to 'devrun up'")
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -39,27 +43,15 @@ func runUp(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("could not start daemon: %w", err)
 	}
 
-	// Register/update all project services in the global registry so the
-	// daemon can look them up by name.
-	reg, err := config.LoadRegistry(config.RegistryPath())
-	if err != nil {
-		return fmt.Errorf("load registry: %w", err)
-	}
-	for name, svcCfg := range proj.ToServiceConfigs(cwd) {
-		reg.Services[name] = svcCfg
-	}
-	if reg.Version == "" {
-		reg.Version = "1"
-	}
-	if err := config.SaveRegistry(config.RegistryPath(), reg); err != nil {
-		return fmt.Errorf("save registry: %w", err)
-	}
+	// Each service ships its full definition inline; project services are never
+	// written to the global registry.
+	cfgs := proj.ToServiceConfigs(cwd)
 
 	fmt.Printf("[%s] starting %d service(s)\n", proj.Name, len(proj.Services))
 
 	exitCode := 0
 	for name := range proj.Services {
-		if err := startOne(socketPath, name, false); err != nil {
+		if err := startOne(socketPath, name, cfgs[name], false); err != nil {
 			fmt.Fprintf(os.Stderr, "  error starting %s: %v\n", name, err)
 			exitCode = 1
 		}
