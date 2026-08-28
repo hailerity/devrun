@@ -110,10 +110,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		sidebarW := 26
-		mainW := m.width - sidebarW - 1
-		bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
-		m.logsC.sb.resize(mainW, bodyH-2)
+		m.relayout()
 		return m, nil
 
 	case daemonTickMsg:
@@ -123,6 +120,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonRespMsg:
 		m.spinning = false
 		m.sidebarC.update(m.scopedServices(msg.payload.Services))
+		// The sidebar auto-sizes to the longest service name, so a changed
+		// service list can shift the divider — re-flow the log panel.
+		m.relayout()
 		if svc := m.sidebarC.selectedService(); svc != nil {
 			path := filepath.Join(m.logDir, "logs", svc.Name+".log")
 			if path != m.logsC.filePath {
@@ -150,8 +150,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if m.activeTab == tabLogs {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
-			// leftOffset=27: sidebarW(26) + divider(1); reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, 4, 27)
+			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
+			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -336,6 +336,39 @@ func (m *model) updateLogFile() {
 	}
 }
 
+const (
+	sidebarMinW = 24
+	sidebarMaxW = 40
+)
+
+// sidebarWidth is the sidebar column count: wide enough for the longest service
+// name (plus the dot, a space, and a right margin), clamped to
+// [sidebarMinW, sidebarMaxW] and never more than a third of the terminal.
+func (m model) sidebarWidth() int {
+	w := sidebarMinW
+	for _, svc := range m.sidebarC.services {
+		if n := lipgloss.Width(svc.Name) + 3; n > w {
+			w = n
+		}
+	}
+	w = min(w, sidebarMaxW)
+	if m.width > 0 {
+		w = min(w, m.width/3)
+	}
+	return max(w, sidebarMinW/2)
+}
+
+// relayout recomputes derived geometry after a resize or a sidebar-width change
+// and re-flows the log panel to the new main-area width.
+func (m *model) relayout() {
+	if m.width == 0 {
+		return
+	}
+	mainW := m.width - m.sidebarWidth() - 1
+	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
+	m.logsC.sb.resize(mainW, bodyH-2)
+}
+
 func (m model) pollDaemon() tea.Cmd {
 	if m.socketPath == "" {
 		return tickDaemon()
@@ -419,7 +452,7 @@ func (m model) View() string {
 		return ""
 	}
 
-	sidebarW := 26
+	sidebarW := m.sidebarWidth()
 	mainW := m.width - sidebarW - 1
 	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
 

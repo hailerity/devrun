@@ -49,6 +49,30 @@ func TestModel_WindowSizeSetsWidthHeight(t *testing.T) {
 	assert.Equal(t, 40, mm.height)
 }
 
+func TestModel_SidebarWidth_Adaptive(t *testing.T) {
+	mk := func(names ...string) model {
+		m := model{width: 200}
+		for _, n := range names {
+			m.sidebarC.services = append(m.sidebarC.services, ipc.ServiceInfo{Name: n})
+		}
+		return m
+	}
+
+	// Short names → floor.
+	assert.Equal(t, sidebarMinW, mk("web", "api", "db").sidebarWidth())
+
+	// A long name grows the sidebar (longest name + dot + space + margin).
+	assert.Equal(t, len("my-really-long-service")+3, mk("api", "my-really-long-service").sidebarWidth())
+
+	// Pathologically long name → capped at the ceiling.
+	assert.Equal(t, sidebarMaxW, mk("this-name-is-absurdly-long-and-keeps-going-forever").sidebarWidth())
+
+	// Never wider than a third of the terminal.
+	narrow := mk("this-name-is-absurdly-long-and-keeps-going-forever")
+	narrow.width = 60
+	assert.Equal(t, 20, narrow.sidebarWidth())
+}
+
 func TestModel_QuitKeyReturnsQuitCmd(t *testing.T) {
 	m := model{}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
