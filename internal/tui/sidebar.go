@@ -92,7 +92,9 @@ func stateLine(svc ipc.ServiceInfo) string {
 	}
 }
 
-// truncateName shortens s to fit w display columns, marking any cut with "…".
+// truncateName shortens s to fit w display columns, keeping the head and the
+// tail and marking the cut with "…" in the middle — so a shared prefix and the
+// distinguishing suffix both stay visible.
 func truncateName(s string, w int) string {
 	if w < 1 {
 		w = 1
@@ -104,7 +106,10 @@ func truncateName(s string, w int) string {
 		return "…"
 	}
 	r := []rune(s)
-	return string(r[:w-1]) + "…"
+	keep := w - 1 // room taken by the ellipsis
+	head := (keep + 1) / 2
+	tail := keep - head
+	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }
 
 func stateDot(state string) string {

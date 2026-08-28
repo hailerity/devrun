@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hailerity/devrun/internal/ipc"
@@ -95,12 +96,18 @@ func TestTruncateName_FitsUnchanged(t *testing.T) {
 	assert.Equal(t, "exactfit", truncateName("exactfit", 8))
 }
 
-func TestTruncateName_EllipsizesOverflow(t *testing.T) {
-	assert.Equal(t, "my-really-lon…", truncateName("my-really-long-service", 14))
+func TestTruncateName_MiddleTruncatesOverflow(t *testing.T) {
+	// head + "…" + tail, total width preserved.
+	assert.Equal(t, "my-real…ervice", truncateName("my-really-long-service", 14))
 	assert.Equal(t, 14, len([]rune(truncateName("my-really-long-service", 14))))
+	// shared prefix stays visible, distinguishing tail stays visible.
+	out := truncateName("frontend-web-server", 15)
+	assert.True(t, strings.HasPrefix(out, "fronten"))
+	assert.True(t, strings.HasSuffix(out, "server"))
 }
 
 func TestTruncateName_TinyWidths(t *testing.T) {
 	assert.Equal(t, "…", truncateName("anything", 1))
 	assert.Equal(t, "…", truncateName("anything", 0)) // clamped to 1
+	assert.Equal(t, "a…", truncateName("anything", 2))
 }
