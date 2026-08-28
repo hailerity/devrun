@@ -165,6 +165,20 @@ func TestModel_EnterShowsDetailsWithoutFocus(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus)
 }
 
+// TestModel_EnterTogglesDetails verifies Enter flips LOGS <-> DETAILS both ways.
+func TestModel_EnterTogglesDetails(t *testing.T) {
+	m := model{focus: focusSidebar, activeTab: tabLogs}
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabDetails, m.activeTab)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab, "Enter again returns to LOGS")
+	assert.Equal(t, focusSidebar, m.focus)
+}
+
 // TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
 // from the focused LOGS panel hands focus back to the sidebar.
 func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {

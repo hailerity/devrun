@@ -206,11 +206,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 		}
 
-	// Enter shows DETAILS for the selected service. DETAILS is a read-only
-	// overlay, not a focus target: focus stays on the sidebar so j/k keeps
-	// walking services and the panel updates live. Ignored mid-selection.
+	// Enter toggles LOGS <-> DETAILS for the selected service. DETAILS is a
+	// read-only overlay, not a focus target: focus stays on the sidebar so j/k
+	// keeps walking services and the panel updates live. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
-		if m.activeTab == tabLogs && !m.logsC.sb.visualMode {
+		switch {
+		case m.activeTab == tabDetails:
+			m.activeTab = tabLogs
+		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
 			m.focus = focusSidebar
 			m.activeTab = tabDetails
 		}

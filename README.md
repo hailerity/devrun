@@ -197,7 +197,7 @@ Tab switch  ↵ details  s start  x stop  q quit
 | `j` / `↓` | Move down |
 | `←` / `→` | Focus sidebar / main panel |
 | `Tab` | Toggle focus between sidebar and main panel |
-| `↵` | Show DETAILS for the selected service |
+| `↵` | Toggle DETAILS / LOGS for the selected service |
 | `Esc` | Back out of DETAILS to LOGS |
 
 **Service control (sidebar focused):**
