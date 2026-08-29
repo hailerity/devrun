@@ -274,6 +274,11 @@ func (s *supervisor) watchExit(name string, svc *managedService) {
 	case svc.state.Status == config.StatusStopping:
 		// Terminated by `devrun stop`.
 		svc.state.Status = config.StatusStopped
+	case svc.state.Status == config.StatusStopped ||
+		svc.state.Status == config.StatusExited ||
+		svc.state.Status == config.StatusCrashed:
+		// A terminal state was already recorded by shutdown() or handleStop;
+		// don't clobber it (e.g. flip a clean stop back to crashed).
 	case !signaled && exitCode == 0:
 		// Ran to completion on its own — a clean exit, not a crash.
 		svc.state.Status = config.StatusExited
@@ -303,7 +308,7 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 	s.mu.Unlock()
 
 	// Re-adopted services have nil proc (PTY master is gone after daemon restart).
-	// Send SIGTERM directly to the PID and poll for exit.
+	// Terminate them by PID instead.
 	if svc.proc == nil {
 		if svc.state.PID == nil {
 			s.mu.Lock()
@@ -312,17 +317,13 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 			s.mu.Unlock()
 			return &ipc.Response{OK: true}
 		}
-		pid := *svc.state.PID
-		_ = syscall.Kill(pid, syscall.SIGTERM)
-		// Poll up to 5s for the process to exit
-		for i := 0; i < 50; i++ {
-			time.Sleep(100 * time.Millisecond)
-			if err := syscall.Kill(pid, 0); err != nil {
-				break // process is gone
-			}
+		// Graceful SIGTERM to the process group, SIGKILL only after the grace
+		// period. watchExit is gone for re-adopted services, so nothing else
+		// will reap this — but the child was started in its own session by a
+		// previous daemon, so it has no parent to zombie against.
+		if _, err := process.TerminateGroup(*svc.state.PID, process.DefaultStopGrace); err != nil {
+			s.logger.Warn("terminate re-adopted service", "name", p.Name, "err", err)
 		}
-		// Force-kill if still alive
-		_ = syscall.Kill(pid, syscall.SIGKILL)
 		s.mu.Lock()
 		svc.state.Status = config.StatusStopped
 		svc.state.PID = nil
@@ -430,16 +431,63 @@ func (s *supervisor) handleList() *ipc.Response {
 	return &ipc.Response{OK: true, Payload: json.RawMessage(payload)}
 }
 
+// shutdown gracefully terminates every managed service that is still running,
+// all in parallel: SIGTERM to each process group, then SIGKILL only for the
+// ones still alive after the grace period. It is invoked when the daemon
+// receives SIGTERM/SIGINT — not on `devrun daemon stop`, which deliberately
+// leaves services running for re-adoption.
 func (s *supervisor) shutdown() {
+	type target struct {
+		name string
+		proc *process.Process
+		pid  int
+	}
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, svc := range s.services {
-		if svc.proc != nil && (svc.state.Status == config.StatusRunning || svc.state.Status == config.StatusStarting) {
-			_ = svc.proc.Stop()
+	var targets []target
+	for name, svc := range s.services {
+		if svc.state.Status != config.StatusRunning && svc.state.Status != config.StatusStarting {
+			continue
+		}
+		t := target{name: name, proc: svc.proc}
+		if svc.state.PID != nil {
+			t.pid = *svc.state.PID
+		}
+		targets = append(targets, t)
+		// Mark stopping now so watchExit records a clean stop, not a crash.
+		svc.state.Status = config.StatusStopping
+	}
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t target) {
+			defer wg.Done()
+			switch {
+			case t.proc != nil:
+				_ = t.proc.Stop()
+			case t.pid > 0:
+				_, _ = process.TerminateGroup(t.pid, process.DefaultStopGrace)
+			}
+			s.logger.Info("stopped service on daemon shutdown", "name", t.name)
+		}(t)
+	}
+	wg.Wait()
+
+	// Record the terminal state synchronously — the daemon is about to exit and
+	// per-service watchExit goroutines may not get to run.
+	s.mu.Lock()
+	for _, t := range targets {
+		if svc := s.services[t.name]; svc != nil {
+			svc.state.Status = config.StatusStopped
+			svc.state.PID = nil
 		}
 	}
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
 }
-
 
 func errResp(msg string) *ipc.Response {
 	return &ipc.Response{OK: false, Error: msg}
