@@ -188,6 +188,7 @@ func TestLifecycle_ProcessCrash(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
 	require.Len(t, payload.Services, 1)
 	assert.Equal(t, "crashed", payload.Services[0].State)
+	assert.Zero(t, payload.Services[0].UptimeSec, "a crashed service should not accrue uptime")
 }
 
 // TestLifecycle_CleanExitIsNotACrash verifies that a one-shot command that
@@ -207,6 +208,7 @@ func TestLifecycle_CleanExitIsNotACrash(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
 	require.Len(t, payload.Services, 1)
 	assert.Equal(t, "exited", payload.Services[0].State)
+	assert.Zero(t, payload.Services[0].UptimeSec, "a terminated service should not accrue uptime")
 }
 
 // TestLifecycle_SlowCleanExitIsNotACrash covers the path where the process is

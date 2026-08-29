@@ -416,7 +416,7 @@ func (s *supervisor) handleList() *ipc.Response {
 			Port:  snap.port,
 			Group: snap.group,
 		}
-		if snap.startedAt != nil {
+		if snap.startedAt != nil && config.ServiceStatus(snap.state).IsLive() {
 			info.UptimeSec = int64(time.Since(*snap.startedAt).Seconds())
 		}
 		if snap.pid != nil {

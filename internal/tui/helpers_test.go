@@ -28,8 +28,8 @@ func TestFormatUptime(t *testing.T) {
 		input    int64
 		expected string
 	}{
-		{0, "0s"},
-		{-5, "0s"},
+		{0, "—"},
+		{-5, "—"},
 		{45, "45s"},
 		{60, "1m 0s"},
 		{134, "2m 14s"},

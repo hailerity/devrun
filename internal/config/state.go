@@ -24,6 +24,18 @@ const (
 	StatusExited ServiceStatus = "exited"
 )
 
+// IsLive reports whether the process is (or should be) running — i.e. uptime,
+// CPU, and memory are meaningful. Terminal states (stopped, exited, crashed)
+// are not live.
+func (s ServiceStatus) IsLive() bool {
+	switch s {
+	case StatusStarting, StatusRunning, StatusStopping:
+		return true
+	default:
+		return false
+	}
+}
+
 type ServiceState struct {
 	Status       ServiceStatus `json:"state"`
 	PID          *int          `json:"pid"`

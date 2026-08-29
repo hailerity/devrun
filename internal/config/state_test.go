@@ -69,3 +69,14 @@ func TestState_ReAdoptionLogic(t *testing.T) {
 	assert.Equal(t, config.StatusCrashed, states["dead"].Status)
 	assert.Nil(t, states["dead"].PID, "dead service PID should be cleared")
 }
+
+func TestServiceStatus_IsLive(t *testing.T) {
+	live := []config.ServiceStatus{config.StatusStarting, config.StatusRunning, config.StatusStopping}
+	terminal := []config.ServiceStatus{config.StatusStopped, config.StatusExited, config.StatusCrashed}
+	for _, s := range live {
+		assert.True(t, s.IsLive(), "%s should be live", s)
+	}
+	for _, s := range terminal {
+		assert.False(t, s.IsLive(), "%s should not be live", s)
+	}
+}
