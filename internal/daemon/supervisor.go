@@ -165,14 +165,35 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 
 	time.Sleep(100 * time.Millisecond)
 	if err := syscall.Kill(pid, 0); err != nil {
-		// Process already exited — watchExit may have already set crashed, or set it here.
+		// Process already exited. Give watchExit a brief moment to record the
+		// terminal status (exited vs crashed) so we can report it accurately.
+		for i := 0; i < 20; i++ {
+			s.mu.RLock()
+			settled := svc.state.Status != config.StatusStarting
+			s.mu.RUnlock()
+			if settled {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		s.mu.Lock()
 		if svc.state.Status == config.StatusStarting {
 			svc.state.Status = config.StatusCrashed
 			_ = s.saveStateLocked()
 		}
+		status := svc.state.Status
+		exit := 0
+		if svc.state.LastExitCode != nil {
+			exit = *svc.state.LastExitCode
+		}
 		s.mu.Unlock()
-		return errResp(fmt.Sprintf("process died immediately: PID %d", pid))
+
+		if status == config.StatusExited {
+			// A one-shot command that finished cleanly — not a failure.
+			payload, _ := json.Marshal(ipc.StartResponsePayload{PID: pid})
+			return &ipc.Response{OK: true, Payload: json.RawMessage(payload)}
+		}
+		return errResp(fmt.Sprintf("%s exited immediately with code %d", p.Name, exit))
 	}
 
 	s.mu.Lock()
@@ -184,6 +205,10 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 	currentStatus := svc.state.Status
 	s.mu.Unlock()
 
+	if currentStatus == config.StatusExited {
+		payload, _ := json.Marshal(ipc.StartResponsePayload{PID: pid})
+		return &ipc.Response{OK: true, Payload: json.RawMessage(payload)}
+	}
 	if currentStatus != config.StatusRunning {
 		return errResp("process exited before confirming running state")
 	}
@@ -235,15 +260,25 @@ func (s *supervisor) teeOutput(name string, svc *managedService, logPath string)
 func (s *supervisor) watchExit(name string, svc *managedService) {
 	state, _ := svc.proc.Cmd.Process.Wait()
 	exitCode := 0
+	signaled := false
 	if state != nil {
 		exitCode = state.ExitCode()
+		if ws, ok := state.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+			signaled = true
+		}
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if svc.state.Status == config.StatusStopping {
+	switch {
+	case svc.state.Status == config.StatusStopping:
+		// Terminated by `devrun stop`.
 		svc.state.Status = config.StatusStopped
-	} else {
+	case !signaled && exitCode == 0:
+		// Ran to completion on its own — a clean exit, not a crash.
+		svc.state.Status = config.StatusExited
+	default:
+		// Non-zero exit code or killed by a signal.
 		svc.state.Status = config.StatusCrashed
 	}
 	svc.state.LastExitCode = &exitCode
@@ -259,7 +294,7 @@ func (s *supervisor) handleStop(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	svc := s.services[p.Name]
-	if svc == nil || svc.state.Status == config.StatusStopped || svc.state.Status == config.StatusCrashed || svc.state.Status == config.StatusStopping {
+	if svc == nil || svc.state.Status == config.StatusStopped || svc.state.Status == config.StatusExited || svc.state.Status == config.StatusCrashed || svc.state.Status == config.StatusStopping {
 		s.mu.Unlock()
 		return errResp(fmt.Sprintf("%s is not running", p.Name))
 	}
@@ -381,7 +416,7 @@ func (s *supervisor) handleList() *ipc.Response {
 			Port:  snap.port,
 			Group: snap.group,
 		}
-		if snap.startedAt != nil {
+		if snap.startedAt != nil && config.ServiceStatus(snap.state).IsLive() {
 			info.UptimeSec = int64(time.Since(*snap.startedAt).Seconds())
 		}
 		if snap.pid != nil {

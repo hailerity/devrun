@@ -26,7 +26,7 @@ func formatBytes(b int64) string {
 // Used by sidebar mini-stats and details panel (Task 7).
 func formatUptime(sec int64) string {
 	if sec <= 0 {
-		return "0s"
+		return "—"
 	}
 	h := sec / 3600
 	m := (sec % 3600) / 60
