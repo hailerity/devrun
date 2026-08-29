@@ -149,7 +149,7 @@ Project services are sent to the daemon with their full definition inline and ar
 
 ### Project-local: `devrun.yaml`
 
-Place this file in your project root and commit it. Running `devrun up` registers all services into the global daemon with the project name as their group.
+Place this file in your project root and commit it. Running `devrun up` starts every service in the daemon, grouped under the project name. The definitions are sent to the daemon inline for the duration of the run — they are not written to the global `services.yaml` (see [Config resolution](#config-resolution) above).
 
 ```yaml
 name: myapp      # optional — defaults to directory name
