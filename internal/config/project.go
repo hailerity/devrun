@@ -45,6 +45,11 @@ func LoadProject(dir string) (*ProjectConfig, error) {
 	if p.Services == nil {
 		p.Services = make(map[string]*ProjectServiceConfig)
 	}
+	for name, svc := range p.Services {
+		if err := svc.Validate(); err != nil {
+			return nil, fmt.Errorf("%s service %q: %w", ProjectFileName, name, err)
+		}
+	}
 	if p.Name == "" {
 		p.Name = sanitizeName(filepath.Base(dir))
 	}

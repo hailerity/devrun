@@ -37,6 +37,26 @@ services:
 	assert.Equal(t, "./backend", proj.Services["api"].CWD)
 }
 
+func TestLoadProject_RejectsEmptyCommand(t *testing.T) {
+	dir := t.TempDir()
+	content := "services:\n  web:\n    command: \"\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ProjectFileName), []byte(content), 0644))
+
+	_, err := LoadProject(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "web")
+}
+
+func TestLoadProject_RejectsEntryWithNoDefinition(t *testing.T) {
+	dir := t.TempDir()
+	content := "services:\n  web:\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ProjectFileName), []byte(content), 0644))
+
+	_, err := LoadProject(dir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "web")
+}
+
 func TestLoadProject_NameDefaultsToDirName(t *testing.T) {
 	// Create a subdirectory with a known name so we can assert the default.
 	parent := t.TempDir()
