@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/hailerity/devrun/internal/config"
@@ -9,17 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReexecHandoff_EnvRoundTrip(t *testing.T) {
-	// Not set → not a re-exec.
+func TestReexecHandoff_NotActiveWithoutEnv(t *testing.T) {
 	if _, ok := reexecHandoff(); ok {
 		t.Fatal("reexecHandoff reported active without the env var")
 	}
+}
 
+func TestReadHandoffState_PipeRoundTrip(t *testing.T) {
 	port := 8080
 	in := &handoffState{Version: 1, Services: []handoffService{{
 		Name:   "web",
 		PID:    4321,
-		PTYFD:  3,
+		PTYFD:  firstHandoffFD,
 		Status: config.StatusRunning,
 		Port:   &port,
 		Config: &config.ServiceConfig{Name: "web", Command: "npm run dev"},
@@ -27,16 +29,19 @@ func TestReexecHandoff_EnvRoundTrip(t *testing.T) {
 	raw, err := json.Marshal(in)
 	require.NoError(t, err)
 
-	t.Setenv(reexecEnvActive, "1")
-	t.Setenv(reexecEnvState, string(raw))
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	go func() {
+		_, _ = pw.Write(raw)
+		_ = pw.Close()
+	}()
 
-	out, ok := reexecHandoff()
-	require.True(t, ok)
+	out := readHandoffState(pr) // closes pr
 	require.Len(t, out.Services, 1)
 	got := out.Services[0]
 	assert.Equal(t, "web", got.Name)
 	assert.Equal(t, 4321, got.PID)
-	assert.Equal(t, 3, got.PTYFD)
+	assert.Equal(t, firstHandoffFD, got.PTYFD)
 	assert.Equal(t, config.StatusRunning, got.Status)
 	require.NotNil(t, got.Port)
 	assert.Equal(t, 8080, *got.Port)
@@ -44,11 +49,23 @@ func TestReexecHandoff_EnvRoundTrip(t *testing.T) {
 	assert.Equal(t, "npm run dev", got.Config.Command)
 }
 
-func TestReexecHandoff_BadJSONIsSafe(t *testing.T) {
-	t.Setenv(reexecEnvActive, "1")
-	t.Setenv(reexecEnvState, "{not json")
+func TestReadHandoffState_BadJSONIsSafe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	go func() {
+		_, _ = pw.Write([]byte("{not json"))
+		_ = pw.Close()
+	}()
 
-	out, ok := reexecHandoff()
-	assert.True(t, ok, "still a re-exec even if the payload is unreadable")
+	out := readHandoffState(pr)
+	assert.Empty(t, out.Services)
+}
+
+func TestReadHandoffState_EmptyIsSafe(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	require.NoError(t, pw.Close()) // no data, immediate EOF
+
+	out := readHandoffState(pr)
 	assert.Empty(t, out.Services)
 }
