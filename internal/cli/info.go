@@ -104,6 +104,8 @@ func runServiceInfo(name string) error {
 			statusStr = styleGreen.Render("running")
 		case config.StatusCrashed:
 			statusStr = styleRed.Render("crashed")
+		case config.StatusExited:
+			statusStr = styleLabel.Render("exited")
 		case config.StatusStarting:
 			statusStr = styleLabel.Render("starting")
 		case config.StatusStopping:
@@ -132,10 +134,14 @@ func runServiceInfo(name string) error {
 				styleValue.Render(formatUptime(int64(age.Seconds()))+" ago"),
 			)
 		}
-		if ss.LastExitCode != nil && ss.Status == config.StatusCrashed {
+		if ss.LastExitCode != nil && (ss.Status == config.StatusCrashed || ss.Status == config.StatusExited) {
+			codeStyle := styleRed
+			if ss.Status == config.StatusExited {
+				codeStyle = styleValue
+			}
 			fmt.Printf("  %s  %s\n",
 				styleLabel.Render("exit code"),
-				styleRed.Render(fmt.Sprintf("%d", *ss.LastExitCode)),
+				codeStyle.Render(fmt.Sprintf("%d", *ss.LastExitCode)),
 			)
 		}
 	}

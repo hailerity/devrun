@@ -18,6 +18,10 @@ const (
 	StatusRunning  ServiceStatus = "running"
 	StatusCrashed  ServiceStatus = "crashed"
 	StatusStopping ServiceStatus = "stopping"
+	// StatusExited marks a process that terminated on its own with exit code 0
+	// (e.g. a one-shot command), as opposed to StatusCrashed (non-zero exit or
+	// killed by signal) or StatusStopped (terminated by `devrun stop`).
+	StatusExited ServiceStatus = "exited"
 )
 
 type ServiceState struct {

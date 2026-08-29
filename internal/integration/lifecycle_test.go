@@ -190,6 +190,43 @@ func TestLifecycle_ProcessCrash(t *testing.T) {
 	assert.Equal(t, "crashed", payload.Services[0].State)
 }
 
+// TestLifecycle_CleanExitIsNotACrash verifies that a one-shot command that
+// finishes on its own with exit code 0 is reported as "exited", not "crashed",
+// and that starting it does not return an error.
+func TestLifecycle_CleanExitIsNotACrash(t *testing.T) {
+	socketPath, _ := testEnv(t)
+	registerService(t, "oneshot", "echo p1", t.TempDir())
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "oneshot"})
+	require.True(t, resp.OK, "start of a clean one-shot should succeed: %s", resp.Error)
+
+	time.Sleep(300 * time.Millisecond)
+
+	resp = send(t, socketPath, "list", struct{}{})
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	assert.Equal(t, "exited", payload.Services[0].State)
+}
+
+// TestLifecycle_SlowCleanExitIsNotACrash covers the path where the process is
+// still alive at the 100ms probe and then exits 0.
+func TestLifecycle_SlowCleanExitIsNotACrash(t *testing.T) {
+	socketPath, _ := testEnv(t)
+	registerService(t, "slowshot", "sleep 0.2 && exit 0", t.TempDir())
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "slowshot"})
+	require.True(t, resp.OK, "start should succeed: %s", resp.Error)
+
+	time.Sleep(500 * time.Millisecond)
+
+	resp = send(t, socketPath, "list", struct{}{})
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	assert.Equal(t, "exited", payload.Services[0].State)
+}
+
 func TestLifecycle_DaemonCrashReAdoption(t *testing.T) {
 	// Use a short temp dir with two subprocess daemons (via EnsureDaemon).
 	// Subprocess daemons are killed by removing the socket, which doesn't kill
