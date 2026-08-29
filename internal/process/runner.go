@@ -16,10 +16,21 @@ type Process struct {
 	Cmd *exec.Cmd
 }
 
+// hupShield makes the command — and everything it spawns — ignore SIGHUP. An
+// ignored signal disposition is inherited across both fork and exec, so this
+// carries into the user's process even when the shell exec-replaces itself.
+//
+// Without it the kernel delivers SIGHUP to the process when the daemon exits
+// and closes the PTY master (the process's controlling terminal), so
+// `devrun daemon restart` / `devrun daemon stop` would kill every running
+// service instead of leaving it alive for re-adoption. This is the same trick
+// nohup(1) uses.
+const hupShield = "trap '' HUP\n"
+
 // Start forks the command with a PTY. CWD defaults to current dir if empty.
 // The caller (daemon supervisor) is responsible for reading PTY output.
 func Start(command, cwd string, env map[string]string) (*Process, error) {
-	cmd := exec.Command("sh", "-c", command)
+	cmd := exec.Command("sh", "-c", hupShield+command)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -275,6 +276,65 @@ func TestLifecycle_DaemonCrashReAdoption(t *testing.T) {
 	// Clean up: remove socket to signal the second daemon; first daemon
 	// is an orphan but will exit when its socket is cleaned up by the OS.
 	t.Cleanup(func() { os.Remove(socketPath) })
+}
+
+// TestLifecycle_DaemonRestartKeepsServicesRunning verifies that a graceful
+// daemon stop (the path `devrun daemon restart` takes) leaves managed services
+// running — the process must survive the daemon exiting and closing the PTY
+// master — and the fresh daemon re-adopts it as "running", not "crashed".
+func TestLifecycle_DaemonRestartKeepsServicesRunning(t *testing.T) {
+	tmp, err := os.MkdirTemp("", "pt-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	socketPath := config.SocketPath()
+
+	serviceDir := filepath.Join(tmp, "svcdir")
+	require.NoError(t, os.MkdirAll(serviceDir, 0755))
+	registerService(t, "persistent", "while true; do sleep 1; done", serviceDir)
+
+	require.NoError(t, daemon.EnsureDaemon(socketPath))
+	t.Cleanup(func() { os.Remove(socketPath) })
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "persistent"})
+	require.True(t, resp.OK, resp.Error)
+
+	resp = send(t, socketPath, "list", struct{}{})
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	require.NotNil(t, payload.Services[0].PID)
+	svcPID := *payload.Services[0].PID
+
+	// Graceful daemon stop — services are meant to keep running for re-adoption.
+	_ = send(t, socketPath, "daemon-stop", struct{}{})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, e := net.Dial("unix", socketPath); e != nil {
+			break
+		} else {
+			c.Close()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	assert.NoError(t, syscall.Kill(svcPID, 0),
+		"service process must survive the daemon exiting and closing the PTY master")
+
+	require.NoError(t, daemon.EnsureDaemon(socketPath))
+	time.Sleep(200 * time.Millisecond) // let loadState + re-adoption settle
+
+	resp = send(t, socketPath, "list", struct{}{})
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	assert.Equal(t, "running", payload.Services[0].State)
+	if payload.Services[0].PID != nil {
+		assert.Equal(t, svcPID, *payload.Services[0].PID, "same process re-adopted")
+	}
+
+	_ = send(t, socketPath, "stop", ipc.StopPayload{Name: "persistent"})
 }
 
 // waitForSocket polls until the unix socket at path is connectable (up to 3s).

@@ -19,6 +19,12 @@ func TestRunner_StartStop(t *testing.T) {
 	require.NoError(t, err)
 	defer proc.Stop()
 
+	// In production the daemon's watchExit goroutine owns Wait(); stand in for
+	// it here so the leader-exit poll in Stop() sees the process go away
+	// instead of hanging on an unreaped zombie for the full grace period.
+	reaped := make(chan struct{})
+	go func() { proc.Cmd.Wait(); close(reaped) }() //nolint:errcheck
+
 	// Process should be alive
 	assert.NotNil(t, proc.PTY)
 	assert.NotNil(t, proc.Cmd.Process)
@@ -26,11 +32,7 @@ func TestRunner_StartStop(t *testing.T) {
 	assert.NoError(t, err, "process should be alive")
 
 	require.NoError(t, proc.Stop())
-
-	// In production the daemon's watchExit goroutine calls Wait() to reap the
-	// child. Here there is no supervisor, so we reap it ourselves; without this
-	// the shell becomes a zombie whose PID still responds to kill -0.
-	proc.Cmd.Wait() //nolint:errcheck // ignoring wait error in test cleanup
+	<-reaped
 
 	err = syscall.Kill(proc.Cmd.Process.Pid, 0)
 	assert.Error(t, err, "process should be dead after stop")
@@ -101,4 +103,27 @@ func TestTerminateGroup_SignalsWholeGroup(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return syscall.Kill(childPid, 0) != nil
 	}, 2*time.Second, 20*time.Millisecond, "backgrounded child must be terminated along with the group")
+}
+
+func TestStart_ProcessIgnoresSIGHUP(t *testing.T) {
+	proc, err := process.Start("sleep 60", "", nil)
+	require.NoError(t, err)
+	pid := proc.Cmd.Process.Pid
+
+	reaped := make(chan struct{})
+	go func() { proc.Cmd.Wait(); close(reaped) }() //nolint:errcheck
+	t.Cleanup(func() {
+		_, _ = process.TerminateGroup(pid, 2*time.Second)
+		<-reaped
+	})
+
+	// Let the shell reach its `trap '' HUP` (the disposition is SIG_DFL for the
+	// brief moment before it runs).
+	time.Sleep(200 * time.Millisecond)
+
+	// SIGHUP would kill a default-disposition process. A managed process must
+	// shrug it off so it survives the daemon closing the PTY master on restart.
+	require.NoError(t, syscall.Kill(pid, syscall.SIGHUP))
+	time.Sleep(200 * time.Millisecond)
+	assert.NoError(t, syscall.Kill(pid, 0), "managed process should ignore SIGHUP")
 }
