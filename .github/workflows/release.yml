@@ -29,6 +29,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Set this secret in your repo if you want GoReleaser to push the
-          # Homebrew formula to hailerity/homebrew-devrun automatically.
-          # HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
