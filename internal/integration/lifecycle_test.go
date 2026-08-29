@@ -3,12 +3,15 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -335,6 +338,101 @@ func TestLifecycle_DaemonRestartKeepsServicesRunning(t *testing.T) {
 	}
 
 	_ = send(t, socketPath, "stop", ipc.StopPayload{Name: "persistent"})
+}
+
+// TestLifecycle_DaemonReexecKeepsLogsFlowing verifies the graceful in-place
+// restart: `daemon-reexec` hands the live PTY masters to a replacement daemon,
+// so the service keeps running AND its output keeps landing in the log file
+// without a gap.
+func TestLifecycle_DaemonReexecKeepsLogsFlowing(t *testing.T) {
+	tmp, err := os.MkdirTemp("", "pt-")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+
+	t.Setenv("XDG_CONFIG_HOME", tmp)
+	t.Setenv("XDG_DATA_HOME", tmp)
+	socketPath := config.SocketPath()
+
+	serviceDir := filepath.Join(tmp, "svcdir")
+	require.NoError(t, os.MkdirAll(serviceDir, 0755))
+	registerService(t, "chatty", `while true; do echo "line-$(date +%s%N)"; sleep 0.1; done`, serviceDir)
+
+	require.NoError(t, daemon.EnsureDaemon(socketPath))
+	t.Cleanup(func() { os.Remove(socketPath) })
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "chatty"})
+	require.True(t, resp.OK, resp.Error)
+
+	resp = send(t, socketPath, "list", struct{}{})
+	var payload ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.NotNil(t, payload.Services[0].PID)
+	svcPID := *payload.Services[0].PID
+
+	oldDaemonPID := readIntFile(t, config.DaemonPIDPath())
+	logPath := config.LogPath("chatty")
+	time.Sleep(300 * time.Millisecond)
+	linesBefore := countLines(t, logPath)
+
+	// Graceful re-exec.
+	resp = send(t, socketPath, "daemon-reexec", struct{}{})
+	require.True(t, resp.OK, resp.Error)
+
+	// The replacement daemon comes up on the same socket with a new PID.
+	deadline := time.Now().Add(5 * time.Second)
+	var newDaemonPID int
+	for time.Now().Before(deadline) {
+		if p := readIntFile(t, config.DaemonPIDPath()); p != 0 && p != oldDaemonPID {
+			if c, e := net.Dial("unix", socketPath); e == nil {
+				c.Close()
+				newDaemonPID = p
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.NotZero(t, newDaemonPID, "replacement daemon did not take over")
+	assert.NotEqual(t, oldDaemonPID, newDaemonPID)
+
+	// Service process is untouched.
+	assert.NoError(t, syscall.Kill(svcPID, 0), "service must survive the re-exec")
+
+	resp = send(t, socketPath, "list", struct{}{})
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	require.Len(t, payload.Services, 1)
+	assert.Equal(t, "running", payload.Services[0].State)
+	if payload.Services[0].PID != nil {
+		assert.Equal(t, svcPID, *payload.Services[0].PID)
+	}
+
+	// The crux: output produced *after* the re-exec still reaches the log file.
+	require.Eventually(t, func() bool {
+		return countLines(t, logPath) > linesBefore
+	}, 3*time.Second, 100*time.Millisecond, "log capture must resume under the replacement daemon")
+
+	_ = send(t, socketPath, "stop", ipc.StopPayload{Name: "chatty"})
+}
+
+func readIntFile(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+func countLines(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return bytes.Count(b, []byte{'\n'})
 }
 
 // waitForSocket polls until the unix socket at path is connectable (up to 3s).

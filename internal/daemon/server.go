@@ -21,6 +21,15 @@ func Run(socketPath string) error {
 	return RunWithContext(context.Background(), socketPath)
 }
 
+// shutdownMode selects what happens to managed services when the daemon exits.
+type shutdownMode int
+
+const (
+	modeStopServices shutdownMode = iota // SIGTERM/SIGINT: terminate everything
+	modeKeepServices                     // `devrun daemon stop`: leave them running
+	modeReexec                           // `devrun daemon restart`: a replacement has taken over
+)
+
 // RunWithContext is like Run but exits when ctx is cancelled. This is useful for
 // in-process testing where the caller needs to stop the daemon programmatically.
 func RunWithContext(ctx context.Context, socketPath string) error {
@@ -38,9 +47,14 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 
 	logger := slog.Default()
 
+	handoff, reexeced := reexecHandoff()
+
 	sup := newSupervisor(socketPath, logger)
 	if err := sup.loadState(); err != nil {
 		logger.Error("failed to load state on startup", "err", err)
+	}
+	if reexeced {
+		sup.adoptHandoff(handoff)
 	}
 
 	// Remove stale socket if present
@@ -50,29 +64,40 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	if err != nil {
 		return fmt.Errorf("listen on socket %s: %w", socketPath, err)
 	}
-	defer os.Remove(socketPath)
+
+	// On a successful re-exec the replacement now owns the socket and pidfile —
+	// leave both in place.
+	var replaced bool
+	defer func() {
+		if !replaced {
+			os.Remove(socketPath)
+		}
+	}()
 	defer ln.Close()
 
 	// Write pidfile so CLI can identify the daemon process.
 	pidPath := config.DaemonPIDPath()
 	_ = os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
-	defer os.Remove(pidPath)
+	defer func() {
+		if !replaced {
+			os.Remove(pidPath)
+		}
+	}()
 
-	logger.Info("daemon started", "socket", socketPath)
+	logger.Info("daemon started", "socket", socketPath, "reexec", reexeced)
 
-	// shutdownKeepServices carries whether to leave managed services running on exit.
-	// IPC "daemon-stop" sends true (restart use case); SIGTERM/SIGINT sends false.
-	shutdownKeepServices := make(chan bool, 1)
+	shutdownReq := make(chan shutdownMode, 1)
 	var shutdownOnce sync.Once
-	doShutdown := func(keepServices bool) {
+	doShutdown := func(m shutdownMode) {
 		shutdownOnce.Do(func() {
-			shutdownKeepServices <- keepServices
+			shutdownReq <- m
 			ln.Close()
 		})
 	}
 
-	// Wire the IPC-triggered shutdown into the supervisor.
-	sup.stopDaemon = func() { doShutdown(true) }
+	// Wire the IPC-triggered shutdowns into the supervisor.
+	sup.stopDaemon = func() { doShutdown(modeKeepServices) }
+	sup.onReexec = func() { doShutdown(modeReexec) }
 
 	// Create a context for graceful shutdown
 	shutdownCtx, cancel := context.WithCancel(context.Background())
@@ -87,9 +112,9 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	go func() {
 		select {
 		case <-sigs:
-			doShutdown(false)
+			doShutdown(modeStopServices)
 		case <-ctx.Done():
-			doShutdown(true)
+			doShutdown(modeKeepServices)
 		}
 	}()
 
@@ -102,8 +127,11 @@ func RunWithContext(ctx context.Context, socketPath string) error {
 	}
 
 	cancel()
-	if keepServices := <-shutdownKeepServices; !keepServices {
+	switch <-shutdownReq {
+	case modeStopServices:
 		sup.shutdown()
+	case modeReexec:
+		replaced = true
 	}
 	return nil
 }

@@ -81,30 +81,82 @@ var daemonStopCmd = &cobra.Command{
 
 var daemonRestartCmd = &cobra.Command{
 	Use:   "restart",
-	Short: "Restart the daemon",
+	Short: "Restart the daemon (running services keep running, uninterrupted)",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		socketPath := config.SocketPath()
 
-		if isDaemonRunning(socketPath) {
-			c, err := client.Connect(socketPath)
-			if err != nil {
-				return fmt.Errorf("connect: %w", err)
+		if !isDaemonRunning(socketPath) {
+			if err := daemon.EnsureDaemon(socketPath); err != nil {
+				return fmt.Errorf("start daemon: %w", err)
 			}
-			c.Send("daemon-stop", struct{}{}) //nolint
-			c.Close()
-
-			if err := waitForDaemonStop(socketPath, 5*time.Second); err != nil {
-				return err
-			}
+			fmt.Println("daemon started")
+			return nil
 		}
 
+		oldPID := readDaemonPID()
+
+		// Preferred path: the daemon re-execs itself in place, handing the live
+		// PTY masters to the replacement so log capture never gaps.
+		c, err := client.Connect(socketPath)
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+		resp, sendErr := c.Send("daemon-reexec", struct{}{})
+		c.Close()
+
+		if sendErr == nil && resp != nil && resp.OK {
+			if err := waitForDaemonReexec(socketPath, oldPID, 5*time.Second); err != nil {
+				return err
+			}
+			fmt.Println("daemon restarted")
+			return nil
+		}
+
+		// Fallback: an older daemon that doesn't understand daemon-reexec, or a
+		// re-exec that failed. Stop and relaunch (services are re-adopted).
+		c2, err := client.Connect(socketPath)
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+		c2.Send("daemon-stop", struct{}{}) //nolint
+		c2.Close()
+		if err := waitForDaemonStop(socketPath, 5*time.Second); err != nil {
+			return err
+		}
 		if err := daemon.EnsureDaemon(socketPath); err != nil {
 			return fmt.Errorf("start daemon: %w", err)
 		}
 		fmt.Println("daemon restarted")
 		return nil
 	},
+}
+
+// readDaemonPID returns the PID recorded in the daemon pidfile, or 0.
+func readDaemonPID() int {
+	data, err := os.ReadFile(config.DaemonPIDPath())
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
+// waitForDaemonReexec blocks until the pidfile names a live daemon other than
+// oldPID and its socket answers.
+func waitForDaemonReexec(socketPath string, oldPID int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if pid := readDaemonPID(); pid > 0 && pid != oldPID &&
+			syscall.Kill(pid, 0) == nil && isDaemonRunning(socketPath) {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("replacement daemon did not come up within %s", timeout)
 }
 
 func waitForDaemonStop(socketPath string, timeout time.Duration) error {

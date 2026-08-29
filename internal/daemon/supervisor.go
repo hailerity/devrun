@@ -32,6 +32,10 @@ type supervisor struct {
 	statePath  string
 	registry   *config.Registry
 	stopDaemon func() // called by IPC daemon-stop; set by server.go
+	// onReexec stops this daemon after a replacement has been launched, leaving
+	// managed services running. Set by server.go once the listener is up; a nil
+	// value makes the daemon-reexec request report "unsupported".
+	onReexec func()
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -101,6 +105,22 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		if s.stopDaemon != nil {
 			go s.stopDaemon()
 		}
+		return
+	case "daemon-reexec":
+		if s.onReexec == nil {
+			_ = ipc.WriteMessage(conn, errResp("daemon does not support graceful re-exec"))
+			return
+		}
+		if err := s.reexec(); err != nil {
+			_ = ipc.WriteMessage(conn, errResp(fmt.Sprintf("re-exec: %v", err)))
+			return
+		}
+		// Reply and flush to the client *before* tearing this daemon down —
+		// s.onReexec closes the listener, and the replacement now owns the
+		// socket.
+		_ = ipc.WriteMessage(conn, &ipc.Response{OK: true})
+		_ = conn.Close()
+		s.onReexec()
 		return
 	default:
 		_ = ipc.WriteMessage(conn, errResp(fmt.Sprintf("unknown request type: %s", req.Type)))

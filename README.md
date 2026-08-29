@@ -145,7 +145,7 @@ Every command picks its config automatically:
 - Otherwise the global registry (`~/.config/devrun/services.yaml`) is used, which holds only services you registered with `devrun add`.
 - `--global` / `-g` forces the global registry even when a `devrun.yaml` is present (not valid for `up`/`down`).
 
-Project services are sent to the daemon with their full definition inline and are never written to `services.yaml`. One consequence: if the daemon restarts while a project service is running, it keeps running but the daemon no longer knows its command until you re-run `devrun up` in that directory.
+Project services are sent to the daemon with their full definition inline and are never written to `services.yaml`. `devrun daemon restart` re-execs in place and hands running services (with their definitions and live log capture) to the replacement, so nothing is lost. But if the daemon instead *crashes* or is stopped with `devrun daemon stop`, a running project service keeps running yet the next daemon no longer knows its command — and log capture is paused — until you re-run `devrun up` in that directory.
 
 ### Project-local: `devrun.yaml`
 
