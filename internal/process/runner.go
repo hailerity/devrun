@@ -11,9 +11,13 @@ import (
 )
 
 // Process represents a running child process with a PTY.
+//
+// Cmd is nil for a process adopted across a daemon re-exec (it is not a child of
+// the current process); Pid is always set and is what Stop signals.
 type Process struct {
 	PTY *os.File
 	Cmd *exec.Cmd
+	Pid int
 }
 
 // hupShield makes the command — and everything it spawns — ignore SIGHUP. An
@@ -52,10 +56,25 @@ func Start(command, cwd string, env map[string]string) (*Process, error) {
 	// input lag when typing.  Dup the fd, set O_NONBLOCK, and re-wrap with
 	// os.NewFile so Go registers it with kqueue and wakes the goroutine the
 	// instant the kernel signals readability.
+	pid := cmd.Process.Pid
 	if nb := makePollable(ptmx); nb != nil {
-		return &Process{PTY: nb, Cmd: cmd}, nil
+		return &Process{PTY: nb, Cmd: cmd, Pid: pid}, nil
 	}
-	return &Process{PTY: ptmx, Cmd: cmd}, nil
+	return &Process{PTY: ptmx, Cmd: cmd, Pid: pid}, nil
+}
+
+// AdoptPTY wraps a PTY-master fd inherited from another process (a daemon
+// re-exec passes them as fds 3, 4, …) as a pollable *os.File, matching how
+// Start prepares its own PTY. Returns nil if the fd is not usable.
+func AdoptPTY(fd uintptr, name string) *os.File {
+	f := os.NewFile(fd, name)
+	if f == nil {
+		return nil
+	}
+	if nb := makePollable(f); nb != nil {
+		return nb
+	}
+	return f
 }
 
 // makePollable converts a blocking *os.File (e.g., a PTY master) into a
@@ -106,10 +125,14 @@ const DefaultStopGrace = 5 * time.Second
 // Stop does NOT call Process.Wait — watchExit in the daemon supervisor is the
 // sole owner of Wait, preventing a double-waitpid deadlock.
 func (p *Process) Stop() error {
-	if p.Cmd.Process == nil {
+	pid := p.Pid
+	if pid == 0 && p.Cmd != nil && p.Cmd.Process != nil {
+		pid = p.Cmd.Process.Pid
+	}
+	if pid == 0 {
 		return nil
 	}
-	_, err := TerminateGroup(p.Cmd.Process.Pid, DefaultStopGrace)
+	_, err := TerminateGroup(pid, DefaultStopGrace)
 	return err
 }
 
