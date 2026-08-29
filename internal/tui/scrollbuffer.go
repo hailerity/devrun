@@ -169,16 +169,18 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 	colored := colorizeLog(safe)
 	lo := min(sb.selStart, sb.selEnd)
 	hi := max(sb.selStart, sb.selEnd)
+	// Both highlighted styles carry a BorderLeft(true) gutter bar (+1 column),
+	// so truncate to width-1 and let lipgloss pad the background to full width
+	// — a short line still highlights edge to edge.
 	if sb.visualMode && idx >= lo && idx <= hi {
-		// styleVisualLine has BorderLeft(true) which adds 1 column.
-		// Truncate to width-1 so border+content fits within sb.width.
 		truncated := ansi.Truncate(colored, sb.width-1, "")
-		return styleVisualLine.Render(truncated)
+		return styleVisualLine.Width(sb.width - 1).Render(truncated)
+	}
+	if idx == sb.cursor {
+		truncated := ansi.Truncate(colored, sb.width-1, "")
+		return styleSelectedLine.Width(sb.width - 1).Render(truncated)
 	}
 	truncated := ansi.Truncate(colored, sb.width, "")
-	if idx == sb.cursor {
-		return styleSelectedLine.Render(truncated)
-	}
 	// Append SGR reset so unclosed colour sequences don't bleed into adjacent
 	// TUI widgets (header, sidebar, footer). ansi.Truncate only resets when
 	// truncation fires; for short lines it returns the raw string unchanged.

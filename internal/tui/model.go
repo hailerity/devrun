@@ -110,10 +110,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		sidebarW := 26
-		mainW := m.width - sidebarW - 1
-		bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
-		m.logsC.sb.resize(mainW, bodyH-2)
+		m.relayout()
 		return m, nil
 
 	case daemonTickMsg:
@@ -123,6 +120,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonRespMsg:
 		m.spinning = false
 		m.sidebarC.update(m.scopedServices(msg.payload.Services))
+		// The sidebar auto-sizes to the longest service name, so a changed
+		// service list can shift the divider — re-flow the log panel.
+		m.relayout()
 		if svc := m.sidebarC.selectedService(); svc != nil {
 			path := filepath.Join(m.logDir, "logs", svc.Name+".log")
 			if path != m.logsC.filePath {
@@ -150,8 +150,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		if m.activeTab == tabLogs {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
-			// leftOffset=27: sidebarW(26) + divider(1); reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, 4, 27)
+			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
+			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -194,16 +194,28 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Right):
 		m.focus = focusMain
+		m.activeTab = tabLogs
 
+	// Tab toggles focus between the sidebar and the main panel. The main panel
+	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
-		switch {
-		case m.focus == focusSidebar:
+		if m.focus == focusSidebar {
 			m.focus = focusMain
 			m.activeTab = tabLogs
-		case m.focus == focusMain && m.activeTab == tabLogs:
-			m.activeTab = tabDetails
-		case m.focus == focusMain && m.activeTab == tabDetails:
+		} else {
 			m.focus = focusSidebar
+		}
+
+	// Enter toggles LOGS <-> DETAILS for the selected service. DETAILS is a
+	// read-only overlay, not a focus target: focus stays on the sidebar so j/k
+	// keeps walking services and the panel updates live. Ignored mid-selection.
+	case key.Matches(msg, keys.Enter):
+		switch {
+		case m.activeTab == tabDetails:
+			m.activeTab = tabLogs
+		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
+			m.focus = focusSidebar
+			m.activeTab = tabDetails
 		}
 
 	case key.Matches(msg, keys.Up):
@@ -242,9 +254,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.enterVisual()
 		}
 
+	// Esc backs out one level: it cancels an active visual selection first,
+	// otherwise it collapses DETAILS back to LOGS.
 	case key.Matches(msg, keys.Escape):
-		if m.focus == focusMain && m.activeTab == tabLogs {
+		switch {
+		case m.focus == focusMain && m.activeTab == tabLogs && m.logsC.sb.visualMode:
 			m.logsC.sb.exitVisual()
+		case m.activeTab == tabDetails:
+			m.activeTab = tabLogs
 		}
 
 	case key.Matches(msg, keys.Copy):
@@ -317,6 +334,39 @@ func (m *model) updateLogFile() {
 			m.logsC.setFile(path)
 		}
 	}
+}
+
+const (
+	sidebarMinW = 24
+	sidebarMaxW = 40
+)
+
+// sidebarWidth is the sidebar column count: wide enough for the longest service
+// name (plus the dot, a space, and a right margin), clamped to
+// [sidebarMinW, sidebarMaxW] and never more than a third of the terminal.
+func (m model) sidebarWidth() int {
+	w := sidebarMinW
+	for _, svc := range m.sidebarC.services {
+		if n := lipgloss.Width(svc.Name) + 3; n > w {
+			w = n
+		}
+	}
+	w = min(w, sidebarMaxW)
+	if m.width > 0 {
+		w = min(w, m.width/3)
+	}
+	return max(w, sidebarMinW/2)
+}
+
+// relayout recomputes derived geometry after a resize or a sidebar-width change
+// and re-flows the log panel to the new main-area width.
+func (m *model) relayout() {
+	if m.width == 0 {
+		return
+	}
+	mainW := m.width - m.sidebarWidth() - 1
+	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
+	m.logsC.sb.resize(mainW, bodyH-2)
 }
 
 func (m model) pollDaemon() tea.Cmd {
@@ -402,7 +452,7 @@ func (m model) View() string {
 		return ""
 	}
 
-	sidebarW := 26
+	sidebarW := m.sidebarWidth()
 	mainW := m.width - sidebarW - 1
 	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
 
@@ -456,20 +506,22 @@ func Run(socketPath string, reg *config.Registry, logDir string) error {
 }
 
 func (m model) renderMain(w, h int) string {
-	// Tab bar
-	logsLabel := styleMuted.Render("LOGS")
-	detailsLabel := styleMuted.Render("DETAILS")
+	// Tab bar: only the active view's label is shown. LOGS is accented only
+	// while the main panel holds focus; DETAILS is never accented — it is a
+	// read-only overlay, not a focus target.
+	var tabBar string
 	if m.activeTab == tabLogs {
-		logsLabel = styleAccent.Underline(true).Render("LOGS")
+		if m.focus == focusMain {
+			tabBar = styleAccent.Underline(true).Render("LOGS")
+		} else {
+			tabBar = styleMuted.Render("LOGS")
+		}
+		if m.logsC.sb.followMode {
+			tabBar += styleMuted.Render("  ● follow")
+		}
 	} else {
-		detailsLabel = styleAccent.Underline(true).Render("DETAILS")
+		tabBar = styleMuted.Render("DETAILS")
 	}
-
-	followIndicator := ""
-	if m.activeTab == tabLogs && m.logsC.sb.followMode {
-		followIndicator = styleMuted.Render("  ● follow")
-	}
-	tabBar := logsLabel + "  " + detailsLabel + followIndicator
 
 	contentH := h - 2
 
