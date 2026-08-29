@@ -128,7 +128,7 @@ func (s *sidebar) render(width, height int, focused bool) string {
 		return styleMuted.Render("No services — run devrun add <name>")
 	}
 
-	var rows []string
+	// --- Top: header + service list ---
 
 	// Header — styled and bordered to align visually with the main tab bar.
 	svcLabel := styleMuted.Render("SERVICES")
@@ -141,39 +141,51 @@ func (s *sidebar) render(width, height int, focused bool) string {
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(colorBorder).
 		Render(svcLabel)
-	rows = append(rows, header)
+	top := []string{header}
 
 	// Rows show only the status dot and the name — the name gets the full row
-	// width. Port/state moved to the info block below.
+	// width. Port/state live in the info block pinned to the bottom.
 	for i, svc := range s.services {
 		name := truncateName(svc.Name, width-3) // dot(1) + space(1) + margin(1)
 
-		var line string
 		if i == s.selected {
-			line = selectedServiceRow(width, svc.State, name)
+			top = append(top, selectedServiceRow(width, svc.State, name))
 		} else {
-			line = stateDot(svc.State) + " " + name
+			top = append(top, stateDot(svc.State)+" "+name)
 		}
-		rows = append(rows, line)
 	}
 
-	// Info block for the selected service (blank line for visual separation).
+	// --- Bottom: selected-service info block + action hints, pinned to the
+	// bottom edge so their position doesn't drift with the service count. ---
+
+	var bottom []string
 	if svc := s.selectedService(); svc != nil {
-		rows = append(rows, "")
 		sep := "── " + truncateName(svc.Name, width-6) + " ──"
-		rows = append(rows, styleMuted.Render(sep))
-		rows = append(rows, "  "+stateLine(*svc))
-		rows = append(rows, fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)))
-		rows = append(rows, fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)))
-		rows = append(rows, fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)))
+		bottom = append(bottom,
+			styleMuted.Render(sep),
+			"  "+stateLine(*svc),
+			fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)),
+			fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)),
+			fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)),
+		)
 	}
+	bottom = append(bottom,
+		strings.Repeat("─", width),
+		renderHint("s", "start"),
+		renderHint("x", "stop"),
+	)
 
-	// Action hints at bottom
-	rows = append(rows, strings.Repeat("─", width))
-	rows = append(rows, renderHint("s", "start"))
-	rows = append(rows, renderHint("x", "stop"))
+	topStr := strings.Join(top, "\n")
+	bottomStr := strings.Join(bottom, "\n")
 
-	return strings.Join(rows, "\n")
+	// Fill the space between the list and the bottom block. Clamped to one line
+	// so an over-long list still renders (it overflows past the bottom edge,
+	// the same as before — the sidebar has no scroll yet).
+	gap := height - lipgloss.Height(topStr) - lipgloss.Height(bottomStr)
+	if gap < 1 {
+		gap = 1
+	}
+	return topStr + strings.Repeat("\n", gap+1) + bottomStr
 }
 
 // selectedServiceRow builds a full-width highlighted row for the selected

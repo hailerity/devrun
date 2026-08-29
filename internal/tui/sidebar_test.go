@@ -111,3 +111,40 @@ func TestTruncateName_TinyWidths(t *testing.T) {
 	assert.Equal(t, "…", truncateName("anything", 0)) // clamped to 1
 	assert.Equal(t, "a…", truncateName("anything", 2))
 }
+
+func TestSidebar_InfoBlockPinnedToBottom(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}})
+	sb.selected = 0
+
+	const h = 20
+	lines := strings.Split(sb.render(26, h, false), "\n")
+
+	assert.Len(t, lines, h, "sidebar fills the given height")
+	assert.Contains(t, lines[h-1], "stop", "x stop is the last line")
+	assert.Contains(t, lines[h-2], "start", "s start sits just above it")
+
+	sepIdx := -1
+	blankBeforeSep := false
+	for i, l := range lines {
+		if strings.Contains(l, "── api ──") {
+			sepIdx = i
+			blankBeforeSep = lines[i-1] == ""
+		}
+	}
+	assert.Greater(t, sepIdx, 4, "info block is pushed down, not directly under the 2-row list")
+	assert.True(t, blankBeforeSep, "a gap separates the list from the info block")
+}
+
+func TestSidebar_LongListStillRenders(t *testing.T) {
+	sb := &sidebar{}
+	var svcs []ipc.ServiceInfo
+	for i := 0; i < 40; i++ {
+		svcs = append(svcs, ipc.ServiceInfo{Name: "service-" + string(rune('a'+i%26))})
+	}
+	sb.update(svcs)
+
+	// height smaller than the list — gap must clamp, not go negative or panic.
+	lines := strings.Split(sb.render(26, 12, false), "\n")
+	assert.Contains(t, lines[len(lines)-1], "stop", "hints still render below an overflowing list")
+}
