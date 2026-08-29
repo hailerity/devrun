@@ -153,16 +153,22 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 		return errResp(fmt.Sprintf("service %q: %v", p.Name, err))
 	}
 
+	// Hold s.mu across the spawn so a second concurrent `start` for the same
+	// name can't slip past the "already running" check before this one records
+	// its process. Releasing the lock between the check and the map write let
+	// both callers spawn; the loser's process was then dropped from the map and
+	// leaked (unreachable by stop/list, unseen at shutdown). process.Start is a
+	// local fork+exec and returns in a few ms.
 	s.mu.Lock()
 	existing := s.services[p.Name]
 	if existing != nil && (existing.state.Status == config.StatusRunning || existing.state.Status == config.StatusStarting) {
 		s.mu.Unlock()
 		return errResp(fmt.Sprintf("%s is already running", p.Name))
 	}
-	s.mu.Unlock()
 
 	proc, err := process.Start(cfg.Command, cfg.CWD, cfg.Env)
 	if err != nil {
+		s.mu.Unlock()
 		return errResp(fmt.Sprintf("start process: %v", err))
 	}
 
@@ -178,7 +184,6 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 		proc: proc,
 	}
 
-	s.mu.Lock()
 	s.services[p.Name] = svc
 	_ = s.saveStateLocked()
 	s.mu.Unlock()
