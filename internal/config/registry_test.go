@@ -41,3 +41,19 @@ func TestRegistry_MalformedYAML(t *testing.T) {
 	_, err := config.LoadRegistry(path)
 	assert.Error(t, err)
 }
+
+func TestRegistry_RejectsEmptyCommand(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "services.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: \"1\"\nservices:\n  web:\n    command: \"\"\n"), 0644))
+	_, err := config.LoadRegistry(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "web")
+}
+
+func TestRegistry_RejectsEntryWithNoDefinition(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "services.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("version: \"1\"\nservices:\n  web:\n"), 0644))
+	_, err := config.LoadRegistry(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "web")
+}

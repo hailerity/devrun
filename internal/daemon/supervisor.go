@@ -149,6 +149,9 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 	if cfg.Name == "" {
 		cfg.Name = p.Name
 	}
+	if err := cfg.Validate(); err != nil {
+		return errResp(fmt.Sprintf("service %q: %v", p.Name, err))
+	}
 
 	s.mu.Lock()
 	existing := s.services[p.Name]
