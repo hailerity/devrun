@@ -18,7 +18,23 @@ const (
 	StatusRunning  ServiceStatus = "running"
 	StatusCrashed  ServiceStatus = "crashed"
 	StatusStopping ServiceStatus = "stopping"
+	// StatusExited marks a process that terminated on its own with exit code 0
+	// (e.g. a one-shot command), as opposed to StatusCrashed (non-zero exit or
+	// killed by signal) or StatusStopped (terminated by `devrun stop`).
+	StatusExited ServiceStatus = "exited"
 )
+
+// IsLive reports whether the process is (or should be) running — i.e. uptime,
+// CPU, and memory are meaningful. Terminal states (stopped, exited, crashed)
+// are not live.
+func (s ServiceStatus) IsLive() bool {
+	switch s {
+	case StatusStarting, StatusRunning, StatusStopping:
+		return true
+	default:
+		return false
+	}
+}
 
 type ServiceState struct {
 	Status       ServiceStatus `json:"state"`
