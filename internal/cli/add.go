@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -31,6 +32,10 @@ func init() {
 
 func runAdd(cmd *cobra.Command, args []string) error {
 	name, command := args[0], args[1]
+
+	if strings.TrimSpace(command) == "" {
+		return fmt.Errorf("command cannot be empty")
+	}
 
 	envMap := make(map[string]string)
 	for _, e := range addFlags.env {

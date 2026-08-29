@@ -149,6 +149,9 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 	if cfg.Name == "" {
 		cfg.Name = p.Name
 	}
+	if err := cfg.Validate(); err != nil {
+		return errResp(fmt.Sprintf("service %q: %v", p.Name, err))
+	}
 
 	// Hold s.mu across the spawn so a second concurrent `start` for the same
 	// name can't slip past the "already running" check before this one records
