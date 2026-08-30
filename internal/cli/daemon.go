@@ -82,7 +82,18 @@ var daemonStopCmd = &cobra.Command{
 var daemonRestartCmd = &cobra.Command{
 	Use:   "restart",
 	Short: "Restart the daemon (running services keep running, uninterrupted)",
-	Args:  cobra.NoArgs,
+	Long: `Restart the daemon.
+
+Normally the daemon re-execs itself in place and hands every running
+service — its definition and its live log capture — to the replacement,
+so nothing is interrupted.
+
+If that in-place handoff can't be used (the running daemon predates it,
+or the re-exec fails) devrun falls back to stopping and relaunching the
+daemon. Services keep running, but the new daemon re-adopts them by PID
+only: log capture is paused and, for a project service, its command is
+forgotten until you re-run 'devrun up' in that directory.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		socketPath := config.SocketPath()
 
