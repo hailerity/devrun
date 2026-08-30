@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"syscall"
 	"time"
@@ -11,16 +12,18 @@ import (
 	"github.com/hailerity/devrun/internal/process"
 )
 
-// Environment keys used to hand state from a daemon to the replacement process
-// it exec's during `devrun daemon restart`.
-const (
-	reexecEnvActive = "DEVRUN_REEXEC"       // "1" in the replacement
-	reexecEnvState  = "DEVRUN_REEXEC_STATE" // JSON-encoded handoffState
-)
+// reexecEnvActive is set to "1" in the replacement process during
+// `devrun daemon restart` to mark it as a graceful re-exec.
+const reexecEnvActive = "DEVRUN_REEXEC"
 
-// firstHandoffFD is the fd number the first inherited PTY master lands on in the
-// replacement: 0/1/2 are stdio, PTY masters follow.
-const firstHandoffFD = 3
+// Inherited fd layout in the replacement: 0/1/2 are stdio, fd 3 is a pipe
+// carrying the JSON handoffState, and the live PTY masters follow from fd 4.
+// The state travels on a pipe rather than an env var so a large services list
+// (many services, big env maps) can't overflow ARG_MAX and fail the exec.
+const (
+	reexecStateFD  = 3
+	firstHandoffFD = 4
+)
 
 // handoffService is one managed service carried across a graceful re-exec.
 type handoffService struct {
@@ -44,13 +47,28 @@ func reexecHandoff() (*handoffState, bool) {
 	if os.Getenv(reexecEnvActive) != "1" {
 		return nil, false
 	}
-	hs := &handoffState{}
-	if raw := os.Getenv(reexecEnvState); raw != "" {
-		if err := json.Unmarshal([]byte(raw), hs); err != nil {
-			return &handoffState{}, true
-		}
+	f := os.NewFile(reexecStateFD, "devrun-reexec-state")
+	if f == nil {
+		return &handoffState{}, true
 	}
-	return hs, true
+	return readHandoffState(f), true
+}
+
+// readHandoffState decodes the JSON handoff payload the predecessor daemon
+// streamed on the state pipe, closing f when done. A read or decode failure
+// yields an empty state — the services are then re-adopted from state.json,
+// the same degraded path as a plain `daemon stop` — rather than an error.
+func readHandoffState(f *os.File) *handoffState {
+	defer f.Close()
+	raw, err := io.ReadAll(f)
+	if err != nil || len(raw) == 0 {
+		return &handoffState{}
+	}
+	hs := &handoffState{}
+	if err := json.Unmarshal(raw, hs); err != nil {
+		return &handoffState{}
+	}
+	return hs
 }
 
 // reexec launches a fresh copy of the binary as the replacement daemon, handing
@@ -97,8 +115,17 @@ func (s *supervisor) reexec() error {
 		return fmt.Errorf("marshal handoff: %w", err)
 	}
 
-	files := append([]*os.File{os.Stdin, os.Stdout, os.Stderr}, extra...)
-	env := append(os.Environ(), reexecEnvActive+"=1", reexecEnvState+"="+string(stateJSON))
+	// The replacement reads the handoff state from a pipe on reexecStateFD.
+	statePR, statePW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("handoff state pipe: %w", err)
+	}
+	defer statePR.Close()
+
+	files := make([]*os.File, 0, firstHandoffFD+len(extra))
+	files = append(files, os.Stdin, os.Stdout, os.Stderr, statePR)
+	files = append(files, extra...)
+	env := append(os.Environ(), reexecEnvActive+"=1")
 
 	proc, err := os.StartProcess(self, []string{self, "--_daemon", s.socketPath}, &os.ProcAttr{
 		Env:   env,
@@ -106,9 +133,19 @@ func (s *supervisor) reexec() error {
 		Sys:   &syscall.SysProcAttr{Setsid: true},
 	})
 	if err != nil {
+		_ = statePW.Close()
 		return fmt.Errorf("start replacement daemon: %w", err)
 	}
 	_ = proc.Release()
+
+	// Send the state and close our write end so the replacement's io.ReadAll on
+	// reexecStateFD sees EOF. The payload is a few KB, well under the pipe
+	// buffer, so this does not block; the replacement drains it at startup
+	// regardless.
+	if _, werr := statePW.Write(stateJSON); werr != nil {
+		s.logger.Warn("re-exec: writing handoff state failed", "err", werr)
+	}
+	_ = statePW.Close()
 
 	// The replacement holds its own dup of every PTY master now. Close ours so
 	// this daemon's teeOutput goroutines stop draining the same streams — two
