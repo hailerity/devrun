@@ -164,6 +164,7 @@ func (s *sidebar) render(width, height int, focused bool) string {
 		bottom = append(bottom,
 			styleMuted.Render(sep),
 			"  "+stateLine(*svc),
+			fmt.Sprintf("PID  %s", renderPID(svc.PID)),
 			fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)),
 			fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)),
 			fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)),
