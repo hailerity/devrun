@@ -5,6 +5,7 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/ipc"
@@ -41,4 +42,34 @@ func TestClient_SendReceive(t *testing.T) {
 func TestClient_ConnectionRefused(t *testing.T) {
 	_, err := client.Connect(filepath.Join(t.TempDir(), "missing.sock"))
 	assert.Error(t, err)
+}
+
+// A daemon that accepts the connection and the request but never replies must
+// not hang the client forever.
+func TestClient_SendTimesOut(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	ln, err := net.Listen("unix", sockPath)
+	require.NoError(t, err)
+	defer ln.Close()
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var req ipc.Request
+		_ = ipc.ReadMessage(conn, &req)
+		<-time.After(2 * time.Second) // never send a response
+	}()
+
+	c, err := client.Connect(sockPath)
+	require.NoError(t, err)
+	defer c.Close()
+	c.SetTimeout(150 * time.Millisecond)
+
+	start := time.Now()
+	_, err = c.Send("list", struct{}{})
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), time.Second, "Send should give up near the deadline")
 }
