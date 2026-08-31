@@ -25,6 +25,9 @@ func LoadRegistry(path string) (*Registry, error) {
 	if reg.Services == nil {
 		reg.Services = make(map[string]*ServiceConfig)
 	}
+	if reg.Targets == nil {
+		reg.Targets = make(map[string][]string)
+	}
 	for name, svc := range reg.Services {
 		if err := svc.Validate(); err != nil {
 			return nil, fmt.Errorf("registry service %q: %w", name, err)

@@ -18,4 +18,9 @@ type ServiceConfig struct {
 type Registry struct {
 	Version  string                    `yaml:"version"`
 	Services map[string]*ServiceConfig `yaml:"services"`
+	// Targets maps a target name to the service names it groups. A target is a
+	// named subset of services that can be started or stopped as a unit. Members
+	// that do not resolve to a known service are ignored at use time rather than
+	// rejected on load, so removing a service never breaks config parsing.
+	Targets map[string][]string `yaml:"targets,omitempty"`
 }
