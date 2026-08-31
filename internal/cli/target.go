@@ -180,7 +180,12 @@ var targetStartCmd = &cobra.Command{
 var targetStopCmd = &cobra.Command{
 	Use:   "stop <name>",
 	Short: "Stop a target's services, keeping any still held by another running target",
-	Args:  cobra.ExactArgs(1),
+	Long: `Stop a target.
+
+Stops every service in the snapshot taken when the target was started —
+including any that were already running at that point — except services
+still listed under another active target, which keep running.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(_ *cobra.Command, args []string) error {
 		name := args[0]
 		c, err := client.Connect(config.SocketPath())

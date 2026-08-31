@@ -428,9 +428,13 @@ func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 		members[i] = cfg.Name
 	}
 
-	// Reserve the target under the lock before starting anything so a concurrent
-	// target-stop for the same name sees it and stops whatever has come up,
-	// rather than reporting "not active" while members are still launching.
+	// Reserve the target before the start loop so a target-stop that arrives
+	// while members are still launching sees the entry and stops what has come
+	// up so far. Fully interleaving a target-start and a target-stop for the
+	// same name is still racy (a stop that completes entirely between two
+	// startService calls can be undone by the rest of the loop) — that is the
+	// same start/stop-same-name race the single-service handlers accept, and
+	// issuing both at once for one target is contradictory intent.
 	s.mu.Lock()
 	s.activeTargets[p.Name] = members
 	_ = s.saveStateLocked()
@@ -576,15 +580,10 @@ func (s *supervisor) handleList() *ipc.Response {
 	// even before they have been started for the first time.
 	reg, _ := config.LoadRegistry(config.RegistryPath())
 
-	// Drop active targets whose services have all exited before reporting.
-	s.mu.Lock()
-	if s.reconcileActiveTargetsLocked() {
-		_ = s.saveStateLocked()
-	}
-	s.mu.Unlock()
-
-	// Collect a snapshot of state fields under the read lock so that blocking
-	// syscalls (CPUPercent, MemBytes) do not hold the lock and stall writers.
+	// Collect a snapshot of state fields under the lock so that blocking syscalls
+	// (CPUPercent, MemBytes) do not hold it and stall writers. The active-target
+	// reconciliation and both slices are taken under one acquisition so the
+	// reported ActiveTargets and Services always agree.
 	type snapshot struct {
 		name      string
 		state     string
@@ -594,7 +593,10 @@ func (s *supervisor) handleList() *ipc.Response {
 		startedAt *time.Time
 	}
 
-	s.mu.RLock()
+	s.mu.Lock()
+	if s.reconcileActiveTargetsLocked() {
+		_ = s.saveStateLocked()
+	}
 	activeTargets := make([]string, 0, len(s.activeTargets))
 	for name := range s.activeTargets {
 		activeTargets = append(activeTargets, name)
@@ -615,7 +617,7 @@ func (s *supervisor) handleList() *ipc.Response {
 		}
 		snaps = append(snaps, snap)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	// Append registry-only services (never started, so not in s.services).
 	if reg != nil {

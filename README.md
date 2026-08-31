@@ -129,7 +129,9 @@ when a config holds many services but you only need a few at a time.
 Targets are stored in whichever config is active — the project `devrun.yaml`
 when one is present, otherwise the global `services.yaml`. `target stop` uses the
 member list captured when the target was started, so editing membership while it
-runs doesn't change what a later stop releases.
+runs doesn't change what a later stop releases. It stops every member in that
+snapshot — including any that were already running when the target started —
+except services another active target still holds.
 
 ### Observability
 

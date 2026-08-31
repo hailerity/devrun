@@ -252,6 +252,23 @@ func TestLoadState_ReconcilesStaleActiveTargets(t *testing.T) {
 	assert.False(t, active, "web's PID is dead → target pruned on load")
 }
 
+// isAlreadyRunning / isNotRunning substring-match the errors startService /
+// stopService produce. This pins that wording so a reword breaks the build.
+func TestErrorClassifiers_TrackStartStopWording(t *testing.T) {
+	sup := targetTestSupervisor(t)
+	defer stopEverything(t, sup)
+
+	assert.True(t, isNotRunning(sup.stopService("ghost")),
+		"stopService on an unknown service must be classified as not-running")
+
+	require.True(t, sup.startService("web", svcCfg("web")).OK)
+	assert.True(t, isAlreadyRunning(sup.startService("web", svcCfg("web"))),
+		"a second startService must be classified as already-running")
+
+	assert.False(t, isAlreadyRunning(&ipc.Response{OK: true}))
+	assert.False(t, isNotRunning(&ipc.Response{OK: false, Error: "boom"}))
+}
+
 func TestHandleTargetStop_NotActive(t *testing.T) {
 	sup := targetTestSupervisor(t)
 
