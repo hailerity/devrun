@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ipc"
@@ -215,6 +217,74 @@ func TestModel_EnterTogglesDetails(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus)
 }
 
+// TestModel_EnterSelectsTargetFilter verifies Enter on a target row toggles the
+// service filter instead of the LOGS/DETAILS view.
+func TestModel_EnterSelectsTargetFilter(t *testing.T) {
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+	assert.Equal(t, []string{"web"}, svcNames(&m.sidebarC))
+	assert.Equal(t, tabLogs, m.activeTab, "Enter on a target must not open DETAILS")
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter again clears the filter")
+}
+
+// targetFilterModel returns a 120x40 model with a "frontend" target (member:
+// web) and the sidebar cursor parked on that target row, focus on the sidebar.
+func targetFilterModel(t *testing.T) model {
+	t.Helper()
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+	m.focus = focusSidebar
+	return m
+}
+
+// TestModel_EnterInMainPanelDoesNotFilter verifies the target-filter toggle is
+// gated on sidebar focus: with focus on the main panel, Enter neither selects a
+// filter nor opens service DETAILS — the target roll-up (PR #23) owns the pane
+// while the cursor sits on a real target row.
+func TestModel_EnterInMainPanelDoesNotFilter(t *testing.T) {
+	m := targetFilterModel(t)
+	m.focus = focusMain
+	m.activeTab = tabLogs
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter from the main panel must not touch the filter")
+	assert.Equal(t, tabLogs, m.activeTab, "target detail owns the pane; Enter does not open service DETAILS")
+}
+
+// TestModel_EnterOnTargetClosesDetails verifies selecting a filter from the
+// targets section also drops the DETAILS overlay back to LOGS.
+func TestModel_EnterOnTargetClosesDetails(t *testing.T) {
+	m := targetFilterModel(t)
+	m.activeTab = tabDetails
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab, "DETAILS closes when a filter is toggled")
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+}
+
 // TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
 // from the focused LOGS panel hands focus back to the sidebar.
 func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {
@@ -268,6 +338,86 @@ func TestModel_EnterIgnoredDuringVisualSelection(t *testing.T) {
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = m2.(model)
 	assert.Equal(t, tabLogs, m.activeTab, "Enter is ignored mid visual-selection")
+}
+
+// targetFocusedModel returns a 120x40 model with one real target ("backend")
+// highlighted in the sidebar's TARGETS section.
+func targetFocusedModel() model {
+	m := newModel("", nil, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(
+		[]ipc.ServiceInfo{
+			{Name: "api", State: "running", Port: intp(8080)},
+			{Name: "web", State: "stopped"},
+		},
+		[]sidebarTarget{
+			{name: ""},
+			{name: "backend", members: []string{"api"}, active: true},
+		},
+	)
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1
+	return m
+}
+
+// TestModel_FocusedTarget verifies focusedTarget only reports a real target row.
+func TestModel_FocusedTarget(t *testing.T) {
+	m := targetFocusedModel()
+	tgt := m.focusedTarget()
+	require.NotNil(t, tgt)
+	assert.Equal(t, "backend", tgt.name)
+
+	m.sidebarC.targetSel = 0 // synthetic "All services" row
+	assert.Nil(t, m.focusedTarget())
+
+	m.sidebarC.targetSel = 1
+	m.sidebarC.section = sectionServices // cursor back in SERVICES
+	assert.Nil(t, m.focusedTarget())
+}
+
+// TestModel_RenderMain_TargetDetailWhenTargetFocused verifies the main pane
+// shows the target roll-up (not logs) while a target row is focused.
+func TestModel_RenderMain_TargetDetailWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	out := plain(m.renderMain(80, 24))
+	assert.Equal(t, 1, strings.Count(out, "TARGET"), "the TARGET label must not be doubled")
+	assert.Contains(t, out, "backend")
+	assert.Contains(t, out, "api")
+	assert.Contains(t, out, ":8080")
+	assert.NotContains(t, out, "LOGS")
+}
+
+// TestModel_RenderMain_LogsWhenServiceFocused verifies the main pane returns to
+// logs once the cursor leaves the TARGETS section.
+func TestModel_RenderMain_LogsWhenServiceFocused(t *testing.T) {
+	m := targetFocusedModel()
+	m.sidebarC.section = sectionServices
+	assert.Contains(t, plain(m.renderMain(80, 24)), "LOGS")
+}
+
+// TestModel_EnterIgnoredWhenTargetFocused verifies Enter does not flip to
+// DETAILS while a target row is focused (the pane already shows target detail).
+func TestModel_EnterIgnoredWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	require.Equal(t, tabLogs, m.activeTab)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab)
+}
+
+// TestModel_TabAndRightInertWhenTargetFocused verifies focus cannot move into
+// the (non-focusable) target roll-up, which would otherwise arm the hidden
+// log-pane shortcuts.
+func TestModel_TabAndRightInertWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	require.Equal(t, focusSidebar, m.focus)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not move focus into a focused target's pane")
+
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not move focus into a focused target's pane")
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area

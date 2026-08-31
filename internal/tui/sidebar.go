@@ -36,7 +36,7 @@ type sidebar struct {
 	targets      []sidebarTarget // index 0 is "All services"; len <= 1 → no TARGETS block
 	targetSel    int             // cursor within targets
 	section      sidebarSection  // which list the cursor is in
-	filterTarget string          // name of the target filtering services ("" = all)
+	filterTarget string          // name of the explicitly-selected filter target ("" = show all); set only via Enter, not cursor movement
 
 	loaded bool // true once the first daemon poll has resolved (response or error)
 }
@@ -74,16 +74,25 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 				break
 			}
 		}
-		s.filterTarget = s.targets[s.targetSel].name
+		// Keep the selected filter across the poll; drop it only if that target
+		// is gone. Cursor position does not touch it.
+		if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
+			s.filterTarget = ""
+		}
 	}
 
 	s.refilter()
+	s.selectServiceByName(curSvc)
+}
 
+// selectServiceByName moves the service cursor to the row named n, or to row 0
+// when there is no such row. Call after the filtered service list changes.
+func (s *sidebar) selectServiceByName(n string) {
 	s.selected = 0
 	for i, svc := range s.services {
-		if svc.Name == curSvc {
+		if svc.Name == n {
 			s.selected = i
-			break
+			return
 		}
 	}
 }
@@ -117,13 +126,35 @@ func (s *sidebar) refilter() {
 	}
 }
 
-// onTargetCursorMoved re-points the service filter at the newly selected target
-// row and re-filters the service list.
-func (s *sidebar) onTargetCursorMoved() {
-	if s.targetSel >= 0 && s.targetSel < len(s.targets) {
-		s.filterTarget = s.targets[s.targetSel].name
+// targetExists reports whether a target with the given name is in the list.
+func (s *sidebar) targetExists(name string) bool {
+	for _, t := range s.targets {
+		if t.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// toggleTargetSelection makes the target under the cursor the service filter,
+// or clears the filter if that target is already selected. The synthetic
+// "All services" row always clears. No-op unless the cursor is on a target row.
+func (s *sidebar) toggleTargetSelection() {
+	t := s.selectedTarget()
+	if t == nil {
+		return
+	}
+	var curSvc string
+	if s.selected < len(s.services) {
+		curSvc = s.services[s.selected].Name
+	}
+	if t.name == "" || t.name == s.filterTarget {
+		s.filterTarget = ""
+	} else {
+		s.filterTarget = t.name
 	}
 	s.refilter()
+	s.selectServiceByName(curSvc) // keep the highlight on the same service if it survived the filter
 }
 
 // moveDown / moveUp walk a single circular cursor over the TARGETS rows followed
@@ -146,7 +177,6 @@ func (s *sidebar) moveDown() {
 	case sectionTargets:
 		if s.targetSel < len(s.targets)-1 {
 			s.targetSel++
-			s.onTargetCursorMoved()
 		} else {
 			s.section = sectionServices
 			s.selected = 0
@@ -157,7 +187,6 @@ func (s *sidebar) moveDown() {
 		} else {
 			s.section = sectionTargets
 			s.targetSel = 0
-			s.onTargetCursorMoved()
 		}
 	}
 }
@@ -181,12 +210,10 @@ func (s *sidebar) moveUp() {
 		} else {
 			s.section = sectionTargets
 			s.targetSel = len(s.targets) - 1
-			s.onTargetCursorMoved()
 		}
 	case sectionTargets:
 		if s.targetSel > 0 {
 			s.targetSel--
-			s.onTargetCursorMoved()
 		} else {
 			s.section = sectionServices
 			s.selected = max(0, len(s.services)-1)
@@ -310,11 +337,16 @@ func (s *sidebar) render(width, height int, focused bool) string {
 			if label == "" {
 				label = allServicesLabel
 			}
-			label = truncateName(label, width-3)
+			label = truncateName(label, width-4) // marker(1) + dot(1) + space(1) + margin(1)
+			// A leading "▸" marks the target currently selected as the filter.
+			marker := " "
+			if t.name != "" && t.name == s.filterTarget {
+				marker = "▸"
+			}
 			if s.section == sectionTargets && i == s.targetSel {
-				top = append(top, selectedTargetRow(width, t, label))
+				top = append(top, selectedTargetRow(width, t, label, marker))
 			} else {
-				top = append(top, targetDot(t)+" "+label)
+				top = append(top, marker+targetDot(t)+" "+label)
 			}
 		}
 		top = append(top, "")
@@ -408,8 +440,9 @@ func selectedServiceRow(width int, state, name string) string {
 }
 
 // selectedTargetRow is selectedServiceRow's equivalent for a TARGETS row: the
-// dot is green for an active target, muted otherwise.
-func selectedTargetRow(width int, t sidebarTarget, label string) string {
+// dot is green for an active target, muted otherwise. marker is the 1-column
+// filter indicator ("▸" or " ") that leads every target row.
+func selectedTargetRow(width int, t sidebarTarget, label, marker string) string {
 	sel := lipgloss.NewStyle().Background(colorSelSidebar)
 
 	dotFg := colorMuted
@@ -418,7 +451,7 @@ func selectedTargetRow(width int, t sidebarTarget, label string) string {
 		dotFg = colorGreen
 		glyph = "●"
 	}
-	dot := sel.Foreground(dotFg).Render(glyph)
+	dot := sel.Foreground(dotFg).Render(marker + glyph)
 	namePart := sel.Foreground(colorText).Render(" " + label)
 	content := dot + namePart
 	if pad := width - lipgloss.Width(content); pad > 0 {

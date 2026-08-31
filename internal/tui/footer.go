@@ -41,7 +41,7 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, width int) string {
+func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targetFocused, onTargetRow bool, width int) string {
 	base := lipgloss.NewStyle().
 		Width(width).
 		BorderTop(true).
@@ -54,12 +54,20 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, 
 
 	var hints []string
 	hints = append(hints, renderHint("Tab", "switch"))
-	if activeTab == tabDetails {
+	// On a target row Enter selects/clears the filter. Otherwise, unless a
+	// target roll-up fills the main pane, Enter toggles LOGS <-> DETAILS and the
+	// log-pane shortcuts (copy, follow) apply.
+	switch {
+	case onTargetRow:
+		hints = append(hints, renderHint("↵", "filter"))
+	case targetFocused:
+		// target detail fills the main pane — nothing for Enter to toggle
+	case activeTab == tabDetails:
 		hints = append(hints, renderHint("↵", "logs"))
-	} else {
+	default:
 		hints = append(hints, renderHint("↵", "details"))
 	}
-	if focus == focusMain && activeTab == tabLogs {
+	if !targetFocused && focus == focusMain && activeTab == tabLogs {
 		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
 	}
 	if visualMode {
