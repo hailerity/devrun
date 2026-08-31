@@ -64,6 +64,7 @@ type model struct {
 	detailsC       detailsPanel
 	targetDetailsC targetDetailsPanel
 	editC          editPanel
+	targetEditC    targetEditPanel
 	headerC        headerBar
 	footerC        footerBar
 
@@ -80,13 +81,14 @@ type model struct {
 
 func newModel(socketPath string, reg *config.Registry, src config.Source, logDir string, cb clipboard) model {
 	return model{
-		logsC:      newLogsPanel(),
-		editC:      newEditPanel(),
-		socketPath: socketPath,
-		registry:   reg,
-		source:     src,
-		logDir:     logDir,
-		cb:         cb,
+		logsC:       newLogsPanel(),
+		editC:       newEditPanel(),
+		targetEditC: newTargetEditPanel(),
+		socketPath:  socketPath,
+		registry:    reg,
+		source:      src,
+		logDir:      logDir,
+		cb:          cb,
 	}
 }
 
@@ -179,9 +181,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The edit modal is a keyboard trap: while open it consumes every key.
+	// The edit modals are keyboard traps: while open they consume every key.
 	if m.editC.open {
 		return m.handleEditKey(msg)
+	}
+	if m.targetEditC.open {
+		return m.handleTargetEditKey(msg)
 	}
 
 	switch {
@@ -327,10 +332,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.doStop()
 
-	// e opens the service editor for the highlighted service row.
+	// e opens the editor for the highlighted service or target row.
 	case key.Matches(msg, keys.Edit):
 		if m.onServiceRow() {
 			return m.openEditor()
+		}
+		if m.onTargetEditRow() {
+			return m.openTargetEditor()
 		}
 	}
 
@@ -345,6 +353,13 @@ func (m model) onServiceRow() bool {
 		m.registry != nil &&
 		(!m.sidebarC.hasTargets() || m.sidebarC.section == sectionServices) &&
 		m.sidebarC.selectedService() != nil
+}
+
+// onTargetEditRow reports whether the sidebar has focus with its cursor on a
+// real target row (not the synthetic "All services" entry) and there is a
+// registry to persist an edit to.
+func (m model) onTargetEditRow() bool {
+	return m.focus == focusSidebar && m.registry != nil && m.focusedTarget() != nil
 }
 
 // openEditor prefills the edit modal for the selected service.
@@ -515,6 +530,92 @@ func resolveProjectCWD(dir, cwd string) string {
 		return filepath.Join(dir, cwd)
 	}
 	return cwd
+}
+
+// --- target editor ---
+
+// openTargetEditor prefills the target modal for the focused target: every
+// registry service is listed, the target's current members checked.
+func (m model) openTargetEditor() (tea.Model, tea.Cmd) {
+	t := m.focusedTarget()
+	if t == nil || m.registry == nil {
+		return m, nil
+	}
+	all := make([]string, 0, len(m.registry.Services))
+	for name := range m.registry.Services {
+		all = append(all, name)
+	}
+	m.targetEditC.openFor(t.name, all, m.registry.Targets[t.name])
+	return m, textinput.Blink
+}
+
+// handleTargetEditKey routes a key to the open target modal: Esc cancels, Enter
+// saves, Tab switches focus between the name field and the list; in the list,
+// up/down move the cursor and space toggles membership.
+func (m model) handleTargetEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.targetEditC.close()
+		return m, nil
+	case tea.KeyEnter:
+		return m.saveTargetEditor()
+	case tea.KeyTab:
+		m.targetEditC.focusSwap()
+		return m, textinput.Blink
+	}
+	if m.targetEditC.focusName {
+		return m, m.targetEditC.update(msg)
+	}
+	switch {
+	case key.Matches(msg, keys.Up):
+		m.targetEditC.moveCursor(-1)
+	case key.Matches(msg, keys.Down):
+		m.targetEditC.moveCursor(1)
+	case msg.Type == tea.KeySpace:
+		m.targetEditC.toggleAtCursor()
+	}
+	return m, nil
+}
+
+// targetNames returns the set of all configured target names.
+func (m model) targetNames() map[string]bool {
+	out := make(map[string]bool)
+	if m.registry != nil {
+		for name := range m.registry.Targets {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// saveTargetEditor validates the modal, persists the target edit, mirrors it
+// into the in-memory registry, and closes the modal. A running target keeps its
+// old membership in the daemon until it is restarted.
+func (m model) saveTargetEditor() (tea.Model, tea.Cmd) {
+	if m.registry == nil {
+		m.targetEditC.errMsg = "no config loaded"
+		return m, nil
+	}
+	if problem := m.targetEditC.validate(m.targetNames()); problem != "" {
+		m.targetEditC.errMsg = problem
+		return m, nil
+	}
+	oldName := m.targetEditC.origName
+	name, members := m.targetEditC.values()
+
+	if err := config.SaveTargetEdit(m.source, oldName, name, members); err != nil {
+		m.targetEditC.errMsg = err.Error()
+		return m, nil
+	}
+	if newName := name; m.registry.Targets != nil {
+		if newName != oldName {
+			delete(m.registry.Targets, oldName)
+		}
+		m.registry.Targets[newName] = members
+	}
+	m.targetEditC.close()
+	m.footerC.showToast("saved " + name)
+	return m, m.pollDaemon()
 }
 
 // scopedServices restricts the daemon's full service list to the active config:
@@ -835,13 +936,18 @@ func (m model) View() string {
 		lipgloss.NewStyle().Width(mainW).Height(bodyH).Render(main),
 	)
 
-	// The edit modal takes over the body area while it is open.
-	if m.editC.open {
+	// An open edit modal takes over the body area.
+	switch {
+	case m.editC.open:
 		body = m.editC.view(m.width, bodyH)
+	case m.targetEditC.open:
+		body = m.targetEditC.view(m.width, bodyH)
 	}
 
 	// Footer
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), m.onServiceRow(), m.editC.open, m.width)
+	editing := m.editC.open || m.targetEditC.open
+	canEditRow := m.onServiceRow() || m.onTargetEditRow()
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, editing, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
