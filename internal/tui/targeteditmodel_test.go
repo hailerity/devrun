@@ -105,6 +105,14 @@ func TestModel_TargetEditRenamePersists(t *testing.T) {
 	assert.NotContains(t, proj.Targets, "fe")
 }
 
+func TestModel_ApplyTargetEditToRegistry_NilMap(t *testing.T) {
+	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{"web": {Name: "web"}}}}
+	require.Nil(t, m.registry.Targets)
+
+	m.applyTargetEditToRegistry("old", "new", []string{"web"})
+	assert.Equal(t, []string{"web"}, m.registry.Targets["new"], "nil Targets map is initialised, not skipped")
+}
+
 func TestModel_TargetEditValidationKeepsModalOpen(t *testing.T) {
 	m, dir := targetEditModel(t)
 	m = pressKey(m, 'e')

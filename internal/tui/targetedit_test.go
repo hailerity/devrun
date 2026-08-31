@@ -77,6 +77,26 @@ func TestTargetEditPanel_Validate(t *testing.T) {
 	assert.Empty(t, p.validate(existing))
 }
 
+func TestTargetEditPanel_KeepsMissingMembers(t *testing.T) {
+	p := newTargetEditPanel()
+	p.openFor("t", []string{"web", "api"}, []string{"web", "ghost"})
+
+	// "ghost" is no longer a registered service but must still be listed and kept.
+	assert.Contains(t, p.services, "ghost")
+	assert.True(t, p.missing["ghost"])
+	assert.Equal(t, []string{"api", "web", "ghost"}, p.services, "real services sorted, missing appended")
+
+	_, members := p.values()
+	assert.Equal(t, []string{"web", "ghost"}, members, "a save does not drop the dangling member")
+
+	// The user can still deliberately remove it.
+	p.focusSwap()
+	p.cursor = len(p.services) - 1 // ghost
+	p.toggleAtCursor()
+	_, members = p.values()
+	assert.Equal(t, []string{"web"}, members)
+}
+
 func TestTargetEditPanel_CloseBlurs(t *testing.T) {
 	p := newTargetEditPanel()
 	p.openFor("t", []string{"a"}, nil)

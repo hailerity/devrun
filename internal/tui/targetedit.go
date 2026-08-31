@@ -26,6 +26,7 @@ type targetEditPanel struct {
 	cursor    int             // index into services
 	top       int             // first visible services index
 	focusName bool            // true: name field focused; false: the list
+	missing   map[string]bool // members that are no longer a registered service
 	errMsg    string
 }
 
@@ -54,6 +55,23 @@ func (p *targetEditPanel) openFor(name string, allServices, members []string) {
 	for _, m := range members {
 		p.member[m] = true
 	}
+
+	// Show members whose service no longer exists at the end of the list so a
+	// save can't silently drop them; the user can still uncheck to clean up.
+	known := make(map[string]bool, len(p.services))
+	for _, s := range p.services {
+		known[s] = true
+	}
+	p.missing = map[string]bool{}
+	var dangling []string
+	for _, m := range members {
+		if !known[m] && !p.missing[m] {
+			p.missing[m] = true
+			dangling = append(dangling, m)
+		}
+	}
+	sort.Strings(dangling)
+	p.services = append(p.services, dangling...)
 
 	p.nameInput.SetValue(name)
 	p.nameInput.CursorEnd()
@@ -173,9 +191,13 @@ func (p targetEditPanel) view(width, height int) string {
 		if p.member[name] {
 			box = styleGreen.Render("[x]")
 		}
-		row := fmt.Sprintf("  %s %s", box, name)
+		label := name
+		if p.missing[name] {
+			label = name + styleMuted.Render(" (missing)")
+		}
+		row := fmt.Sprintf("  %s %s", box, label)
 		if !p.focusName && i == p.cursor {
-			row = styleAccent.Render("▸ ") + box + " " + styleText.Render(name)
+			row = styleAccent.Render("▸ ") + box + " " + styleText.Render(label)
 		}
 		b.WriteString(row + "\n")
 	}

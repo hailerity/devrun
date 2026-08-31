@@ -607,15 +607,25 @@ func (m model) saveTargetEditor() (tea.Model, tea.Cmd) {
 		m.targetEditC.errMsg = err.Error()
 		return m, nil
 	}
-	if newName := name; m.registry.Targets != nil {
-		if newName != oldName {
-			delete(m.registry.Targets, oldName)
-		}
-		m.registry.Targets[newName] = members
-	}
+	m.applyTargetEditToRegistry(oldName, name, members)
 	m.targetEditC.close()
 	m.footerC.showToast("saved " + name)
 	return m, m.pollDaemon()
+}
+
+// applyTargetEditToRegistry mirrors the just-persisted target edit into the
+// in-memory registry so the sidebar reflects it before the next daemon poll.
+func (m *model) applyTargetEditToRegistry(oldName, newName string, members []string) {
+	if m.registry == nil {
+		return
+	}
+	if m.registry.Targets == nil {
+		m.registry.Targets = map[string][]string{}
+	}
+	if newName != oldName {
+		delete(m.registry.Targets, oldName)
+	}
+	m.registry.Targets[newName] = members
 }
 
 // scopedServices restricts the daemon's full service list to the active config:
