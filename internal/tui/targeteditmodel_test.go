@@ -105,6 +105,41 @@ func TestModel_TargetEditRenamePersists(t *testing.T) {
 	assert.NotContains(t, proj.Targets, "fe")
 }
 
+func TestModel_TargetEditSave_InMemoryOrderMatchesFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, config.ProjectFileName),
+		[]byte("name: proj\nservices:\n  web:\n    command: a\n  api:\n    command: b\ntargets:\n  fe: [web, ghost]\n"), 0644))
+	reg, src, err := config.Resolve(dir, false)
+	require.NoError(t, err)
+
+	m := newModel("", reg, src, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m2, _ = m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
+		Services: []ipc.ServiceInfo{{Name: "web", State: "stopped"}, {Name: "api", State: "stopped"}},
+	}})
+	m = m2.(model)
+	m.sidebarC.section = sectionTargets
+	for i, tt := range m.sidebarC.targets {
+		if tt.name == "fe" {
+			m.sidebarC.targetSel = i
+		}
+	}
+
+	m = pressKey(m, 'e')
+	m.targetEditC.focusSwap()      // list: api, web, ghost(missing)
+	m.targetEditC.toggleAtCursor() // api on
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"api", "ghost", "web"}, proj.Targets["fe"])
+	assert.Equal(t, proj.Targets["fe"], m.registry.Targets["fe"],
+		"in-memory members are stored in the same order as the file")
+}
+
 func TestModel_ApplyTargetEditToRegistry_NilMap(t *testing.T) {
 	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{"web": {Name: "web"}}}}
 	require.Nil(t, m.registry.Targets)

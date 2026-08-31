@@ -559,7 +559,7 @@ func (m model) handleTargetEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyEnter:
 		return m.saveTargetEditor()
-	case tea.KeyTab:
+	case tea.KeyTab, tea.KeyShiftTab:
 		m.targetEditC.focusSwap()
 		return m, textinput.Blink
 	}
@@ -602,6 +602,7 @@ func (m model) saveTargetEditor() (tea.Model, tea.Cmd) {
 	}
 	oldName := m.targetEditC.origName
 	name, members := m.targetEditC.values()
+	sort.Strings(members) // match what SaveTargetEdit persists, so the mirror agrees
 
 	if err := config.SaveTargetEdit(m.source, oldName, name, members); err != nil {
 		m.targetEditC.errMsg = err.Error()
