@@ -206,15 +206,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 		}
 
-	// Enter on a target row selects that target as the service filter (or clears
-	// it if already selected). Elsewhere it toggles LOGS <-> DETAILS for the
-	// selected service. DETAILS is a read-only overlay, not a focus target:
-	// focus stays on the sidebar so j/k keeps walking services and the panel
-	// updates live. Ignored mid-selection.
+	// Enter on a focused target row selects that target as the service filter
+	// (or clears it if already selected) and drops back to LOGS. Elsewhere it
+	// toggles LOGS <-> DETAILS for the selected service. DETAILS is a read-only
+	// overlay, not a focus target: focus stays on the sidebar so j/k keeps
+	// walking services and the panel updates live. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
-		case m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets():
+		case m.onTargetRow():
 			m.sidebarC.toggleTargetSelection()
+			m.activeTab = tabLogs
 			m.updateLogFile()
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
@@ -367,6 +368,14 @@ func (m *model) updateLogFile() {
 			m.logsC.setFile(path)
 		}
 	}
+}
+
+// onTargetRow reports whether the sidebar has focus with its cursor parked on a
+// target row — the state in which Enter selects a filter rather than toggling
+// DETAILS. The sidebar's section persists after focus leaves it, so the focus
+// check is what keeps Enter in the LOGS panel meaning "details".
+func (m model) onTargetRow() bool {
+	return m.focus == focusSidebar && m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets()
 }
 
 const (
@@ -585,8 +594,7 @@ func (m model) View() string {
 	)
 
 	// Footer
-	onTargetRow := m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets()
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, onTargetRow, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.onTargetRow(), m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }

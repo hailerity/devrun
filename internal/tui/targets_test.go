@@ -110,6 +110,23 @@ func TestSidebar_EnterSelectsAndClearsFilter(t *testing.T) {
 	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb))
 }
 
+func TestSidebar_ToggleFilterKeepsSelectedService(t *testing.T) {
+	sb := &sidebar{}
+	// t2 members: api, db.
+	sb.update(svcs("api", "db", "web"), targetRows())
+	sb.selected = 1 // "db" in the unfiltered list
+	require.Equal(t, "db", sb.services[sb.selected].Name)
+
+	sb.section = sectionTargets
+	sb.targetSel = 2 // t2
+	sb.toggleTargetSelection()
+	assert.Equal(t, "db", sb.services[sb.selected].Name, "highlight follows the service, not the index")
+
+	// Clearing the filter keeps it on db too.
+	sb.toggleTargetSelection()
+	assert.Equal(t, "db", sb.services[sb.selected].Name)
+}
+
 func TestSidebar_EnterAllServicesClearsFilter(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "db", "web"), targetRows())

@@ -78,12 +78,17 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	}
 
 	s.refilter()
+	s.selectServiceByName(curSvc)
+}
 
+// selectServiceByName moves the service cursor to the row named n, or to row 0
+// when there is no such row. Call after the filtered service list changes.
+func (s *sidebar) selectServiceByName(n string) {
 	s.selected = 0
 	for i, svc := range s.services {
-		if svc.Name == curSvc {
+		if svc.Name == n {
 			s.selected = i
-			break
+			return
 		}
 	}
 }
@@ -135,12 +140,17 @@ func (s *sidebar) toggleTargetSelection() {
 	if t == nil {
 		return
 	}
+	var curSvc string
+	if s.selected < len(s.services) {
+		curSvc = s.services[s.selected].Name
+	}
 	if t.name == "" || t.name == s.filterTarget {
 		s.filterTarget = ""
 	} else {
 		s.filterTarget = t.name
 	}
 	s.refilter()
+	s.selectServiceByName(curSvc) // keep the highlight on the same service if it survived the filter
 }
 
 // moveDown / moveUp walk a single circular cursor over the TARGETS rows followed

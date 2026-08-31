@@ -227,6 +227,49 @@ func TestModel_EnterSelectsTargetFilter(t *testing.T) {
 	assert.Empty(t, m.sidebarC.filterTarget, "Enter again clears the filter")
 }
 
+// targetFilterModel returns a 120x40 model with a "frontend" target (member:
+// web) and the sidebar cursor parked on that target row, focus on the sidebar.
+func targetFilterModel(t *testing.T) model {
+	t.Helper()
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+	m.focus = focusSidebar
+	return m
+}
+
+// TestModel_EnterInMainPanelOpensDetailsNotFilter verifies the target-filter
+// toggle is gated on sidebar focus: once focus is on the main panel, Enter means
+// DETAILS again even though the sidebar cursor is still on a target row.
+func TestModel_EnterInMainPanelOpensDetailsNotFilter(t *testing.T) {
+	m := targetFilterModel(t)
+	m.focus = focusMain
+	m.activeTab = tabLogs
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabDetails, m.activeTab)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter from the main panel must not touch the filter")
+}
+
+// TestModel_EnterOnTargetClosesDetails verifies selecting a filter from the
+// targets section also drops the DETAILS overlay back to LOGS.
+func TestModel_EnterOnTargetClosesDetails(t *testing.T) {
+	m := targetFilterModel(t)
+	m.activeTab = tabDetails
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab, "DETAILS closes when a filter is toggled")
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+}
+
 // TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
 // from the focused LOGS panel hands focus back to the sidebar.
 func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {
