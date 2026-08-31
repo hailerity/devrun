@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ipc"
@@ -256,6 +257,72 @@ func TestModel_EnterIgnoredDuringVisualSelection(t *testing.T) {
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = m2.(model)
 	assert.Equal(t, tabLogs, m.activeTab, "Enter is ignored mid visual-selection")
+}
+
+// targetFocusedModel returns a 120x40 model with one real target ("backend")
+// highlighted in the sidebar's TARGETS section.
+func targetFocusedModel() model {
+	m := newModel("", nil, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(
+		[]ipc.ServiceInfo{
+			{Name: "api", State: "running", Port: intp(8080)},
+			{Name: "web", State: "stopped"},
+		},
+		[]sidebarTarget{
+			{name: ""},
+			{name: "backend", members: []string{"api"}, active: true},
+		},
+	)
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1
+	return m
+}
+
+// TestModel_FocusedTarget verifies focusedTarget only reports a real target row.
+func TestModel_FocusedTarget(t *testing.T) {
+	m := targetFocusedModel()
+	tgt := m.focusedTarget()
+	require.NotNil(t, tgt)
+	assert.Equal(t, "backend", tgt.name)
+
+	m.sidebarC.targetSel = 0 // synthetic "All services" row
+	assert.Nil(t, m.focusedTarget())
+
+	m.sidebarC.targetSel = 1
+	m.sidebarC.section = sectionServices // cursor back in SERVICES
+	assert.Nil(t, m.focusedTarget())
+}
+
+// TestModel_RenderMain_TargetDetailWhenTargetFocused verifies the main pane
+// shows the target roll-up (not logs) while a target row is focused.
+func TestModel_RenderMain_TargetDetailWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	out := plain(m.renderMain(80, 24))
+	assert.Contains(t, out, "TARGET")
+	assert.Contains(t, out, "backend")
+	assert.Contains(t, out, "api")
+	assert.Contains(t, out, ":8080")
+	assert.NotContains(t, out, "LOGS")
+}
+
+// TestModel_RenderMain_LogsWhenServiceFocused verifies the main pane returns to
+// logs once the cursor leaves the TARGETS section.
+func TestModel_RenderMain_LogsWhenServiceFocused(t *testing.T) {
+	m := targetFocusedModel()
+	m.sidebarC.section = sectionServices
+	assert.Contains(t, plain(m.renderMain(80, 24)), "LOGS")
+}
+
+// TestModel_EnterIgnoredWhenTargetFocused verifies Enter does not flip to
+// DETAILS while a target row is focused (the pane already shows target detail).
+func TestModel_EnterIgnoredWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	require.Equal(t, tabLogs, m.activeTab)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab)
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area
