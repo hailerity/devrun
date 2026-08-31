@@ -133,6 +133,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonErrMsg:
 		m.spinning = false
+		// The first poll resolved (unsuccessfully); stop showing "Loading…" and
+		// fall back to the empty-state message alongside the error toast.
+		m.sidebarC.loaded = true
 		m.footerC.showToastLong(fmt.Sprintf("error: %s", msg.err))
 		return m, tickDaemon()
 

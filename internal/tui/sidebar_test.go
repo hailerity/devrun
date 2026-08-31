@@ -112,6 +112,21 @@ func TestTruncateName_TinyWidths(t *testing.T) {
 	assert.Equal(t, "a…", truncateName("anything", 2))
 }
 
+func TestSidebar_LoadingBeforeFirstPoll(t *testing.T) {
+	sb := &sidebar{}
+	out := plain(sb.render(28, 24, false))
+	assert.Contains(t, out, "Loading services…")
+	assert.NotContains(t, out, "devrun add")
+}
+
+func TestSidebar_EmptyStateAfterFirstPoll(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(nil, nil) // first poll returned zero services
+	out := plain(sb.render(28, 24, false))
+	assert.Contains(t, out, "No services — run devrun add <name>")
+	assert.NotContains(t, out, "Loading")
+}
+
 func TestSidebar_InfoBlockPinnedToBottom(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}}, nil)

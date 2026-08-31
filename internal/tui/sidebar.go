@@ -37,6 +37,8 @@ type sidebar struct {
 	targetSel    int             // cursor within targets
 	section      sidebarSection  // which list the cursor is in
 	filterTarget string          // name of the target filtering services ("" = all)
+
+	loaded bool // true once the first daemon poll has resolved (response or error)
 }
 
 // hasTargets reports whether there is at least one real target beyond the
@@ -44,6 +46,8 @@ type sidebar struct {
 func (s *sidebar) hasTargets() bool { return len(s.targets) > 1 }
 
 func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
+	s.loaded = true
+
 	var curSvc string
 	if s.selected < len(s.services) {
 		curSvc = s.services[s.selected].Name
@@ -290,6 +294,9 @@ func sectionHeader(label string, width int, accented bool) string {
 
 func (s *sidebar) render(width, height int, focused bool) string {
 	if len(s.allServices) == 0 && !s.hasTargets() {
+		if !s.loaded {
+			return styleMuted.Render("Loading services…")
+		}
 		return styleMuted.Render("No services — run devrun add <name>")
 	}
 

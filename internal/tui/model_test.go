@@ -41,6 +41,18 @@ func TestModel_ScopedServices_EmptyRegistryHidesEverything(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestModel_DaemonErrorEndsLoadingState(t *testing.T) {
+	m := model{}
+	assert.False(t, m.sidebarC.loaded)
+
+	m2, _ := m.Update(daemonErrMsg{err: assert.AnError})
+	m = m2.(model)
+	assert.True(t, m.sidebarC.loaded, "a first-poll error ends the loading state")
+
+	out := plain(m.sidebarC.render(28, 24, false))
+	assert.Contains(t, out, "devrun add", "sidebar shows the empty state, not a spinner, after the error")
+}
+
 func TestModel_WindowSizeSetsWidthHeight(t *testing.T) {
 	m := model{}
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
