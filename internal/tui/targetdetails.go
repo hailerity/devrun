@@ -37,8 +37,8 @@ func (tp targetDetailsPanel) render(t *sidebarTarget, infos []ipc.ServiceInfo, w
 
 	var sb strings.Builder
 
-	// TARGET
-	sb.WriteString(styleMuted.Render("TARGET") + "\n")
+	// Summary table — sits directly under the bordered "TARGET" view label that
+	// renderMain draws, so it needs no header of its own.
 	state := styleMuted.Render("● stopped")
 	if t.active {
 		state = styleGreen.Render("● running")

@@ -372,8 +372,10 @@ func (m model) focusedTarget() *sidebarTarget {
 	return t
 }
 
-// targetMemberInfos returns the daemon-reported ServiceInfo for every member of t
-// that appears in the scoped service list, in sorted (sidebar) order.
+// targetMemberInfos returns the daemon-reported ServiceInfo for each member of t
+// that the daemon currently knows about, drawn from the registry-scoped service
+// list (not the active-target filter). Order is unspecified — the sole caller
+// keys the result by name.
 func (m model) targetMemberInfos(t *sidebarTarget) []ipc.ServiceInfo {
 	want := make(map[string]bool, len(t.members))
 	for _, name := range t.members {

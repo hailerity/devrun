@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -300,7 +301,7 @@ func TestModel_FocusedTarget(t *testing.T) {
 func TestModel_RenderMain_TargetDetailWhenTargetFocused(t *testing.T) {
 	m := targetFocusedModel()
 	out := plain(m.renderMain(80, 24))
-	assert.Contains(t, out, "TARGET")
+	assert.Equal(t, 1, strings.Count(out, "TARGET"), "the TARGET label must not be doubled")
 	assert.Contains(t, out, "backend")
 	assert.Contains(t, out, "api")
 	assert.Contains(t, out, ":8080")
