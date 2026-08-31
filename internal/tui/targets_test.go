@@ -154,6 +154,13 @@ func TestModel_BuildTargets(t *testing.T) {
 	assert.False(t, rows[2].active)
 }
 
+func TestModel_SidebarWidth_GrowsForLongTargetName(t *testing.T) {
+	m := model{width: 200}
+	m.sidebarC.allServices = []ipc.ServiceInfo{{Name: "a"}}
+	m.sidebarC.targets = []sidebarTarget{{name: ""}, {name: "a-very-long-target-name-here"}}
+	assert.Equal(t, len("a-very-long-target-name-here")+3, m.sidebarWidth())
+}
+
 func TestModel_BuildTargets_EmptyWhenNoTargets(t *testing.T) {
 	m := model{registry: &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},

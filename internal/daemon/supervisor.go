@@ -411,40 +411,68 @@ func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 		return errResp(fmt.Sprintf("target %q has no services", p.Name))
 	}
 
-	members := make([]string, 0, len(p.Services))
 	seen := make(map[string]bool, len(p.Services))
-	var failures []string
-	startedOK := 0
+	uniq := make([]*config.ServiceConfig, 0, len(p.Services))
 	for _, cfg := range p.Services {
 		if cfg == nil || cfg.Name == "" || seen[cfg.Name] {
 			continue
 		}
 		seen[cfg.Name] = true
-		members = append(members, cfg.Name)
-
-		resp := s.startService(cfg.Name, cfg)
-		switch {
-		case resp.OK || strings.Contains(resp.Error, "already running"):
-			startedOK++
-		default:
-			failures = append(failures, fmt.Sprintf("%s: %s", cfg.Name, resp.Error))
-		}
+		uniq = append(uniq, cfg)
+	}
+	if len(uniq) == 0 {
+		return errResp(fmt.Sprintf("target %q has no valid services", p.Name))
+	}
+	members := make([]string, len(uniq))
+	for i, cfg := range uniq {
+		members[i] = cfg.Name
 	}
 
-	if startedOK == 0 {
-		return errResp(fmt.Sprintf("target %q: no services started: %s",
-			p.Name, strings.Join(failures, "; ")))
-	}
-
+	// Reserve the target under the lock before starting anything so a concurrent
+	// target-stop for the same name sees it and stops whatever has come up,
+	// rather than reporting "not active" while members are still launching.
 	s.mu.Lock()
 	s.activeTargets[p.Name] = members
 	_ = s.saveStateLocked()
 	s.mu.Unlock()
 
+	var failures []string
+	startedOK := 0
+	for _, cfg := range uniq {
+		resp := s.startService(cfg.Name, cfg)
+		if resp.OK || isAlreadyRunning(resp) {
+			startedOK++
+		} else {
+			failures = append(failures, fmt.Sprintf("%s: %s", cfg.Name, resp.Error))
+		}
+	}
+
+	if startedOK == 0 {
+		// Nothing came up — undo the reservation.
+		s.mu.Lock()
+		delete(s.activeTargets, p.Name)
+		_ = s.saveStateLocked()
+		s.mu.Unlock()
+		return errResp(fmt.Sprintf("target %q: no services started: %s",
+			p.Name, strings.Join(failures, "; ")))
+	}
+
 	if len(failures) > 0 {
 		return errResp(fmt.Sprintf("target %q: %s", p.Name, strings.Join(failures, "; ")))
 	}
 	return &ipc.Response{OK: true}
+}
+
+// isAlreadyRunning / isNotRunning classify a startService / stopService response
+// as the benign "member is already in the wanted state" case rather than a real
+// failure. They match the wording of the errors those two methods produce
+// ("%s is already running" / "%s is not running") — keep them in sync.
+func isAlreadyRunning(resp *ipc.Response) bool {
+	return resp != nil && !resp.OK && strings.Contains(resp.Error, "is already running")
+}
+
+func isNotRunning(resp *ipc.Response) bool {
+	return resp != nil && !resp.OK && strings.Contains(resp.Error, "is not running")
 }
 
 // handleTargetStop stops the members of an active target, skipping any that are
@@ -488,7 +516,7 @@ func (s *supervisor) handleTargetStop(raw json.RawMessage) *ipc.Response {
 	var failures []string
 	for _, name := range toStop {
 		resp := s.stopService(name)
-		if !resp.OK && !strings.Contains(resp.Error, "is not running") {
+		if !resp.OK && !isNotRunning(resp) {
 			failures = append(failures, fmt.Sprintf("%s: %s", name, resp.Error))
 		}
 	}

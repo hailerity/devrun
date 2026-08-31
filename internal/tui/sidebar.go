@@ -17,6 +17,10 @@ type sidebarTarget struct {
 	active  bool
 }
 
+// allServicesLabel is the rendered text of the synthetic clear-filter row
+// (sidebarTarget{name: ""}).
+const allServicesLabel = "All services"
+
 type sidebarSection int
 
 const (
@@ -297,7 +301,7 @@ func (s *sidebar) render(width, height int, focused bool) string {
 		for i, t := range s.targets {
 			label := t.name
 			if label == "" {
-				label = "All services"
+				label = allServicesLabel
 			}
 			label = truncateName(label, width-3)
 			if s.section == sectionTargets && i == s.targetSel {

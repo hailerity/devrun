@@ -30,7 +30,7 @@ func dial(socketPath string, fn func(*client.Client) tea.Msg) tea.Msg {
 type tabKind int
 
 const (
-	tabLogs    tabKind = iota
+	tabLogs tabKind = iota
 	tabDetails
 )
 
@@ -44,10 +44,10 @@ const (
 // --- Message types ---
 
 type daemonTickMsg struct{}
-type logTickMsg    struct{}
-type spinTickMsg   struct{}
+type logTickMsg struct{}
+type spinTickMsg struct{}
 type daemonRespMsg struct{ payload ipc.ListResponsePayload }
-type daemonErrMsg  struct{ err error }
+type daemonErrMsg struct{ err error }
 
 // --- Model ---
 
@@ -380,7 +380,11 @@ func (m model) sidebarWidth() int {
 		}
 	}
 	for _, t := range m.sidebarC.targets {
-		if n := lipgloss.Width(t.name) + 3; n > w {
+		label := t.name
+		if label == "" {
+			label = allServicesLabel
+		}
+		if n := lipgloss.Width(label) + 3; n > w {
 			w = n
 		}
 	}

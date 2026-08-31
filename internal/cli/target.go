@@ -244,13 +244,9 @@ func editTargets(fn func(targets map[string][]string, known map[string]bool) err
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
-	reg, src, err := config.Resolve(cwd, globalFlag)
+	_, src, err := config.Resolve(cwd, globalFlag)
 	if err != nil {
 		return err
-	}
-	known := make(map[string]bool, len(reg.Services))
-	for n := range reg.Services {
-		known[n] = true
 	}
 
 	if src.IsLocal() {
@@ -264,7 +260,7 @@ func editTargets(fn func(targets map[string][]string, known map[string]bool) err
 		if proj.Targets == nil {
 			proj.Targets = make(map[string][]string)
 		}
-		if err := fn(proj.Targets, known); err != nil {
+		if err := fn(proj.Targets, keySet(proj.Services)); err != nil {
 			return err
 		}
 		return config.SaveProject(src.Dir, proj)
@@ -280,10 +276,20 @@ func editTargets(fn func(targets map[string][]string, known map[string]bool) err
 	if greg.Version == "" {
 		greg.Version = "1"
 	}
-	if err := fn(greg.Targets, known); err != nil {
+	if err := fn(greg.Targets, keySet(greg.Services)); err != nil {
 		return err
 	}
 	return config.SaveRegistry(config.RegistryPath(), greg)
+}
+
+// keySet returns the set of keys of m as a bool map — used to validate target
+// members against the service names in the same file being edited.
+func keySet[V any](m map[string]V) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k := range m {
+		out[k] = true
+	}
+	return out
 }
 
 // activeTargetSet asks a running daemon which targets are active. Best effort:
