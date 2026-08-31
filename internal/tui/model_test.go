@@ -53,7 +53,7 @@ func TestModel_SidebarWidth_Adaptive(t *testing.T) {
 	mk := func(names ...string) model {
 		m := model{width: 200}
 		for _, n := range names {
-			m.sidebarC.services = append(m.sidebarC.services, ipc.ServiceInfo{Name: n})
+			m.sidebarC.allServices = append(m.sidebarC.allServices, ipc.ServiceInfo{Name: n})
 		}
 		return m
 	}
