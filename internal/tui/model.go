@@ -149,7 +149,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickSpin()
 
 	case tea.MouseMsg:
-		if m.activeTab == tabLogs {
+		// Skip while a target roll-up occupies the main pane — there is no log
+		// content under the cursor to select or focus.
+		if m.activeTab == tabLogs && m.focusedTarget() == nil {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
 			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
 			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
@@ -193,17 +195,26 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Left):
 		m.focus = focusSidebar
 
+	// A focused target row shows a non-focusable roll-up in the main pane (like
+	// DETAILS), so → and Tab-in are inert while the cursor sits on one —
+	// otherwise focus would move to a logs pane the user cannot see and the
+	// f/v/y shortcuts would run against hidden scrollback.
 	case key.Matches(msg, keys.Right):
-		m.focus = focusMain
-		m.activeTab = tabLogs
+		if m.focusedTarget() == nil {
+			m.focus = focusMain
+			m.activeTab = tabLogs
+		}
 
 	// Tab toggles focus between the sidebar and the main panel. The main panel
 	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
-		if m.focus == focusSidebar {
+		switch {
+		case m.focusedTarget() != nil:
+			m.focus = focusSidebar
+		case m.focus == focusSidebar:
 			m.focus = focusMain
 			m.activeTab = tabLogs
-		} else {
+		default:
 			m.focus = focusSidebar
 		}
 

@@ -38,10 +38,13 @@ func (tp targetDetailsPanel) render(t *sidebarTarget, infos []ipc.ServiceInfo, w
 	var sb strings.Builder
 
 	// Summary table — sits directly under the bordered "TARGET" view label that
-	// renderMain draws, so it needs no header of its own.
-	state := styleMuted.Render("● stopped")
+	// renderMain draws, so it needs no header of its own. "state" reports the
+	// target's activation (whether `devrun target start` holds it), not a
+	// member roll-up — the "services" row carries the live running count, and
+	// an active target can legitimately have zero members up.
+	state := styleMuted.Render("○ stopped")
 	if t.active {
-		state = styleGreen.Render("● running")
+		state = styleGreen.Render("● started")
 	}
 	sb.WriteString(renderTable([][]string{
 		{"name", styleText.Render(t.name)},

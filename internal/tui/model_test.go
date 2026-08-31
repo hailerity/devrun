@@ -326,6 +326,20 @@ func TestModel_EnterIgnoredWhenTargetFocused(t *testing.T) {
 	assert.Equal(t, tabLogs, m.activeTab)
 }
 
+// TestModel_TabAndRightInertWhenTargetFocused verifies focus cannot move into
+// the (non-focusable) target roll-up, which would otherwise arm the hidden
+// log-pane shortcuts.
+func TestModel_TabAndRightInertWhenTargetFocused(t *testing.T) {
+	m := targetFocusedModel()
+	require.Equal(t, focusSidebar, m.focus)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not move focus into a focused target's pane")
+
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not move focus into a focused target's pane")
+}
+
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area
 // automatically moves focus to the main panel so that y/v/f shortcuts work.
 func TestModel_MouseClick_SetsFocusMain(t *testing.T) {

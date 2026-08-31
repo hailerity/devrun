@@ -26,7 +26,7 @@ func TestTargetDetails_ShowsNameStateAndMembers(t *testing.T) {
 	out := plain(tp.render(tgt, infos, 60, 20))
 
 	assert.Contains(t, out, "backend")
-	assert.Contains(t, out, "running") // target state (active)
+	assert.Contains(t, out, "started") // target activation state
 	assert.Contains(t, out, "1 running / 2")
 	assert.Contains(t, out, "api")
 	assert.Contains(t, out, ":8080")
@@ -39,7 +39,21 @@ func TestTargetDetails_InactiveTargetReadsStopped(t *testing.T) {
 	tgt := &sidebarTarget{name: "backend", members: []string{"api"}}
 	out := plain(tp.render(tgt, []ipc.ServiceInfo{{Name: "api", State: "stopped"}}, 60, 20))
 	assert.Contains(t, out, "stopped")
+	assert.NotContains(t, out, "started")
 	assert.Contains(t, out, "0 running / 1")
+}
+
+// TestTargetDetails_ActiveWithNoMembersUp guards against the state row
+// contradicting the live member count: an active target with everything stopped
+// reads "started" + "0 running / N", never "running".
+func TestTargetDetails_ActiveWithNoMembersUp(t *testing.T) {
+	var tp targetDetailsPanel
+	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}, active: true}
+	infos := []ipc.ServiceInfo{{Name: "api", State: "stopped"}, {Name: "db", State: "crashed"}}
+	out := plain(tp.render(tgt, infos, 60, 20))
+	assert.Contains(t, out, "started")
+	assert.Contains(t, out, "0 running / 2")
+	assert.NotContains(t, out, "● running")
 }
 
 func TestTargetDetails_UnreportedMember(t *testing.T) {
