@@ -445,18 +445,13 @@ func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConf
 	}
 	sp := m.socketPath
 	return func() tea.Msg {
-		if msg := dial(sp, func(c *client.Client) tea.Msg {
-			resp, err := c.Send("stop", ipc.StopPayload{Name: oldName})
-			if err != nil {
-				return daemonErrMsg{err}
-			}
-			if !resp.OK {
-				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
-			}
+		// Best-effort stop of the old name — the daemon may already consider it
+		// stopped (a stale sidebar view). Always proceed to start; a genuinely
+		// unreachable daemon still surfaces through the start error below.
+		_ = dial(sp, func(c *client.Client) tea.Msg {
+			_, _ = c.Send("stop", ipc.StopPayload{Name: oldName})
 			return nil
-		}); msg != nil {
-			return msg
-		}
+		})
 		return dial(sp, func(c *client.Client) tea.Msg {
 			resp, err := c.Send("start", ipc.StartPayload{Name: newName, Config: cfg})
 			if err != nil {
@@ -471,10 +466,16 @@ func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConf
 }
 
 // applyEditToRegistry mirrors the just-persisted edit into the in-memory
-// registry so the sidebar reflects it before the next daemon poll.
+// registry so the sidebar reflects it before the next daemon poll. For a project
+// source the cwd is resolved to absolute against the project dir, matching what
+// ProjectConfig.ToServiceConfigs would produce on reload (and what the daemon
+// needs on restart).
 func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
 	if m.registry == nil {
 		return
+	}
+	if m.source.IsLocal() {
+		cwd = resolveProjectCWD(m.source.Dir, cwd)
 	}
 	cur := m.registry.Services[oldName]
 	if cur == nil {
@@ -488,6 +489,19 @@ func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
 		delete(m.registry.Services, oldName)
 	}
 	m.registry.Services[newName] = &updated
+}
+
+// resolveProjectCWD mirrors ProjectConfig.ToServiceConfigs: a project service's
+// cwd is stored absolute in memory, resolved against the project dir (empty
+// means the project root).
+func resolveProjectCWD(dir, cwd string) string {
+	if cwd == "" {
+		return dir
+	}
+	if !filepath.IsAbs(cwd) {
+		return filepath.Join(dir, cwd)
+	}
+	return cwd
 }
 
 // scopedServices restricts the daemon's full service list to the active config:

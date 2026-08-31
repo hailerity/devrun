@@ -113,6 +113,21 @@ func TestSaveServiceEdit_Project_CWDAtRootDropped(t *testing.T) {
 	assert.Empty(t, proj.Services["web"].CWD, "cwd at the project root is stored empty")
 }
 
+func TestSaveServiceEdit_Project_RelativeCWDKeptAsGiven(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, config.ProjectFileName),
+		[]byte("name: proj\nservices:\n  web:\n    command: run\n"), 0644))
+
+	src := config.Source{Local: filepath.Join(dir, config.ProjectFileName), Dir: dir}
+	// A relative cwd is interpreted relative to the project dir — not the
+	// process working directory — and stored verbatim.
+	require.NoError(t, config.SaveServiceEdit(src, "web", "web", "run", "frontend"))
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "frontend", proj.Services["web"].CWD)
+}
+
 func TestSaveServiceEdit_Project_RenameCollision(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, config.ProjectFileName),

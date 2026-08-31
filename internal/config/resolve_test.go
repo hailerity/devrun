@@ -86,3 +86,13 @@ func TestSaveProject_RoundTrip(t *testing.T) {
 	assert.Equal(t, "go run ./cmd/api", reloaded.Services["api"].Command)
 	assert.Equal(t, "backend", reloaded.Services["api"].CWD)
 }
+
+func TestResolve_MalformedProjectReturnsSource(t *testing.T) {
+	dir := t.TempDir()
+	writeProject(t, dir, ":::not yaml")
+
+	_, src, err := Resolve(dir, false)
+	require.Error(t, err)
+	assert.True(t, src.IsLocal(), "the source still points at the unparseable devrun.yaml")
+	assert.Equal(t, dir, src.Dir)
+}

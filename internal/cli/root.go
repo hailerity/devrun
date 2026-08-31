@@ -20,7 +20,10 @@ var rootCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		reg, src, err := activeRegistry()
 		if err != nil {
-			// Empty registry is fine — TUI shows placeholder
+			// Empty registry is fine — the TUI shows a placeholder. src is kept:
+			// when a project devrun.yaml failed to parse it still points there,
+			// so a service edit fails loudly against that file instead of
+			// silently writing to the global registry.
 			reg = &config.Registry{Services: map[string]*config.ServiceConfig{}}
 		}
 

@@ -85,18 +85,21 @@ func editProjectService(dir, oldName, newName, command, cwd string) error {
 	return SaveProject(dir, proj)
 }
 
-// relProjectCWD mirrors `devrun add`: a project file stores cwd relative to the
-// project directory, and empty when it is the project root.
+// relProjectCWD returns the value to store for a project service's cwd: relative
+// to the project directory, and empty when it is the project root. An absolute
+// input is made relative to dir; a relative input is already interpreted
+// relative to dir, so it is kept as given. (Unlike `devrun add`, there is no
+// meaningful process working directory to resolve against here.)
 func relProjectCWD(dir, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	if abs, err := filepath.Abs(cwd); err == nil {
-		if rel, err := filepath.Rel(dir, abs); err == nil {
+	if filepath.IsAbs(cwd) {
+		if rel, err := filepath.Rel(dir, cwd); err == nil {
 			cwd = rel
 		}
 	}
-	if cwd == "." {
+	if cwd = filepath.Clean(cwd); cwd == "." {
 		return ""
 	}
 	return cwd

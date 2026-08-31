@@ -121,6 +121,24 @@ func TestModel_EditSaveRestartsRunningService(t *testing.T) {
 	assert.Contains(t, m.registry.Services, "ui")
 }
 
+func TestModel_EditSaveResolvesProjectCWDInMemory(t *testing.T) {
+	m, dir := editModel(t, "run")
+	m = pressE(t, m)
+	m.editC.focusDelta(1)
+	m.editC.focusDelta(1) // cwd field
+	m.editC.inputs[fieldCWD].SetValue("frontend")
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+
+	assert.Equal(t, filepath.Join(dir, "frontend"), m.registry.Services["web"].CWD,
+		"in-memory cwd is absolute, matching a reload")
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "frontend", proj.Services["web"].CWD, "devrun.yaml keeps it relative")
+}
+
 func TestModel_EditSaveDoesNotRestartStoppedService(t *testing.T) {
 	m, _ := editModelState(t, "run", "stopped")
 	m = pressE(t, m)
