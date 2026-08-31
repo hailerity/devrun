@@ -24,6 +24,9 @@ type ProjectServiceConfig struct {
 type ProjectConfig struct {
 	Name     string                          `yaml:"name,omitempty"`
 	Services map[string]*ProjectServiceConfig `yaml:"services"`
+	// Targets maps a target name to the service names it groups. See
+	// Registry.Targets — the semantics are identical for a project file.
+	Targets map[string][]string `yaml:"targets,omitempty"`
 }
 
 // LoadProject reads devrun.yaml from dir.
@@ -44,6 +47,9 @@ func LoadProject(dir string) (*ProjectConfig, error) {
 	}
 	if p.Services == nil {
 		p.Services = make(map[string]*ProjectServiceConfig)
+	}
+	if p.Targets == nil {
+		p.Targets = make(map[string][]string)
 	}
 	for name, svc := range p.Services {
 		if err := svc.Validate(); err != nil {

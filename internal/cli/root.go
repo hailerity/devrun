@@ -86,6 +86,7 @@ func init() {
 		removeCmd,
 		startCmd,
 		stopCmd,
+		targetCmd,
 		listCmd,
 		logsCmd,
 		fgCmd,

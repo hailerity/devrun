@@ -175,6 +175,73 @@ func TestLifecycle_StartWithInlineConfig(t *testing.T) {
 	assert.True(t, resp.OK, resp.Error)
 }
 
+// TestLifecycle_TargetStartStop drives the target lifecycle over the real IPC
+// path: starting a target starts its members and marks it active; stopping a
+// target stops only the members no other active target still holds.
+func TestLifecycle_TargetStartStop(t *testing.T) {
+	socketPath, _ := testEnv(t)
+	dir := t.TempDir()
+
+	longRun := "while true; do sleep 1; done"
+	svc := func(name string) *config.ServiceConfig {
+		return &config.ServiceConfig{Name: name, Command: longRun, CWD: dir}
+	}
+
+	// t1 = {web, api};  t2 = {api, db}  — api is shared.
+	resp := send(t, socketPath, "target-start", ipc.TargetStartPayload{
+		Name: "t1", Services: []*config.ServiceConfig{svc("web"), svc("api")},
+	})
+	require.True(t, resp.OK, resp.Error)
+	resp = send(t, socketPath, "target-start", ipc.TargetStartPayload{
+		Name: "t2", Services: []*config.ServiceConfig{svc("api"), svc("db")},
+	})
+	require.True(t, resp.OK, resp.Error)
+
+	states := func() map[string]string {
+		r := send(t, socketPath, "list", struct{}{})
+		var p ipc.ListResponsePayload
+		require.NoError(t, json.Unmarshal(r.Payload, &p))
+		m := map[string]string{}
+		for _, s := range p.Services {
+			m[s.Name] = s.State
+		}
+		assert.ElementsMatch(t, []string{"t1", "t2"}, p.ActiveTargets)
+		return m
+	}
+	require.Equal(t, "running", states()["web"])
+	require.Equal(t, "running", states()["api"])
+	require.Equal(t, "running", states()["db"])
+
+	// Stop t1: web is released, api stays up (held by t2).
+	resp = send(t, socketPath, "target-stop", ipc.TargetStopPayload{Name: "t1"})
+	require.True(t, resp.OK, resp.Error)
+
+	time.Sleep(300 * time.Millisecond)
+	r := send(t, socketPath, "list", struct{}{})
+	var p ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(r.Payload, &p))
+	byName := map[string]string{}
+	for _, s := range p.Services {
+		byName[s.Name] = s.State
+	}
+	assert.Equal(t, "stopped", byName["web"], "web released by t1")
+	assert.Equal(t, "running", byName["api"], "api still held by t2")
+	assert.Equal(t, "running", byName["db"], "db still held by t2")
+	assert.Equal(t, []string{"t2"}, p.ActiveTargets)
+
+	// Stop t2: api and db now released.
+	resp = send(t, socketPath, "target-stop", ipc.TargetStopPayload{Name: "t2"})
+	require.True(t, resp.OK, resp.Error)
+	time.Sleep(300 * time.Millisecond)
+	r = send(t, socketPath, "list", struct{}{})
+	var final ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(r.Payload, &final))
+	for _, s := range final.Services {
+		assert.Equal(t, "stopped", s.State, "%s should be stopped", s.Name)
+	}
+	assert.Empty(t, final.ActiveTargets)
+}
+
 func TestLifecycle_ProcessCrash(t *testing.T) {
 	socketPath, _ := testEnv(t)
 	// Command starts, passes the 100ms alive check, then crashes.

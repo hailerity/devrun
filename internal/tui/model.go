@@ -30,7 +30,7 @@ func dial(socketPath string, fn func(*client.Client) tea.Msg) tea.Msg {
 type tabKind int
 
 const (
-	tabLogs    tabKind = iota
+	tabLogs tabKind = iota
 	tabDetails
 )
 
@@ -44,10 +44,10 @@ const (
 // --- Message types ---
 
 type daemonTickMsg struct{}
-type logTickMsg    struct{}
-type spinTickMsg   struct{}
+type logTickMsg struct{}
+type spinTickMsg struct{}
 type daemonRespMsg struct{ payload ipc.ListResponsePayload }
-type daemonErrMsg  struct{ err error }
+type daemonErrMsg struct{ err error }
 
 // --- Model ---
 
@@ -119,7 +119,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonRespMsg:
 		m.spinning = false
-		m.sidebarC.update(m.scopedServices(msg.payload.Services))
+		m.sidebarC.update(m.scopedServices(msg.payload.Services), m.buildTargets(msg.payload.ActiveTargets))
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -283,9 +283,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, keys.Start):
+		if t := m.sidebarC.selectedTarget(); t != nil {
+			return m, m.doStartTarget()
+		}
 		return m, m.doStart()
 
 	case key.Matches(msg, keys.Stop):
+		if t := m.sidebarC.selectedTarget(); t != nil {
+			return m, m.doStopTarget()
+		}
 		return m, m.doStop()
 	}
 
@@ -327,6 +333,28 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 	return out
 }
 
+// buildTargets turns the registry's target definitions into sidebar rows, with
+// the synthetic "All services" row first. Returns nil when no targets are
+// defined, which collapses the TARGETS block entirely.
+func (m model) buildTargets(active []string) []sidebarTarget {
+	if m.registry == nil || len(m.registry.Targets) == 0 {
+		return nil
+	}
+	activeSet := make(map[string]bool, len(active))
+	for _, a := range active {
+		activeSet[a] = true
+	}
+	rows := []sidebarTarget{{name: ""}} // "All services"
+	for _, name := range config.SortedTargetNames(m.registry.Targets) {
+		rows = append(rows, sidebarTarget{
+			name:    name,
+			members: m.registry.Targets[name],
+			active:  activeSet[name],
+		})
+	}
+	return rows
+}
+
 func (m *model) updateLogFile() {
 	if svc := m.sidebarC.selectedService(); svc != nil {
 		path := filepath.Join(m.logDir, "logs", svc.Name+".log")
@@ -346,8 +374,17 @@ const (
 // [sidebarMinW, sidebarMaxW] and never more than a third of the terminal.
 func (m model) sidebarWidth() int {
 	w := sidebarMinW
-	for _, svc := range m.sidebarC.services {
+	for _, svc := range m.sidebarC.allServices {
 		if n := lipgloss.Width(svc.Name) + 3; n > w {
+			w = n
+		}
+	}
+	for _, t := range m.sidebarC.targets {
+		label := t.name
+		if label == "" {
+			label = allServicesLabel
+		}
+		if n := lipgloss.Width(label) + 3; n > w {
 			w = n
 		}
 	}
@@ -447,6 +484,62 @@ func (m model) doStop() tea.Cmd {
 	}
 }
 
+// doStartTarget starts every service in the highlighted target. The "All
+// services" row (empty name) is a no-op, as is a target with no runnable
+// members. Member definitions are shipped inline so a project target works
+// without a registry entry.
+func (m model) doStartTarget() tea.Cmd {
+	if m.socketPath == "" || m.registry == nil {
+		return nil
+	}
+	t := m.sidebarC.selectedTarget()
+	if t == nil || t.name == "" {
+		return nil
+	}
+	members := m.registry.TargetMemberConfigs(t.name)
+	if len(members) == 0 {
+		return nil
+	}
+	sp, name := m.socketPath, t.name
+	return func() tea.Msg {
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("target-start", ipc.TargetStartPayload{Name: name, Services: members})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
+	}
+}
+
+// doStopTarget stops the highlighted target; the daemon keeps any member still
+// held by another running target. "All services" is a no-op.
+func (m model) doStopTarget() tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	t := m.sidebarC.selectedTarget()
+	if t == nil || t.name == "" {
+		return nil
+	}
+	sp, name := m.socketPath, t.name
+	return func() tea.Msg {
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("target-stop", ipc.TargetStopPayload{Name: name})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
+	}
+}
+
 func (m model) View() string {
 	if m.width == 0 {
 		return ""
@@ -456,10 +549,10 @@ func (m model) View() string {
 	mainW := m.width - sidebarW - 1
 	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
 
-	// Header
-	total := len(m.sidebarC.services)
+	// Header — counts reflect the whole scoped project, not the target filter.
+	total := len(m.sidebarC.allServices)
 	running := 0
-	for _, s := range m.sidebarC.services {
+	for _, s := range m.sidebarC.allServices {
 		if s.State == "running" {
 			running++
 		}

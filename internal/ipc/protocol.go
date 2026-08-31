@@ -38,6 +38,19 @@ type RemovePayload struct{ Name string `json:"name"` }
 type AttachPayload struct{ Name string `json:"name"` }
 type DetachPayload struct{ Name string `json:"name"` }
 
+// TargetStartPayload starts every service in a target. Services carries the full
+// definitions inline — the daemon has no target vocabulary of its own — the same
+// way project devrun.yaml services are shipped in StartPayload.
+type TargetStartPayload struct {
+	Name     string                  `json:"name"`
+	Services []*config.ServiceConfig `json:"services"`
+}
+
+// TargetStopPayload stops a target. The daemon resolves which members to stop
+// from the snapshot it recorded at target-start time, skipping any still held by
+// another active target.
+type TargetStopPayload struct{ Name string `json:"name"` }
+
 type ServiceInfo struct {
 	Name      string  `json:"name"`
 	Group     string  `json:"group"`
@@ -51,6 +64,9 @@ type ServiceInfo struct {
 
 type ListResponsePayload struct {
 	Services []ServiceInfo `json:"services"`
+	// ActiveTargets names the targets the daemon currently considers started,
+	// sorted. Empty when no target has been started.
+	ActiveTargets []string `json:"active_targets,omitempty"`
 }
 
 // --- Framing: 4-byte big-endian uint32 length prefix + JSON body ---

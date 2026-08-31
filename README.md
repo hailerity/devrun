@@ -11,6 +11,7 @@ with a live TUI dashboard and persistent logs.
 ## Features
 
 - **Register once, run anywhere** — save commands with names, no more muscle memory required
+- **Targets** — group a subset of services under a name and start/stop them as a unit
 - **Project-local configs** — commit a `devrun.yaml` and every command auto-uses it in that directory
 - **Live TUI dashboard** — see all services, CPU/mem, uptime, and tail logs in one view
 - **Persistent logs** — every service writes to its own log file; inspect anytime
@@ -111,6 +112,27 @@ devrun list --global   # ignore devrun.yaml, act on the global registry
 | `devrun stop <name>` | Stop a service |
 | `devrun stop --all` | Stop all running services |
 
+### Targets
+
+A target is a named subset of services you can start and stop together — handy
+when a config holds many services but you only need a few at a time.
+
+| Command | Description |
+|---|---|
+| `devrun target create <name>` | Create a new, empty target |
+| `devrun target add <name> <service>...` | Add services to a target (creates it if needed) |
+| `devrun target rm <name> [service]...` | Remove services, or the whole target when none are given |
+| `devrun target list` | List targets, their members, and which are running |
+| `devrun target start <name>` | Start every service in the target |
+| `devrun target stop <name>` | Stop the target's services, keeping any still held by another running target |
+
+Targets are stored in whichever config is active — the project `devrun.yaml`
+when one is present, otherwise the global `services.yaml`. `target stop` uses the
+member list captured when the target was started, so editing membership while it
+runs doesn't change what a later stop releases. It stops every member in that
+snapshot — including any that were already running when the target started —
+except services another active target still holds.
+
 ### Observability
 
 | Command | Description |
@@ -141,7 +163,7 @@ devrun list --global   # ignore devrun.yaml, act on the global registry
 
 Every command picks its config automatically:
 
-- If the current directory contains a `devrun.yaml`, that file is the config — `list`, `start`, `stop`, `info`, `add`, `remove`, and the TUI dashboard all operate only on its services, and `add`/`remove` edit the file in place.
+- If the current directory contains a `devrun.yaml`, that file is the config — `list`, `start`, `stop`, `info`, `add`, `remove`, `target`, and the TUI dashboard all operate only on its services, and `add`/`remove`/`target` edit the file in place.
 - Otherwise the global registry (`~/.config/devrun/services.yaml`) is used, which holds only services you registered with `devrun add`.
 - `--global` / `-g` forces the global registry even when a `devrun.yaml` is present (not valid for `up`/`down`).
 
@@ -166,6 +188,14 @@ services:
     command: go run ./cmd/api
     env:
       PORT: "4000"
+
+  db:
+    command: postgres -D ./pgdata
+
+# Optional: named subsets you can start/stop as a unit.
+targets:
+  frontend: [web]
+  backend:  [api, db]
 ```
 
 ### Global registry: `~/.config/devrun/services.yaml`
@@ -179,15 +209,24 @@ Managed automatically by `devrun add/remove`. You can also edit it directly.
 ```
 ⬡ devrun  3 running / 4 total
 ──────────────────────────────────────────────────────────────
-SERVICES │ LOGS
-─────────│─────────────────────────────────────────────────────
-● web    │ → GET  /api/users    200  12ms
-● api    │ → POST /api/auth     201  45ms
-○ db     │ → GET  /api/profile  200   8ms
-○ worker │
+TARGETS      │ LOGS
+─────────────│─────────────────────────────────────────────────
+  All services
+● frontend   │ → GET  /api/users    200  12ms
+○ backend    │ → POST /api/auth     201  45ms
+             │
+SERVICES     │
+─────────────│
+● web        │ → GET  /api/profile  200   8ms
+● api        │
 ─────────────────────────────────────────────────────────────
 Tab switch  ↵ details  s start  x stop  q quit
 ```
+
+The **TARGETS** list appears only when the active config defines targets.
+Selecting a target filters the SERVICES list to its members; `All services`
+clears the filter. With a target row selected, `s` / `x` start / stop the whole
+target instead of a single service.
 
 **Navigation:**
 
@@ -200,12 +239,12 @@ Tab switch  ↵ details  s start  x stop  q quit
 | `↵` | Toggle DETAILS / LOGS for the selected service |
 | `Esc` | Back out of DETAILS to LOGS |
 
-**Service control (sidebar focused):**
+**Service / target control (sidebar focused):**
 
 | Key | Action |
 |---|---|
-| `s` | Start selected service |
-| `x` | Stop selected service |
+| `s` | Start the selected service, or the selected target |
+| `x` | Stop the selected service, or the selected target |
 
 **Log panel (main panel focused, Logs tab):**
 

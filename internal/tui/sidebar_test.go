@@ -22,31 +22,31 @@ func TestSidebar_AlphabeticalOrder(t *testing.T) {
 		{Name: "zoo", State: "running"},
 		{Name: "api", State: "stopped"},
 		{Name: "web", State: "running"},
-	})
+	}, nil)
 	assert.Equal(t, []string{"api", "web", "zoo"}, svcNames(sb))
 }
 
 func TestSidebar_SelectionPreservedByName(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}}, nil)
 	sb.selected = 1 // "web"
 
-	sb.update([]ipc.ServiceInfo{{Name: "zoo"}, {Name: "web", State: "running"}, {Name: "api"}})
+	sb.update([]ipc.ServiceInfo{{Name: "zoo"}, {Name: "web", State: "running"}, {Name: "api"}}, nil)
 	assert.Equal(t, 1, sb.selected) // still index of "web" after re-sort
 }
 
 func TestSidebar_SelectionFallsBackWhenServiceGone(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}}, nil)
 	sb.selected = 2 // "zoo"
 
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}}, nil)
 	assert.Equal(t, 0, sb.selected) // "zoo" gone, falls back to 0
 }
 
 func TestSidebar_MoveUpDownWraps(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}, {Name: "zoo"}}, nil)
 
 	// moveUp from first wraps to last
 	sb.selected = 0
@@ -114,7 +114,7 @@ func TestTruncateName_TinyWidths(t *testing.T) {
 
 func TestSidebar_InfoBlockPinnedToBottom(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}})
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}}, nil)
 	sb.selected = 0
 
 	const h = 20
@@ -142,7 +142,7 @@ func TestSidebar_LongListStillRenders(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		svcs = append(svcs, ipc.ServiceInfo{Name: "service-" + string(rune('a'+i%26))})
 	}
-	sb.update(svcs)
+	sb.update(svcs, nil)
 
 	// height smaller than the list — gap must clamp, not go negative or panic.
 	lines := strings.Split(sb.render(26, 12, false), "\n")

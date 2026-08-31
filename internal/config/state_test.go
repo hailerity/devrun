@@ -42,6 +42,22 @@ func TestState_MissingFile(t *testing.T) {
 	s, err := config.LoadState(path)
 	require.NoError(t, err)
 	assert.Empty(t, s.Services)
+	assert.NotNil(t, s.ActiveTargets)
+	assert.Empty(t, s.ActiveTargets)
+}
+
+func TestState_ActiveTargetsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	s := &config.State{
+		Version:       1,
+		Services:      map[string]*config.ServiceState{},
+		ActiveTargets: map[string][]string{"project-1": {"web", "api"}},
+	}
+	require.NoError(t, config.SaveState(path, s))
+
+	loaded, err := config.LoadState(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web", "api"}, loaded.ActiveTargets["project-1"])
 }
 
 func TestState_AtomicWrite(t *testing.T) {

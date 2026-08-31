@@ -29,7 +29,11 @@ func Resolve(dir string, global bool) (*Registry, Source, error) {
 			return nil, Source{}, err
 		}
 		if proj != nil {
-			reg := &Registry{Version: "1", Services: proj.ToServiceConfigs(dir)}
+			reg := &Registry{
+				Version:  "1",
+				Services: proj.ToServiceConfigs(dir),
+				Targets:  proj.Targets,
+			}
 			return reg, Source{Local: filepath.Join(dir, ProjectFileName), Dir: dir}, nil
 		}
 	}
