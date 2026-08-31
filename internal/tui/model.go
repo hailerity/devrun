@@ -408,10 +408,66 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 		m.editC.errMsg = err.Error()
 		return m, nil
 	}
+	wasRunning := m.serviceIsRunning(oldName)
 	m.applyEditToRegistry(oldName, name, command, cwd)
 	m.editC.close()
+
+	if wasRunning {
+		// A running service keeps its old definition (and, on rename, its old
+		// name) until it is restarted — do that now so the edit takes effect.
+		m.footerC.showToast("restarting " + name)
+		return m, tea.Sequence(
+			m.doRestartForEdit(oldName, name, m.registry.Services[name]),
+			m.pollDaemon(),
+		)
+	}
 	m.footerC.showToast("saved " + name)
 	return m, m.pollDaemon()
+}
+
+// serviceIsRunning reports whether the sidebar's last daemon view shows the
+// named service running.
+func (m model) serviceIsRunning(name string) bool {
+	for _, s := range m.sidebarC.allServices {
+		if s.Name == name {
+			return s.State == "running"
+		}
+	}
+	return false
+}
+
+// doRestartForEdit stops oldName then starts newName with cfg, so an edit (or a
+// rename) to a running service takes effect immediately. cfg is shipped inline
+// like doStart, so a project service the daemon has not seen still starts.
+func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConfig) tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	sp := m.socketPath
+	return func() tea.Msg {
+		if msg := dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("stop", ipc.StopPayload{Name: oldName})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return nil
+		}); msg != nil {
+			return msg
+		}
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("start", ipc.StartPayload{Name: newName, Config: cfg})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
+	}
 }
 
 // applyEditToRegistry mirrors the just-persisted edit into the in-memory

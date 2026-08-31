@@ -14,8 +14,13 @@ import (
 )
 
 // editModel builds a 120x40 model backed by a temp project devrun.yaml holding
-// one service "web", with the sidebar focused on it.
+// one service "web" (reported "stopped"), with the sidebar focused on it.
 func editModel(t *testing.T, command string) (model, string) {
+	t.Helper()
+	return editModelState(t, command, "stopped")
+}
+
+func editModelState(t *testing.T, command, state string) (model, string) {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, config.ProjectFileName),
@@ -27,7 +32,7 @@ func editModel(t *testing.T, command string) (model, string) {
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = m2.(model)
 	m2, _ = m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
-		Services: []ipc.ServiceInfo{{Name: "web", State: "stopped"}},
+		Services: []ipc.ServiceInfo{{Name: "web", State: state}},
 	}})
 	return m2.(model), dir
 }
@@ -100,6 +105,32 @@ func TestModel_EditRenamePersists(t *testing.T) {
 	proj, _ := config.LoadProject(dir)
 	assert.Contains(t, proj.Services, "ui")
 	assert.NotContains(t, proj.Services, "web")
+}
+
+func TestModel_EditSaveRestartsRunningService(t *testing.T) {
+	m, _ := editModelState(t, "run", "running")
+	m = pressE(t, m)
+	m.editC.inputs[fieldName].SetValue("ui") // rename a running service
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+
+	assert.False(t, m.editC.open)
+	assert.NotNil(t, cmd, "a restart command is issued")
+	assert.Contains(t, m.footerC.toast, "restarting", "toast announces the restart")
+	assert.Contains(t, m.registry.Services, "ui")
+}
+
+func TestModel_EditSaveDoesNotRestartStoppedService(t *testing.T) {
+	m, _ := editModelState(t, "run", "stopped")
+	m = pressE(t, m)
+	m.editC.focusDelta(1)
+	m.editC.inputs[fieldCommand].SetValue("run2")
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+
+	assert.Equal(t, "saved web", m.footerC.toast, "a stopped service is only saved, not restarted")
 }
 
 func mustFirst(m model, _ string) model { return m }
