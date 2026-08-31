@@ -67,6 +67,7 @@ type model struct {
 
 	socketPath string
 	registry   *config.Registry
+	source     config.Source // where the registry was resolved from — the file service edits write back to
 	logDir     string
 
 	spinFrame int
@@ -75,11 +76,12 @@ type model struct {
 	cb clipboard
 }
 
-func newModel(socketPath string, reg *config.Registry, logDir string, cb clipboard) model {
+func newModel(socketPath string, reg *config.Registry, src config.Source, logDir string, cb clipboard) model {
 	return model{
 		logsC:      newLogsPanel(),
 		socketPath: socketPath,
 		registry:   reg,
+		source:     src,
 		logDir:     logDir,
 		cb:         cb,
 	}
@@ -647,9 +649,10 @@ func (m model) View() string {
 
 // Run starts the devrun TUI. Called from cli/root.go.
 // The daemon must be running at socketPath; a fresh connection is dialed per request.
-func Run(socketPath string, reg *config.Registry, logDir string) error {
+// src is the config the registry was resolved from — the file the service editor writes back to.
+func Run(socketPath string, reg *config.Registry, src config.Source, logDir string) error {
 	cb := detectClipboard()
-	m := newModel(socketPath, reg, logDir, cb)
+	m := newModel(socketPath, reg, src, logDir, cb)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),

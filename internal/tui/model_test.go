@@ -96,7 +96,7 @@ func TestModel_QuitKeyReturnsQuitCmd(t *testing.T) {
 // setupLogModel returns a model sized to 100x30 with the log tab active and
 // 20 log lines pre-loaded, ready for mouse/keyboard testing.
 func setupLogModel() model {
-	m := newModel("", nil, "", clipboard{})
+	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m2.(model)
 	m.activeTab = tabLogs
@@ -343,7 +343,7 @@ func TestModel_EnterIgnoredDuringVisualSelection(t *testing.T) {
 // targetFocusedModel returns a 120x40 model with one real target ("backend")
 // highlighted in the sidebar's TARGETS section.
 func targetFocusedModel() model {
-	m := newModel("", nil, "", clipboard{})
+	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = m2.(model)
 	m.sidebarC.update(
