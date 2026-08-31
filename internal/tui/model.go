@@ -218,16 +218,19 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 		}
 
-	// Enter toggles LOGS <-> DETAILS for the selected service. DETAILS is a
-	// read-only overlay, not a focus target: focus stays on the sidebar so j/k
-	// keeps walking services and the panel updates live. Ignored mid-selection.
-	// With a target row focused the main pane already shows that target's
-	// detail, so there is nothing to toggle (target selection is issue #21).
+	// Enter on a target row selects that target as the service filter (or
+	// clears it if already selected) and returns to LOGS. Elsewhere it toggles
+	// LOGS <-> DETAILS for the selected service. DETAILS is a read-only overlay,
+	// not a focus target: focus stays on the sidebar so j/k keeps walking
+	// services and the panel updates live. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
-		if m.focusedTarget() != nil {
-			break
-		}
 		switch {
+		case m.onTargetRow():
+			m.sidebarC.toggleTargetSelection()
+			m.activeTab = tabLogs
+			m.updateLogFile()
+		case m.focusedTarget() != nil:
+			// A target roll-up already fills the main pane — nothing to toggle.
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -410,6 +413,14 @@ func (m *model) updateLogFile() {
 	}
 }
 
+// onTargetRow reports whether the sidebar has focus with its cursor parked on a
+// target row — the state in which Enter selects a filter rather than toggling
+// DETAILS. The sidebar's section persists after focus leaves it, so the focus
+// check is what keeps Enter in the LOGS panel meaning "details".
+func (m model) onTargetRow() bool {
+	return m.focus == focusSidebar && m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets()
+}
+
 const (
 	sidebarMinW = 24
 	sidebarMaxW = 40
@@ -430,7 +441,7 @@ func (m model) sidebarWidth() int {
 		if label == "" {
 			label = allServicesLabel
 		}
-		if n := lipgloss.Width(label) + 3; n > w {
+		if n := lipgloss.Width(label) + 4; n > w { // +1 vs services for the filter marker gutter
 			w = n
 		}
 	}
@@ -626,7 +637,7 @@ func (m model) View() string {
 	)
 
 	// Footer
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }

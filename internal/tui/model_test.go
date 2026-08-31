@@ -205,6 +205,74 @@ func TestModel_EnterTogglesDetails(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus)
 }
 
+// TestModel_EnterSelectsTargetFilter verifies Enter on a target row toggles the
+// service filter instead of the LOGS/DETAILS view.
+func TestModel_EnterSelectsTargetFilter(t *testing.T) {
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+	assert.Equal(t, []string{"web"}, svcNames(&m.sidebarC))
+	assert.Equal(t, tabLogs, m.activeTab, "Enter on a target must not open DETAILS")
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter again clears the filter")
+}
+
+// targetFilterModel returns a 120x40 model with a "frontend" target (member:
+// web) and the sidebar cursor parked on that target row, focus on the sidebar.
+func targetFilterModel(t *testing.T) model {
+	t.Helper()
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+	m.focus = focusSidebar
+	return m
+}
+
+// TestModel_EnterInMainPanelDoesNotFilter verifies the target-filter toggle is
+// gated on sidebar focus: with focus on the main panel, Enter neither selects a
+// filter nor opens service DETAILS — the target roll-up (PR #23) owns the pane
+// while the cursor sits on a real target row.
+func TestModel_EnterInMainPanelDoesNotFilter(t *testing.T) {
+	m := targetFilterModel(t)
+	m.focus = focusMain
+	m.activeTab = tabLogs
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter from the main panel must not touch the filter")
+	assert.Equal(t, tabLogs, m.activeTab, "target detail owns the pane; Enter does not open service DETAILS")
+}
+
+// TestModel_EnterOnTargetClosesDetails verifies selecting a filter from the
+// targets section also drops the DETAILS overlay back to LOGS.
+func TestModel_EnterOnTargetClosesDetails(t *testing.T) {
+	m := targetFilterModel(t)
+	m.activeTab = tabDetails
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, tabLogs, m.activeTab, "DETAILS closes when a filter is toggled")
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+}
+
 // TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
 // from the focused LOGS panel hands focus back to the sidebar.
 func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {
