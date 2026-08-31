@@ -48,13 +48,23 @@ type ServiceState struct {
 type State struct {
 	Version  int                      `json:"version"`
 	Services map[string]*ServiceState `json:"services"`
+	// ActiveTargets maps a currently-started target to the member service names
+	// captured when it was started. `devrun target stop` consults this snapshot —
+	// not the live config — so editing a target's membership while it runs does
+	// not change what a later stop releases. A service is left running on stop if
+	// it still appears under another active target.
+	ActiveTargets map[string][]string `json:"active_targets,omitempty"`
 }
 
 // LoadState reads state.json. Returns an empty state if the file does not exist.
 func LoadState(path string) (*State, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return &State{Version: 1, Services: make(map[string]*ServiceState)}, nil
+		return &State{
+			Version:       1,
+			Services:      make(map[string]*ServiceState),
+			ActiveTargets: make(map[string][]string),
+		}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read state: %w", err)
@@ -65,6 +75,9 @@ func LoadState(path string) (*State, error) {
 	}
 	if s.Services == nil {
 		s.Services = make(map[string]*ServiceState)
+	}
+	if s.ActiveTargets == nil {
+		s.ActiveTargets = make(map[string][]string)
 	}
 	return &s, nil
 }
