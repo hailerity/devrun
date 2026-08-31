@@ -37,7 +37,7 @@ type supervisor struct {
 	activeTargets map[string][]string
 	statePath     string
 	registry      *config.Registry
-	stopDaemon func() // called by IPC daemon-stop; set by server.go
+	stopDaemon    func() // called by IPC daemon-stop; set by server.go
 	// onReexec stops this daemon after a replacement has been launched, leaving
 	// managed services running. Set by server.go once the listener is up; a nil
 	// value makes the daemon-reexec request report "unsupported".
@@ -81,6 +81,7 @@ func (s *supervisor) loadState() error {
 	if state.ActiveTargets != nil {
 		s.activeTargets = state.ActiveTargets
 	}
+	s.reconcileActiveTargetsLocked()
 	return s.saveStateLocked()
 }
 
@@ -396,7 +397,8 @@ func (s *supervisor) stopService(name string) *ipc.Response {
 // handleTargetStart starts every service listed in the payload, then records the
 // target as active with the member names as its snapshot. Members already
 // running are left as-is; a member that fails to start is reported but does not
-// abort the rest.
+// abort the rest. The target is recorded active only when at least one member is
+// running as a result — a target where every member failed is not marked active.
 func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 	var p ipc.TargetStartPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -412,6 +414,7 @@ func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 	members := make([]string, 0, len(p.Services))
 	seen := make(map[string]bool, len(p.Services))
 	var failures []string
+	startedOK := 0
 	for _, cfg := range p.Services {
 		if cfg == nil || cfg.Name == "" || seen[cfg.Name] {
 			continue
@@ -420,9 +423,17 @@ func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 		members = append(members, cfg.Name)
 
 		resp := s.startService(cfg.Name, cfg)
-		if !resp.OK && !strings.Contains(resp.Error, "already running") {
+		switch {
+		case resp.OK || strings.Contains(resp.Error, "already running"):
+			startedOK++
+		default:
 			failures = append(failures, fmt.Sprintf("%s: %s", cfg.Name, resp.Error))
 		}
+	}
+
+	if startedOK == 0 {
+		return errResp(fmt.Sprintf("target %q: no services started: %s",
+			p.Name, strings.Join(failures, "; ")))
 	}
 
 	s.mu.Lock()
@@ -439,6 +450,8 @@ func (s *supervisor) handleTargetStart(raw json.RawMessage) *ipc.Response {
 // handleTargetStop stops the members of an active target, skipping any that are
 // still listed under another active target, then clears the target. The member
 // list comes from the snapshot taken at target-start time, not the live config.
+// The target is deregistered only after every stop succeeds; a partial failure
+// leaves it active so a retry can finish the job.
 func (s *supervisor) handleTargetStop(raw json.RawMessage) *ipc.Response {
 	var p ipc.TargetStopPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -470,8 +483,6 @@ func (s *supervisor) handleTargetStop(raw json.RawMessage) *ipc.Response {
 			toStop = append(toStop, m)
 		}
 	}
-	delete(s.activeTargets, p.Name)
-	_ = s.saveStateLocked()
 	s.mu.Unlock()
 
 	var failures []string
@@ -484,7 +495,35 @@ func (s *supervisor) handleTargetStop(raw json.RawMessage) *ipc.Response {
 	if len(failures) > 0 {
 		return errResp(fmt.Sprintf("target %q: %s", p.Name, strings.Join(failures, "; ")))
 	}
+
+	s.mu.Lock()
+	delete(s.activeTargets, p.Name)
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
 	return &ipc.Response{OK: true}
+}
+
+// reconcileActiveTargetsLocked drops any active target whose snapshot members
+// are all in a terminal state — none running, starting, or stopping. It runs on
+// daemon startup (a target whose services died while the daemon was gone should
+// not come back "active") and on each list. Returns whether anything changed.
+// Callers must hold s.mu.
+func (s *supervisor) reconcileActiveTargetsLocked() bool {
+	changed := false
+	for name, members := range s.activeTargets {
+		live := false
+		for _, m := range members {
+			if svc := s.services[m]; svc != nil && svc.state.Status.IsLive() {
+				live = true
+				break
+			}
+		}
+		if !live {
+			delete(s.activeTargets, name)
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (s *supervisor) handleRemove(raw json.RawMessage) *ipc.Response {
@@ -508,6 +547,13 @@ func (s *supervisor) handleList() *ipc.Response {
 	// Fresh registry read so services added via `devrun add` appear immediately,
 	// even before they have been started for the first time.
 	reg, _ := config.LoadRegistry(config.RegistryPath())
+
+	// Drop active targets whose services have all exited before reporting.
+	s.mu.Lock()
+	if s.reconcileActiveTargetsLocked() {
+		_ = s.saveStateLocked()
+	}
+	s.mu.Unlock()
 
 	// Collect a snapshot of state fields under the read lock so that blocking
 	// syscalls (CPUPercent, MemBytes) do not hold the lock and stall writers.

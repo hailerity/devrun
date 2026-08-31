@@ -185,7 +185,9 @@ var targetStopCmd = &cobra.Command{
 		name := args[0]
 		c, err := client.Connect(config.SocketPath())
 		if err != nil {
-			return fmt.Errorf("connect to daemon: %w", err)
+			// No daemon means nothing is running, so nothing to stop. Match
+			// `devrun stop`: don't auto-start a daemon just to stop a target.
+			return fmt.Errorf("no daemon running — target %q is not running", name)
 		}
 		defer c.Close()
 

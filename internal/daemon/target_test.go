@@ -157,6 +157,101 @@ func TestHandleTargetStop_KeepsServiceHeldByAnotherTarget(t *testing.T) {
 	sup.mu.RUnlock()
 }
 
+// If every member fails to start, the target is not recorded active.
+func TestHandleTargetStart_AllMembersFailNotRecorded(t *testing.T) {
+	sup := targetTestSupervisor(t)
+	defer stopEverything(t, sup)
+
+	bad := func(name string) *config.ServiceConfig {
+		return &config.ServiceConfig{Name: name, Command: "   "} // rejected: empty command
+	}
+	resp := sup.handleTargetStart(mustMarshal(t, ipc.TargetStartPayload{
+		Name:     "project-1",
+		Services: []*config.ServiceConfig{bad("web"), bad("api")},
+	}))
+	assert.False(t, resp.OK)
+
+	sup.mu.RLock()
+	_, recorded := sup.activeTargets["project-1"]
+	sup.mu.RUnlock()
+	assert.False(t, recorded, "a target with no started services is not active")
+
+	listResp := sup.handleList()
+	var lp ipc.ListResponsePayload
+	require.NoError(t, json.Unmarshal(listResp.Payload, &lp))
+	assert.Empty(t, lp.ActiveTargets)
+}
+
+// A partial start (one member up, one down) still records the target active so
+// `target stop` can clean it up.
+func TestHandleTargetStart_PartialFailureStillRecorded(t *testing.T) {
+	sup := targetTestSupervisor(t)
+	defer stopEverything(t, sup)
+
+	resp := sup.handleTargetStart(mustMarshal(t, ipc.TargetStartPayload{
+		Name: "project-1",
+		Services: []*config.ServiceConfig{
+			svcCfg("web"),
+			{Name: "api", Command: "   "}, // fails
+		},
+	}))
+	assert.False(t, resp.OK, "reports the failed member")
+
+	sup.mu.RLock()
+	assert.Equal(t, []string{"web", "api"}, sup.activeTargets["project-1"])
+	sup.mu.RUnlock()
+	assert.Equal(t, config.StatusRunning, serviceState(sup, "web"))
+}
+
+func TestReconcileActiveTargets_PrunesTargetsWithNoLiveMember(t *testing.T) {
+	sup := targetTestSupervisor(t)
+	sup.services["dead"] = &managedService{
+		cfg:   &config.ServiceConfig{Name: "dead"},
+		state: &config.ServiceState{Status: config.StatusCrashed},
+	}
+	sup.services["alive"] = &managedService{
+		cfg:   &config.ServiceConfig{Name: "alive"},
+		state: &config.ServiceState{Status: config.StatusRunning},
+	}
+	sup.activeTargets = map[string][]string{
+		"gone": {"dead", "missing"},
+		"kept": {"dead", "alive"},
+	}
+
+	sup.mu.Lock()
+	changed := sup.reconcileActiveTargetsLocked()
+	sup.mu.Unlock()
+
+	assert.True(t, changed)
+	_, gone := sup.activeTargets["gone"]
+	assert.False(t, gone, "target with only dead/missing members is pruned")
+	_, kept := sup.activeTargets["kept"]
+	assert.True(t, kept, "target with a running member is kept")
+}
+
+// loadState drops an active target whose services are no longer alive after a
+// daemon restart.
+func TestLoadState_ReconcilesStaleActiveTargets(t *testing.T) {
+	sup := targetTestSupervisor(t)
+
+	deadPID := 999999999
+	seed := &config.State{
+		Version: 1,
+		Services: map[string]*config.ServiceState{
+			"web": {Status: config.StatusRunning, PID: &deadPID},
+		},
+		ActiveTargets: map[string][]string{"project-1": {"web"}},
+	}
+	require.NoError(t, config.SaveState(sup.statePath, seed))
+
+	require.NoError(t, sup.loadState())
+
+	sup.mu.RLock()
+	_, active := sup.activeTargets["project-1"]
+	sup.mu.RUnlock()
+	assert.False(t, active, "web's PID is dead → target pruned on load")
+}
+
 func TestHandleTargetStop_NotActive(t *testing.T) {
 	sup := targetTestSupervisor(t)
 
