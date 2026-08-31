@@ -41,7 +41,7 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, width int) string {
+func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targetFocused bool, width int) string {
 	base := lipgloss.NewStyle().
 		Width(width).
 		BorderTop(true).
@@ -54,13 +54,17 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, 
 
 	var hints []string
 	hints = append(hints, renderHint("Tab", "switch"))
-	if activeTab == tabDetails {
-		hints = append(hints, renderHint("↵", "logs"))
-	} else {
-		hints = append(hints, renderHint("↵", "details"))
-	}
-	if focus == focusMain && activeTab == tabLogs {
-		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
+	// A focused target row shows target detail in the main pane; the log-pane
+	// shortcuts (Enter to toggle DETAILS, copy, follow) do not apply.
+	if !targetFocused {
+		if activeTab == tabDetails {
+			hints = append(hints, renderHint("↵", "logs"))
+		} else {
+			hints = append(hints, renderHint("↵", "details"))
+		}
+		if focus == focusMain && activeTab == tabLogs {
+			hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
+		}
 	}
 	if visualMode {
 		hints = append(hints, renderHint("Esc", "cancel"))
