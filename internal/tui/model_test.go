@@ -203,6 +203,30 @@ func TestModel_EnterTogglesDetails(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus)
 }
 
+// TestModel_EnterSelectsTargetFilter verifies Enter on a target row toggles the
+// service filter instead of the LOGS/DETAILS view.
+func TestModel_EnterSelectsTargetFilter(t *testing.T) {
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"frontend": {"web"}},
+	}}
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 1 // "frontend"
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+	assert.Equal(t, []string{"web"}, svcNames(&m.sidebarC))
+	assert.Equal(t, tabLogs, m.activeTab, "Enter on a target must not open DETAILS")
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "Enter again clears the filter")
+}
+
 // TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
 // from the focused LOGS panel hands focus back to the sidebar.
 func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {

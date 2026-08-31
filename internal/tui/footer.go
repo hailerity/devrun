@@ -41,7 +41,7 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, width int) string {
+func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, onTargetRow bool, width int) string {
 	base := lipgloss.NewStyle().
 		Width(width).
 		BorderTop(true).
@@ -54,9 +54,12 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode bool, 
 
 	var hints []string
 	hints = append(hints, renderHint("Tab", "switch"))
-	if activeTab == tabDetails {
+	switch {
+	case onTargetRow:
+		hints = append(hints, renderHint("↵", "filter"))
+	case activeTab == tabDetails:
 		hints = append(hints, renderHint("↵", "logs"))
-	} else {
+	default:
 		hints = append(hints, renderHint("↵", "details"))
 	}
 	if focus == focusMain && activeTab == tabLogs {

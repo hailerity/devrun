@@ -79,22 +79,64 @@ func TestSidebar_WithTargets_CircularCursor(t *testing.T) {
 	assert.Equal(t, 0, sb.targetSel)
 }
 
-func TestSidebar_TargetCursorFiltersServices(t *testing.T) {
+func TestSidebar_TargetCursorDoesNotFilter(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "db", "web"), targetRows())
 
-	// Move onto t1 (members: web).
+	// Walk the cursor onto t1 (members: web) without pressing Enter.
 	sb.section = sectionServices
 	sb.selected = 0
-	sb.moveUp()            // → targets[last] == t2
-	sb.moveUp()            // → t1
+	sb.moveUp() // → targets[last] == t2
+	sb.moveUp() // → t1
 	require.Equal(t, "t1", sb.targets[sb.targetSel].name)
-	assert.Equal(t, []string{"web"}, svcNames(sb), "list filtered to t1's members")
+	assert.Empty(t, sb.filterTarget, "cursor movement alone selects nothing")
+	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb), "list stays unfiltered")
+}
 
-	// Move onto "All services".
-	sb.moveUp()
-	require.Equal(t, "", sb.targets[sb.targetSel].name)
-	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb), "All services shows everything")
+func TestSidebar_EnterSelectsAndClearsFilter(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(svcs("api", "db", "web"), targetRows())
+
+	sb.section = sectionTargets
+	sb.targetSel = 1 // t1 (members: web)
+
+	sb.toggleTargetSelection()
+	assert.Equal(t, "t1", sb.filterTarget)
+	assert.Equal(t, []string{"web"}, svcNames(sb), "filtered to t1's members")
+
+	// Enter again on the same row clears it.
+	sb.toggleTargetSelection()
+	assert.Empty(t, sb.filterTarget)
+	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb))
+}
+
+func TestSidebar_EnterAllServicesClearsFilter(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(svcs("api", "db", "web"), targetRows())
+	sb.section = sectionTargets
+
+	sb.targetSel = 2 // t2
+	sb.toggleTargetSelection()
+	require.Equal(t, "t2", sb.filterTarget)
+
+	sb.targetSel = 0 // "All services"
+	sb.toggleTargetSelection()
+	assert.Empty(t, sb.filterTarget, "All services row always clears the filter")
+	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb))
+}
+
+func TestSidebar_FilterMarkerShownWhileCursorElsewhere(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(svcs("api", "web"), targetRows())
+	sb.section = sectionTargets
+	sb.targetSel = 1 // t1
+	sb.toggleTargetSelection()
+
+	// Move the cursor away; the filter (and its ▸ marker) must persist.
+	sb.targetSel = 2
+	out := plain(sb.render(30, 24, true))
+	assert.Contains(t, out, "▸")
+	require.Equal(t, "t1", sb.filterTarget)
 }
 
 func TestSidebar_SelectedTargetOnlyInTargetsSection(t *testing.T) {
@@ -120,11 +162,31 @@ func TestSidebar_TargetSelectionPreservedAcrossUpdate(t *testing.T) {
 	sb.update(svcs("api", "web"), targetRows())
 	sb.section = sectionTargets
 	sb.targetSel = 2 // t2
+	sb.toggleTargetSelection()
+	require.Equal(t, "t2", sb.filterTarget)
 
-	// A fresh poll with the same targets in the same order.
+	// A fresh poll with the same targets in the same order keeps both the
+	// cursor (by name) and the selected filter.
 	sb.update(svcs("api", "web"), targetRows())
 	assert.Equal(t, 2, sb.targetSel, "cursor stays on t2 by name")
-	assert.Equal(t, "t2", sb.filterTarget)
+	assert.Equal(t, "t2", sb.filterTarget, "selected filter survives the poll")
+}
+
+func TestSidebar_FilterClearedWhenTargetVanishes(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(svcs("api", "web"), targetRows())
+	sb.section = sectionTargets
+	sb.targetSel = 2 // t2
+	sb.toggleTargetSelection()
+	require.Equal(t, "t2", sb.filterTarget)
+
+	// t2 is gone from the next poll.
+	sb.update(svcs("api", "web"), []sidebarTarget{
+		{name: ""},
+		{name: "t1", members: []string{"web"}, active: true},
+	})
+	assert.Empty(t, sb.filterTarget, "filter drops when its target no longer exists")
+	assert.Equal(t, []string{"api", "web"}, svcNames(sb))
 }
 
 func TestSidebar_RendersTargetsBlock(t *testing.T) {
@@ -158,7 +220,7 @@ func TestModel_SidebarWidth_GrowsForLongTargetName(t *testing.T) {
 	m := model{width: 200}
 	m.sidebarC.allServices = []ipc.ServiceInfo{{Name: "a"}}
 	m.sidebarC.targets = []sidebarTarget{{name: ""}, {name: "a-very-long-target-name-here"}}
-	assert.Equal(t, len("a-very-long-target-name-here")+3, m.sidebarWidth())
+	assert.Equal(t, len("a-very-long-target-name-here")+4, m.sidebarWidth())
 }
 
 func TestModel_BuildTargets_EmptyWhenNoTargets(t *testing.T) {
@@ -189,7 +251,7 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 	sb.update(svcs("web"), targetRows())
 	sb.section = sectionTargets
 	sb.targetSel = 2
-	sb.onTargetCursorMoved()
+	sb.toggleTargetSelection()
 	require.Empty(t, sb.services)
 
 	out := plain(sb.render(30, 24, true))

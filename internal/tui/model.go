@@ -206,11 +206,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusSidebar
 		}
 
-	// Enter toggles LOGS <-> DETAILS for the selected service. DETAILS is a
-	// read-only overlay, not a focus target: focus stays on the sidebar so j/k
-	// keeps walking services and the panel updates live. Ignored mid-selection.
+	// Enter on a target row selects that target as the service filter (or clears
+	// it if already selected). Elsewhere it toggles LOGS <-> DETAILS for the
+	// selected service. DETAILS is a read-only overlay, not a focus target:
+	// focus stays on the sidebar so j/k keeps walking services and the panel
+	// updates live. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
+		case m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets():
+			m.sidebarC.toggleTargetSelection()
+			m.updateLogFile()
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -384,7 +389,7 @@ func (m model) sidebarWidth() int {
 		if label == "" {
 			label = allServicesLabel
 		}
-		if n := lipgloss.Width(label) + 3; n > w {
+		if n := lipgloss.Width(label) + 4; n > w { // +1 vs services for the filter marker gutter
 			w = n
 		}
 	}
@@ -580,7 +585,8 @@ func (m model) View() string {
 	)
 
 	// Footer
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.width)
+	onTargetRow := m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets()
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, onTargetRow, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
