@@ -338,9 +338,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // onServiceRow reports whether the sidebar has focus with its cursor on a
-// service row (not a target row) and a service is selected.
+// service row (not a target row), a service is selected, and there is a registry
+// to persist an edit to. It gates both the `e` key and the footer's edit hint.
 func (m model) onServiceRow() bool {
 	return m.focus == focusSidebar &&
+		m.registry != nil &&
 		(!m.sidebarC.hasTargets() || m.sidebarC.section == sectionServices) &&
 		m.sidebarC.selectedService() != nil
 }
@@ -397,6 +399,10 @@ func (m model) serviceNames() map[string]bool {
 // registry, and closes the modal. Validation or persistence errors keep the
 // modal open with the error shown.
 func (m model) saveEditor() (tea.Model, tea.Cmd) {
+	if m.registry == nil {
+		m.editC.errMsg = "no config loaded"
+		return m, nil
+	}
 	if problem := m.editC.validate(m.serviceNames()); problem != "" {
 		m.editC.errMsg = problem
 		return m, nil
@@ -448,6 +454,13 @@ func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConf
 		// Best-effort stop of the old name — the daemon may already consider it
 		// stopped (a stale sidebar view). Always proceed to start; a genuinely
 		// unreachable daemon still surfaces through the start error below.
+		//
+		// The naive stop-then-start is safe even for a command-only edit (same
+		// name): dial blocks until the daemon's stopService -> TerminateGroup
+		// has polled the old process dead, startService only rejects an entry in
+		// StatusRunning/StatusStarting (a just-stopped one is Stopping/Stopped),
+		// and watchExit mutates its captured *managedService rather than
+		// s.services[name], so a re-start under the same name is not clobbered.
 		_ = dial(sp, func(c *client.Client) tea.Msg {
 			_, _ = c.Send("stop", ipc.StopPayload{Name: oldName})
 			return nil

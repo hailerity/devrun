@@ -152,3 +152,17 @@ func TestModel_EditSaveDoesNotRestartStoppedService(t *testing.T) {
 }
 
 func mustFirst(m model, _ string) model { return m }
+
+func TestModel_EditKeyIgnoredWithoutRegistry(t *testing.T) {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m2, _ = m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
+		Services: []ipc.ServiceInfo{{Name: "web", State: "stopped"}},
+	}})
+	m = m2.(model)
+	require.NotNil(t, m.sidebarC.selectedService())
+
+	assert.False(t, m.onServiceRow(), "no registry → nothing to persist an edit to")
+	assert.False(t, pressE(t, m).editC.open, "e is inert without a registry")
+}

@@ -78,6 +78,9 @@ func editProjectService(dir, oldName, newName, command, cwd string) error {
 	updated.Command = command
 	updated.CWD = relProjectCWD(dir, cwd)
 
+	// A project service's identity is its map key — ProjectServiceConfig has no
+	// Name field — so the rekey below is the rename; there is nothing on the
+	// value to update (unlike editRegistryService, which sets ServiceConfig.Name).
 	if newName != oldName {
 		delete(proj.Services, oldName)
 	}
