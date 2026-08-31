@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -106,4 +107,80 @@ func relProjectCWD(dir, cwd string) string {
 		return ""
 	}
 	return cwd
+}
+
+// SaveTargetEdit renames a target and/or replaces its member list, persisting to
+// whichever config src points at: the project devrun.yaml when src.IsLocal(),
+// otherwise the global registry.
+//
+// oldName identifies the target to edit. newName must be non-empty (after
+// trimming); it may equal oldName but must not collide with a different target.
+// members is stored sorted and de-duplicated; an empty list is allowed.
+func SaveTargetEdit(src Source, oldName, newName string, members []string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("name is empty")
+	}
+	members = sortedUnique(members)
+	if src.IsLocal() {
+		return editProjectTarget(src.Dir, oldName, newName, members)
+	}
+	return editRegistryTarget(RegistryPath(), oldName, newName, members)
+}
+
+func editRegistryTarget(path, oldName, newName string, members []string) error {
+	reg, err := LoadRegistry(path)
+	if err != nil {
+		return err
+	}
+	if _, ok := reg.Targets[oldName]; !ok {
+		return fmt.Errorf("target %q not found", oldName)
+	}
+	if newName != oldName {
+		if _, taken := reg.Targets[newName]; taken {
+			return fmt.Errorf("target %q already exists", newName)
+		}
+		delete(reg.Targets, oldName)
+	}
+	reg.Targets[newName] = members
+	if reg.Version == "" {
+		reg.Version = "1"
+	}
+	return SaveRegistry(path, reg)
+}
+
+func editProjectTarget(dir, oldName, newName string, members []string) error {
+	proj, err := LoadProject(dir)
+	if err != nil {
+		return err
+	}
+	if proj == nil {
+		return fmt.Errorf("no %s in %s", ProjectFileName, dir)
+	}
+	if _, ok := proj.Targets[oldName]; !ok {
+		return fmt.Errorf("target %q not found in %s", oldName, ProjectFileName)
+	}
+	if newName != oldName {
+		if _, taken := proj.Targets[newName]; taken {
+			return fmt.Errorf("target %q already exists in %s", newName, ProjectFileName)
+		}
+		delete(proj.Targets, oldName)
+	}
+	proj.Targets[newName] = members
+	return SaveProject(dir, proj)
+}
+
+// sortedUnique returns a sorted copy of in with duplicates and empty strings removed.
+func sortedUnique(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
