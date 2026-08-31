@@ -1,2 +1,4 @@
 /bin/
 .superpowers/
+
+.claude/settings.local.json
