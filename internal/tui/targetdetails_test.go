@@ -65,6 +65,14 @@ func TestTargetDetails_UnreportedMember(t *testing.T) {
 	assert.Contains(t, out, "1 running / 2")
 }
 
+func TestTargetDetails_NegativeDimensionsDoNotPanic(t *testing.T) {
+	var tp targetDetailsPanel
+	tgt := &sidebarTarget{name: "backend", members: []string{"api"}}
+	assert.NotPanics(t, func() {
+		tp.render(tgt, []ipc.ServiceInfo{{Name: "api", State: "running"}}, -5, -3)
+	})
+}
+
 func TestTargetDetails_NoMembers(t *testing.T) {
 	var tp targetDetailsPanel
 	out := plain(tp.render(&sidebarTarget{name: "empty"}, nil, 60, 20))

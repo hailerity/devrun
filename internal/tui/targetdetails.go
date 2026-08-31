@@ -75,5 +75,7 @@ func (tp targetDetailsPanel) render(t *sidebarTarget, infos []ipc.ServiceInfo, w
 		)
 	}
 
-	return lipgloss.NewStyle().Width(width).Height(height).Render(sb.String())
+	// Clamp: renderMain derives height as h-2, which a pathologically short
+	// terminal can drive negative.
+	return lipgloss.NewStyle().Width(max(0, width)).Height(max(0, height)).Render(sb.String())
 }
