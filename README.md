@@ -245,14 +245,22 @@ target instead of a single service.
 |---|---|
 | `s` | Start the selected service, or the selected target |
 | `x` | Stop the selected service, or the selected target |
-| `e` | Edit the selected service's name, command, and working directory |
+| `e` | Edit the selected service — or, on a target row, the selected target |
 
 Pressing `e` opens a modal editor. It writes back to the active config — the
 project `devrun.yaml` when one is in scope, otherwise `~/.config/devrun/services.yaml` —
-using the same resolution as `devrun add`. Saving refuses an empty name or
-command, or a name that collides with another service. If the edited service is
-running it is stopped and restarted (under the new name, on a rename) so the
-change takes effect immediately.
+using the same resolution as `devrun add`.
+
+- **On a service row** the modal edits the service's name, command, and working
+  directory. Saving refuses an empty name or command, or a name that collides
+  with another service. If the edited service is running it is stopped and
+  restarted (under the new name, on a rename) so the change takes effect
+  immediately.
+- **On a target row** the modal edits the target's name and members: a name
+  field plus a checklist of every service — `Tab` switches between the two,
+  `space` toggles a service in or out. Saving refuses an empty name or one that
+  collides with another target. A running target keeps its current membership
+  until you stop and start it again.
 
 **Log panel (main panel focused, Logs tab):**
 
