@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/client"
@@ -62,11 +63,13 @@ type model struct {
 	logsC          logsPanel
 	detailsC       detailsPanel
 	targetDetailsC targetDetailsPanel
+	editC          editPanel
 	headerC        headerBar
 	footerC        footerBar
 
 	socketPath string
 	registry   *config.Registry
+	source     config.Source // where the registry was resolved from — the file service edits write back to
 	logDir     string
 
 	spinFrame int
@@ -75,11 +78,13 @@ type model struct {
 	cb clipboard
 }
 
-func newModel(socketPath string, reg *config.Registry, logDir string, cb clipboard) model {
+func newModel(socketPath string, reg *config.Registry, src config.Source, logDir string, cb clipboard) model {
 	return model{
 		logsC:      newLogsPanel(),
+		editC:      newEditPanel(),
 		socketPath: socketPath,
 		registry:   reg,
+		source:     src,
 		logDir:     logDir,
 		cb:         cb,
 	}
@@ -174,6 +179,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The edit modal is a keyboard trap: while open it consumes every key.
+	if m.editC.open {
+		return m.handleEditKey(msg)
+	}
+
 	switch {
 	// ctrl+c with an active visual selection copies instead of quitting.
 	// This handles Cmd+C on macOS and Ctrl+Shift+C on Ubuntu when the
@@ -316,9 +326,195 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.doStopTarget()
 		}
 		return m, m.doStop()
+
+	// e opens the service editor for the highlighted service row.
+	case key.Matches(msg, keys.Edit):
+		if m.onServiceRow() {
+			return m.openEditor()
+		}
 	}
 
 	return m, nil
+}
+
+// onServiceRow reports whether the sidebar has focus with its cursor on a
+// service row (not a target row), a service is selected, and there is a registry
+// to persist an edit to. It gates both the `e` key and the footer's edit hint.
+func (m model) onServiceRow() bool {
+	return m.focus == focusSidebar &&
+		m.registry != nil &&
+		(!m.sidebarC.hasTargets() || m.sidebarC.section == sectionServices) &&
+		m.sidebarC.selectedService() != nil
+}
+
+// openEditor prefills the edit modal for the selected service.
+func (m model) openEditor() (tea.Model, tea.Cmd) {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return m, nil
+	}
+	var cfg *config.ServiceConfig
+	if m.registry != nil {
+		cfg = m.registry.Services[svc.Name]
+	}
+	if cfg == nil {
+		cfg = &config.ServiceConfig{Name: svc.Name}
+	}
+	m.editC.openFor(svc.Name, cfg)
+	return m, textinput.Blink
+}
+
+// handleEditKey routes a key to the open edit modal: Esc cancels, Enter saves,
+// Tab / Shift-Tab move between fields, everything else goes to the focused input.
+func (m model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.editC.close()
+		return m, nil
+	case tea.KeyEnter:
+		return m.saveEditor()
+	case tea.KeyTab:
+		m.editC.focusDelta(1)
+		return m, textinput.Blink
+	case tea.KeyShiftTab:
+		m.editC.focusDelta(-1)
+		return m, textinput.Blink
+	}
+	cmd := m.editC.update(msg)
+	return m, cmd
+}
+
+// serviceNames returns the set of all configured service names.
+func (m model) serviceNames() map[string]bool {
+	out := make(map[string]bool)
+	if m.registry != nil {
+		for name := range m.registry.Services {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// saveEditor validates the modal, persists the edit, updates the in-memory
+// registry, and closes the modal. Validation or persistence errors keep the
+// modal open with the error shown.
+func (m model) saveEditor() (tea.Model, tea.Cmd) {
+	if m.registry == nil {
+		m.editC.errMsg = "no config loaded"
+		return m, nil
+	}
+	if problem := m.editC.validate(m.serviceNames()); problem != "" {
+		m.editC.errMsg = problem
+		return m, nil
+	}
+	oldName := m.editC.origName
+	name, command, cwd := m.editC.values()
+
+	if err := config.SaveServiceEdit(m.source, oldName, name, command, cwd); err != nil {
+		m.editC.errMsg = err.Error()
+		return m, nil
+	}
+	wasRunning := m.serviceIsRunning(oldName)
+	m.applyEditToRegistry(oldName, name, command, cwd)
+	m.editC.close()
+
+	if wasRunning {
+		// A running service keeps its old definition (and, on rename, its old
+		// name) until it is restarted — do that now so the edit takes effect.
+		m.footerC.showToast("restarting " + name)
+		return m, tea.Sequence(
+			m.doRestartForEdit(oldName, name, m.registry.Services[name]),
+			m.pollDaemon(),
+		)
+	}
+	m.footerC.showToast("saved " + name)
+	return m, m.pollDaemon()
+}
+
+// serviceIsRunning reports whether the sidebar's last daemon view shows the
+// named service running.
+func (m model) serviceIsRunning(name string) bool {
+	for _, s := range m.sidebarC.allServices {
+		if s.Name == name {
+			return s.State == "running"
+		}
+	}
+	return false
+}
+
+// doRestartForEdit stops oldName then starts newName with cfg, so an edit (or a
+// rename) to a running service takes effect immediately. cfg is shipped inline
+// like doStart, so a project service the daemon has not seen still starts.
+func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConfig) tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	sp := m.socketPath
+	return func() tea.Msg {
+		// Best-effort stop of the old name — the daemon may already consider it
+		// stopped (a stale sidebar view). Always proceed to start; a genuinely
+		// unreachable daemon still surfaces through the start error below.
+		//
+		// The naive stop-then-start is safe even for a command-only edit (same
+		// name): dial blocks until the daemon's stopService -> TerminateGroup
+		// has polled the old process dead, startService only rejects an entry in
+		// StatusRunning/StatusStarting (a just-stopped one is Stopping/Stopped),
+		// and watchExit mutates its captured *managedService rather than
+		// s.services[name], so a re-start under the same name is not clobbered.
+		_ = dial(sp, func(c *client.Client) tea.Msg {
+			_, _ = c.Send("stop", ipc.StopPayload{Name: oldName})
+			return nil
+		})
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("start", ipc.StartPayload{Name: newName, Config: cfg})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
+			return daemonTickMsg{}
+		})
+	}
+}
+
+// applyEditToRegistry mirrors the just-persisted edit into the in-memory
+// registry so the sidebar reflects it before the next daemon poll. For a project
+// source the cwd is resolved to absolute against the project dir, matching what
+// ProjectConfig.ToServiceConfigs would produce on reload (and what the daemon
+// needs on restart).
+func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
+	if m.registry == nil {
+		return
+	}
+	if m.source.IsLocal() {
+		cwd = resolveProjectCWD(m.source.Dir, cwd)
+	}
+	cur := m.registry.Services[oldName]
+	if cur == nil {
+		cur = &config.ServiceConfig{}
+	}
+	updated := *cur
+	updated.Name = newName
+	updated.Command = command
+	updated.CWD = cwd
+	if newName != oldName {
+		delete(m.registry.Services, oldName)
+	}
+	m.registry.Services[newName] = &updated
+}
+
+// resolveProjectCWD mirrors ProjectConfig.ToServiceConfigs: a project service's
+// cwd is stored absolute in memory, resolved against the project dir (empty
+// means the project root).
+func resolveProjectCWD(dir, cwd string) string {
+	if cwd == "" {
+		return dir
+	}
+	if !filepath.IsAbs(cwd) {
+		return filepath.Join(dir, cwd)
+	}
+	return cwd
 }
 
 // scopedServices restricts the daemon's full service list to the active config:
@@ -639,17 +835,23 @@ func (m model) View() string {
 		lipgloss.NewStyle().Width(mainW).Height(bodyH).Render(main),
 	)
 
+	// The edit modal takes over the body area while it is open.
+	if m.editC.open {
+		body = m.editC.view(m.width, bodyH)
+	}
+
 	// Footer
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), m.onServiceRow(), m.editC.open, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
 // Run starts the devrun TUI. Called from cli/root.go.
 // The daemon must be running at socketPath; a fresh connection is dialed per request.
-func Run(socketPath string, reg *config.Registry, logDir string) error {
+// src is the config the registry was resolved from — the file the service editor writes back to.
+func Run(socketPath string, reg *config.Registry, src config.Source, logDir string) error {
 	cb := detectClipboard()
-	m := newModel(socketPath, reg, logDir, cb)
+	m := newModel(socketPath, reg, src, logDir, cb)
 	p := tea.NewProgram(m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),

@@ -26,7 +26,9 @@ func Resolve(dir string, global bool) (*Registry, Source, error) {
 	if !global {
 		proj, err := LoadProject(dir)
 		if err != nil {
-			return nil, Source{}, err
+			// The file exists but won't parse — still report which file it was,
+			// so a caller can point the user (or a failing write) at it.
+			return nil, Source{Local: filepath.Join(dir, ProjectFileName), Dir: dir}, err
 		}
 		if proj != nil {
 			reg := &Registry{
