@@ -544,9 +544,10 @@ func resolveProjectCWD(dir, cwd string) string {
 
 // --- remove service ---
 
-// openRemoveConfirm arms the delete modal for the selected service. A running
-// service cannot be removed (the daemon and the config both refuse it), so that
-// case is turned away with a toast instead of opening the modal.
+// openRemoveConfirm arms the delete modal for the selected service. A service
+// the last poll showed running is turned away with a toast rather than opening
+// the modal; confirmRemove re-checks in case that snapshot went stale while the
+// modal was open.
 func (m model) openRemoveConfirm() (tea.Model, tea.Cmd) {
 	svc := m.sidebarC.selectedService()
 	if svc == nil {
@@ -573,14 +574,21 @@ func (m model) handleRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // confirmRemove persists the deletion, mirrors it into the in-memory registry,
-// closes the modal, and notifies the daemon. A persistence error keeps the
-// modal open with the message shown.
+// closes the modal, and notifies the daemon. A still-running service or a
+// persistence error keeps the modal open with the message shown.
 func (m model) confirmRemove() (tea.Model, tea.Cmd) {
 	if m.registry == nil {
 		m.removeC.errMsg = "no config loaded"
 		return m, nil
 	}
 	name := m.removeC.name
+	// Re-check against the latest poll: the snapshot openRemoveConfirm saw may
+	// have gone stale while the modal sat open. Deleting the definition of a
+	// live service would orphan it from the dashboard's view.
+	if m.serviceIsRunning(name) {
+		m.removeC.errMsg = name + " is running — stop it first"
+		return m, nil
+	}
 	if err := config.RemoveService(m.source, name); err != nil {
 		m.removeC.errMsg = err.Error()
 		return m, nil
@@ -588,12 +596,16 @@ func (m model) confirmRemove() (tea.Model, tea.Cmd) {
 	delete(m.registry.Services, name)
 	m.removeC.close()
 	m.footerC.showToast("removed " + name)
-	return m, tea.Sequence(m.doRemoveFromDaemon(name), m.pollDaemon())
+	if notify := m.doRemoveFromDaemon(name); notify != nil {
+		return m, tea.Sequence(notify, m.pollDaemon())
+	}
+	return m, m.pollDaemon()
 }
 
-// doRemoveFromDaemon tells a running daemon to evict the service from its
-// in-memory map. Best-effort: the config file is already updated, and the next
-// poll re-scopes the sidebar regardless of whether the daemon was reachable.
+// doRemoveFromDaemon tells a running daemon to evict the just-deleted service
+// from its in-memory map. The config file is already updated; a daemon error is
+// surfaced as a toast so the sidebar re-adding the service on the next poll is
+// not silent, but it does not roll the deletion back.
 func (m model) doRemoveFromDaemon(name string) tea.Cmd {
 	if m.socketPath == "" {
 		return nil
@@ -601,7 +613,13 @@ func (m model) doRemoveFromDaemon(name string) tea.Cmd {
 	sp := m.socketPath
 	return func() tea.Msg {
 		return dial(sp, func(c *client.Client) tea.Msg {
-			_, _ = c.Send("remove", ipc.RemovePayload{Name: name})
+			resp, err := c.Send("remove", ipc.RemovePayload{Name: name})
+			if err != nil {
+				return daemonErrMsg{err}
+			}
+			if !resp.OK {
+				return daemonErrMsg{fmt.Errorf("%s", resp.Error)}
+			}
 			return nil
 		})
 	}
@@ -1032,7 +1050,8 @@ func (m model) View() string {
 		body = m.removeC.view(m.width, bodyH)
 	}
 
-	// Footer
+	// Footer. `editing` is the form modals only; the remove-confirm modal owns
+	// the screen too but carries no fields, so it is passed as `confirming`.
 	editing := m.editC.open || m.targetEditC.open
 	canEditRow := m.onServiceRow() || m.onTargetEditRow()
 	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)

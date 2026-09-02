@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -69,6 +70,38 @@ func TestModel_RemoveConfirmPersistsAndMirrors(t *testing.T) {
 	proj, err := config.LoadProject(dir)
 	require.NoError(t, err)
 	assert.NotContains(t, proj.Services, "web", "devrun.yaml updated")
+}
+
+func TestModel_RemoveRechecksRunningAtConfirm(t *testing.T) {
+	m, dir := editModel(t, "run") // snapshot: web stopped
+	m = pressD(t, m)
+	require.True(t, m.removeC.open)
+
+	// The service starts while the modal sits open — a later poll reflects it.
+	m2, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
+		Services: []ipc.ServiceInfo{{Name: "web", State: "running"}},
+	}})
+	m = m2.(model)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = m2.(model)
+
+	assert.True(t, m.removeC.open, "confirm stays open when the service is now running")
+	assert.Contains(t, m.removeC.errMsg, "running")
+	assert.Contains(t, m.registry.Services, "web", "registry untouched")
+	proj, _ := config.LoadProject(dir)
+	assert.Contains(t, proj.Services, "web", "devrun.yaml untouched")
+}
+
+func TestModel_RemoveDaemonNotifySurfacesError(t *testing.T) {
+	m, _ := editModel(t, "run")
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+
+	cmd := m.doRemoveFromDaemon("web")
+	require.NotNil(t, cmd)
+	msg := cmd()
+	_, isErr := msg.(daemonErrMsg)
+	assert.True(t, isErr, "an unreachable daemon surfaces as daemonErrMsg, not a swallowed error")
 }
 
 func TestModel_RemoveKeyIgnoredWithoutRegistry(t *testing.T) {
