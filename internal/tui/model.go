@@ -65,6 +65,7 @@ type model struct {
 	targetDetailsC targetDetailsPanel
 	editC          editPanel
 	targetEditC    targetEditPanel
+	removeC        removeConfirm
 	headerC        headerBar
 	footerC        footerBar
 
@@ -187,6 +188,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.targetEditC.open {
 		return m.handleTargetEditKey(msg)
+	}
+	if m.removeC.open {
+		return m.handleRemoveKey(msg)
 	}
 
 	switch {
@@ -339,6 +343,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.onTargetEditRow() {
 			return m.openTargetEditor()
+		}
+
+	// d asks to remove the highlighted service (service rows only).
+	case key.Matches(msg, keys.Remove):
+		if m.onServiceRow() {
+			return m.openRemoveConfirm()
 		}
 	}
 
@@ -530,6 +540,71 @@ func resolveProjectCWD(dir, cwd string) string {
 		return filepath.Join(dir, cwd)
 	}
 	return cwd
+}
+
+// --- remove service ---
+
+// openRemoveConfirm arms the delete modal for the selected service. A running
+// service cannot be removed (the daemon and the config both refuse it), so that
+// case is turned away with a toast instead of opening the modal.
+func (m model) openRemoveConfirm() (tea.Model, tea.Cmd) {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return m, nil
+	}
+	if m.serviceIsRunning(svc.Name) {
+		m.footerC.showToast("stop " + svc.Name + " before removing")
+		return m, nil
+	}
+	m.removeC.openFor(svc.Name)
+	return m, nil
+}
+
+// handleRemoveKey routes a key to the open delete modal: y confirms, n / Esc
+// cancel, everything else is swallowed.
+func (m model) handleRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		return m.confirmRemove()
+	case "n", "N", "esc":
+		m.removeC.close()
+	}
+	return m, nil
+}
+
+// confirmRemove persists the deletion, mirrors it into the in-memory registry,
+// closes the modal, and notifies the daemon. A persistence error keeps the
+// modal open with the message shown.
+func (m model) confirmRemove() (tea.Model, tea.Cmd) {
+	if m.registry == nil {
+		m.removeC.errMsg = "no config loaded"
+		return m, nil
+	}
+	name := m.removeC.name
+	if err := config.RemoveService(m.source, name); err != nil {
+		m.removeC.errMsg = err.Error()
+		return m, nil
+	}
+	delete(m.registry.Services, name)
+	m.removeC.close()
+	m.footerC.showToast("removed " + name)
+	return m, tea.Sequence(m.doRemoveFromDaemon(name), m.pollDaemon())
+}
+
+// doRemoveFromDaemon tells a running daemon to evict the service from its
+// in-memory map. Best-effort: the config file is already updated, and the next
+// poll re-scopes the sidebar regardless of whether the daemon was reachable.
+func (m model) doRemoveFromDaemon(name string) tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	sp := m.socketPath
+	return func() tea.Msg {
+		return dial(sp, func(c *client.Client) tea.Msg {
+			_, _ = c.Send("remove", ipc.RemovePayload{Name: name})
+			return nil
+		})
+	}
 }
 
 // --- target editor ---
@@ -947,18 +1022,20 @@ func (m model) View() string {
 		lipgloss.NewStyle().Width(mainW).Height(bodyH).Render(main),
 	)
 
-	// An open edit modal takes over the body area.
+	// An open modal takes over the body area.
 	switch {
 	case m.editC.open:
 		body = m.editC.view(m.width, bodyH)
 	case m.targetEditC.open:
 		body = m.targetEditC.view(m.width, bodyH)
+	case m.removeC.open:
+		body = m.removeC.view(m.width, bodyH)
 	}
 
 	// Footer
 	editing := m.editC.open || m.targetEditC.open
 	canEditRow := m.onServiceRow() || m.onTargetEditRow()
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, editing, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }

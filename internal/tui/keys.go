@@ -12,6 +12,7 @@ type keyMap struct {
 	Start  key.Binding
 	Stop   key.Binding
 	Edit   key.Binding
+	Remove key.Binding
 	Quit   key.Binding
 	Follow key.Binding
 	Copy   key.Binding
@@ -31,6 +32,7 @@ var keys = keyMap{
 	Start:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start")),
 	Stop:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
 	Edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+	Remove: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
 	Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	Follow: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "follow")),
 	Copy:   key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy")),

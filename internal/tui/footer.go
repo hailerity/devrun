@@ -41,7 +41,7 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targetFocused, onTargetRow, onServiceRow, editing bool, width int) string {
+func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targetFocused, onTargetRow, canEditRow, canRemoveRow, editing, confirming bool, width int) string {
 	base := lipgloss.NewStyle().
 		Width(width).
 		BorderTop(true).
@@ -52,7 +52,12 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 		return base.Foreground(colorAccent).Render(f.toast)
 	}
 
-	// The edit modal draws its own hint line; the footer just names its keys.
+	// The modals draw their own hint line; the footer just names its keys.
+	if confirming {
+		return base.Render(strings.Join([]string{
+			renderHint("y", "remove"), renderHint("n/Esc", "cancel"),
+		}, "  "))
+	}
 	if editing {
 		return base.Render(strings.Join([]string{
 			renderHint("Tab", "field"), renderHint("↵", "save"), renderHint("Esc", "cancel"),
@@ -81,8 +86,11 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 		hints = append(hints, renderHint("Esc", "cancel"))
 	}
 	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"))
-	if onServiceRow {
+	if canEditRow {
 		hints = append(hints, renderHint("e", "edit"))
+	}
+	if canRemoveRow {
+		hints = append(hints, renderHint("d", "remove"))
 	}
 	hints = append(hints, renderHint("q", "quit"))
 	return base.Render(strings.Join(hints, "  "))
