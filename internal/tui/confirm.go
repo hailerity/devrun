@@ -10,9 +10,10 @@ import (
 // config. Like the edit modals it is a keyboard trap while open, but it carries
 // no fields — only y (confirm) and n / Esc (cancel).
 type removeConfirm struct {
-	open   bool
-	name   string // the service to be removed
-	errMsg string // a persistence failure; keeps the modal open
+	open    bool
+	name    string // the service to be removed
+	errMsg  string // a daemon or persistence failure; keeps the modal open
+	pending bool   // a confirm is in flight — the daemon has been asked, no reply yet
 }
 
 // openFor arms the confirm for service name.
@@ -20,11 +21,13 @@ func (c *removeConfirm) openFor(name string) {
 	c.open = true
 	c.name = name
 	c.errMsg = ""
+	c.pending = false
 }
 
 func (c *removeConfirm) close() {
 	c.open = false
 	c.errMsg = ""
+	c.pending = false
 }
 
 func (c removeConfirm) view(width, height int) string {

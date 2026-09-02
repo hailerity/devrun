@@ -14,9 +14,11 @@ func TestRemoveConfirm_OpenForAndClose(t *testing.T) {
 	assert.Equal(t, "web", c.name)
 
 	c.errMsg = "boom"
+	c.pending = true
 	c.close()
 	assert.False(t, c.open)
 	assert.Empty(t, c.errMsg, "close clears a stale error")
+	assert.False(t, c.pending, "close clears the in-flight flag")
 }
 
 func TestRemoveConfirm_ViewMentionsServiceAndKeys(t *testing.T) {
