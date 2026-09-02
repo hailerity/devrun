@@ -149,14 +149,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickDaemon()
 
 	case serviceRemovedMsg:
+		if !m.removeC.open || m.removeC.name != msg.name {
+			// A stale reply arriving after the modal already closed (or moved on
+			// to another service) — nothing to apply.
+			return m, nil
+		}
 		m.removeC.pending = false
 		if msg.err != nil {
-			// The daemon refused (running/starting) or was unreachable — the
+			// The daemon refused the eviction or could not be reached — the
 			// config file is untouched. Keep the modal open with the reason.
 			m.removeC.errMsg = msg.err.Error()
 			return m, nil
 		}
-		// The daemon has evicted the service (or there is no daemon); now it is
+		// The daemon has evicted the service (or none is configured); now it is
 		// safe to delete the definition from disk.
 		if err := config.RemoveService(m.source, msg.name); err != nil {
 			m.removeC.errMsg = err.Error()
@@ -637,12 +642,13 @@ func (m model) confirmRemove() (tea.Model, tea.Cmd) {
 	return m, m.doRemove(name)
 }
 
-// doRemove asks a running daemon to drop the service from its in-memory map and
-// reports the verdict as a serviceRemovedMsg. Only a definitive rejection from a
-// reachable daemon (!resp.OK — the service is running or starting) blocks the
-// removal; with no daemon configured, or one that is unreachable, there is no
-// supervised process to orphan, so the removal is accepted and the caller
-// proceeds to persist.
+// doRemove asks the daemon to drop the service from its in-memory map and
+// reports the verdict as a serviceRemovedMsg. The config file is persisted only
+// on a clean acceptance (err nil): a rejection (!resp.OK — running or starting)
+// and any transport failure both come back as an error and leave the file
+// alone, since a reachable-but-hiccuping daemon may well be supervising the
+// process. Only the test/embedded case with no socket configured proceeds
+// unconditionally.
 func (m model) doRemove(name string) tea.Cmd {
 	sp := m.socketPath
 	if sp == "" {
@@ -651,15 +657,19 @@ func (m model) doRemove(name string) tea.Cmd {
 	return func() tea.Msg {
 		c, err := client.Connect(sp)
 		if err != nil {
-			return serviceRemovedMsg{name: name}
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("daemon unreachable: %w", err)}
 		}
 		defer c.Close()
 		resp, err := c.Send("remove", ipc.RemovePayload{Name: name})
 		if err != nil {
-			return serviceRemovedMsg{name: name}
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("daemon unreachable: %w", err)}
 		}
 		if !resp.OK {
-			return serviceRemovedMsg{name: name, err: fmt.Errorf("%s", resp.Error)}
+			reason := resp.Error
+			if reason == "" {
+				reason = "daemon refused the removal"
+			}
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("%s", reason)}
 		}
 		return serviceRemovedMsg{name: name}
 	}

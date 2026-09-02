@@ -134,15 +134,33 @@ func TestModel_RemoveDaemonRejectionKeepsModalOpen(t *testing.T) {
 	assert.Contains(t, proj.Services, "web", "devrun.yaml untouched on rejection")
 }
 
-func TestModel_RemoveUnreachableDaemonStillRemoves(t *testing.T) {
+func TestModel_RemoveUnreachableDaemonBlocks(t *testing.T) {
 	m, dir := editModel(t, "run")
 	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
 	m = pressD(t, m)
 	m = confirmY(t, m)
 
-	assert.False(t, m.removeC.open, "an unreachable daemon supervises nothing, so removal proceeds")
+	assert.True(t, m.removeC.open, "a daemon that cannot be reached is not proof the service is stopped")
+	assert.False(t, m.removeC.pending)
+	assert.Contains(t, m.removeC.errMsg, "unreachable")
 	proj, _ := config.LoadProject(dir)
-	assert.NotContains(t, proj.Services, "web", "devrun.yaml updated")
+	assert.Contains(t, proj.Services, "web", "devrun.yaml untouched when the daemon can't be asked")
+}
+
+func TestModel_RemoveStaleReplyIgnoredAfterClose(t *testing.T) {
+	m, dir := editModel(t, "run")
+	m = pressD(t, m)
+	m = confirmY(t, m) // completes: modal closed, web removed
+	require.False(t, m.removeC.open)
+
+	// A duplicate/late reply for the same name must not re-run RemoveService
+	// (which would now fail "not found") or touch removeC.
+	m2, _ := m.Update(serviceRemovedMsg{name: "web"})
+	m = m2.(model)
+	assert.Empty(t, m.removeC.errMsg)
+	assert.False(t, m.removeC.open)
+	proj, _ := config.LoadProject(dir)
+	assert.NotContains(t, proj.Services, "web")
 }
 
 func TestModel_RemovePendingIgnoresKeys(t *testing.T) {
