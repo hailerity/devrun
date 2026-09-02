@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// removeConfirm is the modal shown before a service is deleted from the active
+// removeConfirm is the modal shown before a service is removed from the active
 // config. Like the edit modals it is a keyboard trap while open, but it carries
 // no fields — only y (confirm) and n / Esc (cancel).
 type removeConfirm struct {
@@ -33,7 +33,7 @@ func (c *removeConfirm) close() {
 func (c removeConfirm) view(width, height int) string {
 	var b strings.Builder
 	b.WriteString(styleRed.Bold(true).Render("Remove "+c.name) + "\n\n")
-	b.WriteString(styleText.Render("Delete this service from the active config?") + "\n")
+	b.WriteString(styleText.Render("Remove this service from the active config?") + "\n")
 	b.WriteString(styleMuted.Render("Its definition is removed from the file — this cannot be undone.") + "\n")
 	if c.errMsg != "" {
 		b.WriteString("\n" + styleRed.Render(c.errMsg) + "\n")
