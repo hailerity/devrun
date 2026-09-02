@@ -50,6 +50,14 @@ type spinTickMsg struct{}
 type daemonRespMsg struct{ payload ipc.ListResponsePayload }
 type daemonErrMsg struct{ err error }
 
+// serviceRemovedMsg carries the daemon's verdict on a remove request back to the
+// model: err set means the daemon refused (or was unreachable) and the config
+// file has NOT been touched; err nil means it is safe to persist the deletion.
+type serviceRemovedMsg struct {
+	name string
+	err  error
+}
+
 // --- Model ---
 
 type model struct {
@@ -65,6 +73,7 @@ type model struct {
 	targetDetailsC targetDetailsPanel
 	editC          editPanel
 	targetEditC    targetEditPanel
+	removeC        removeConfirm
 	headerC        headerBar
 	footerC        footerBar
 
@@ -139,6 +148,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickDaemon()
 
+	case serviceRemovedMsg:
+		if !m.removeC.open || m.removeC.name != msg.name {
+			// A stale reply arriving after the modal already closed (or moved on
+			// to another service) — nothing to apply.
+			return m, nil
+		}
+		m.removeC.pending = false
+		if msg.err != nil {
+			// The daemon refused the eviction or could not be reached — the
+			// config file is untouched. Keep the modal open with the reason.
+			m.removeC.errMsg = msg.err.Error()
+			return m, nil
+		}
+		// The daemon has evicted the service (or none is configured); now it is
+		// safe to delete the definition from disk.
+		if err := config.RemoveService(m.source, msg.name); err != nil {
+			m.removeC.errMsg = err.Error()
+			return m, nil
+		}
+		if m.registry != nil {
+			delete(m.registry.Services, msg.name)
+		}
+		m.removeC.close()
+		m.footerC.showToast("removed " + msg.name)
+		return m, m.pollDaemon()
+
 	case daemonErrMsg:
 		m.spinning = false
 		// The first poll resolved (unsuccessfully); stop showing "Loading…" and
@@ -187,6 +222,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.targetEditC.open {
 		return m.handleTargetEditKey(msg)
+	}
+	if m.removeC.open {
+		return m.handleRemoveKey(msg)
 	}
 
 	switch {
@@ -339,6 +377,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.onTargetEditRow() {
 			return m.openTargetEditor()
+		}
+
+	// d asks to remove the highlighted service (service rows only).
+	case key.Matches(msg, keys.Remove):
+		if m.onServiceRow() {
+			return m.openRemoveConfirm()
 		}
 	}
 
@@ -530,6 +574,105 @@ func resolveProjectCWD(dir, cwd string) string {
 		return filepath.Join(dir, cwd)
 	}
 	return cwd
+}
+
+// --- remove service ---
+
+// serviceRemoveBusy reports whether the last daemon view shows the named service
+// running or starting — the states in which the daemon's handleRemove refuses to
+// evict it, so deleting its config entry would orphan a live process.
+func (m model) serviceRemoveBusy(name string) bool {
+	for _, s := range m.sidebarC.allServices {
+		if s.Name == name {
+			return s.State == string(config.StatusRunning) || s.State == string(config.StatusStarting)
+		}
+	}
+	return false
+}
+
+// openRemoveConfirm arms the delete modal for the selected service. A service
+// the last poll showed busy is turned away with a toast rather than opening the
+// modal; the daemon has the final say at confirm time.
+func (m model) openRemoveConfirm() (tea.Model, tea.Cmd) {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return m, nil
+	}
+	if m.serviceRemoveBusy(svc.Name) {
+		m.footerC.showToast("stop " + svc.Name + " before removing")
+		return m, nil
+	}
+	m.removeC.openFor(svc.Name)
+	return m, nil
+}
+
+// handleRemoveKey routes a key to the open delete modal: y confirms, n / Esc
+// cancel, everything else is swallowed. Keys are ignored while a confirm is
+// already in flight so a double-tap cannot fire two requests.
+func (m model) handleRemoveKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.removeC.pending {
+		return m, nil
+	}
+	switch msg.String() {
+	case "y", "Y":
+		return m.confirmRemove()
+	case "n", "N", "esc":
+		m.removeC.close()
+	}
+	return m, nil
+}
+
+// confirmRemove asks the daemon to evict the service first; only once it agrees
+// (serviceRemovedMsg with no error) is the config file rewritten. This makes the
+// daemon — which refuses a running or starting service — the single authority,
+// so a stale sidebar snapshot can never delete the definition of a live
+// process. The pre-poll snapshot check is kept as an offline fast-path.
+func (m model) confirmRemove() (tea.Model, tea.Cmd) {
+	if m.registry == nil {
+		m.removeC.errMsg = "no config loaded"
+		return m, nil
+	}
+	name := m.removeC.name
+	if m.serviceRemoveBusy(name) {
+		m.removeC.errMsg = name + " is running — stop it first"
+		return m, nil
+	}
+	m.removeC.pending = true
+	m.removeC.errMsg = ""
+	return m, m.doRemove(name)
+}
+
+// doRemove asks the daemon to drop the service from its in-memory map and
+// reports the verdict as a serviceRemovedMsg. The config file is persisted only
+// on a clean acceptance (err nil): a rejection (!resp.OK — running or starting)
+// and any transport failure both come back as an error and leave the file
+// alone, since a reachable-but-hiccuping daemon may well be supervising the
+// process. Only the test/embedded case with no socket configured proceeds
+// unconditionally.
+func (m model) doRemove(name string) tea.Cmd {
+	sp := m.socketPath
+	if sp == "" {
+		return func() tea.Msg { return serviceRemovedMsg{name: name} }
+	}
+	return func() tea.Msg {
+		c, err := client.Connect(sp)
+		if err != nil {
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("daemon unreachable: %w", err)}
+		}
+		defer c.Close()
+		resp, err := c.Send("remove", ipc.RemovePayload{Name: name})
+		if err != nil {
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("daemon unreachable: %w", err)}
+		}
+		if !resp.OK {
+			reason := resp.Error
+			if reason == "" {
+				reason = "daemon refused the removal"
+			}
+			return serviceRemovedMsg{name: name, err: fmt.Errorf("%s", reason)}
+		}
+		return serviceRemovedMsg{name: name}
+	}
 }
 
 // --- target editor ---
@@ -947,18 +1090,21 @@ func (m model) View() string {
 		lipgloss.NewStyle().Width(mainW).Height(bodyH).Render(main),
 	)
 
-	// An open edit modal takes over the body area.
+	// An open modal takes over the body area.
 	switch {
 	case m.editC.open:
 		body = m.editC.view(m.width, bodyH)
 	case m.targetEditC.open:
 		body = m.targetEditC.view(m.width, bodyH)
+	case m.removeC.open:
+		body = m.removeC.view(m.width, bodyH)
 	}
 
-	// Footer
+	// Footer. `editing` is the form modals only; the remove-confirm modal owns
+	// the screen too but carries no fields, so it is passed as `confirming`.
 	editing := m.editC.open || m.targetEditC.open
 	canEditRow := m.onServiceRow() || m.onTargetEditRow()
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, editing, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }

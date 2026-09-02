@@ -246,6 +246,7 @@ target instead of a single service.
 | `s` | Start the selected service, or the selected target |
 | `x` | Stop the selected service, or the selected target |
 | `e` | Edit the selected service — or, on a target row, the selected target |
+| `d` | Remove the selected service (asks to confirm) |
 
 Pressing `e` opens a modal editor. It writes back to the active config — the
 project `devrun.yaml` when one is in scope, otherwise `~/.config/devrun/services.yaml` —
@@ -261,6 +262,10 @@ using the same resolution as `devrun add`.
   `space` toggles a service in or out. Saving refuses an empty name or one that
   collides with another target. A running target keeps its current membership
   until you stop and start it again.
+
+Pressing `d` on a service row asks to confirm, then deletes that service from
+the active config — the same file `e` writes to, the same effect as
+`devrun remove`. A running service must be stopped first.
 
 **Log panel (main panel focused, Logs tab):**
 
