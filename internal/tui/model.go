@@ -364,9 +364,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if t.name == "" {
 				// Optimistically light the row now; the next poll reconciles it
 				// against live state (or clears it if the batch fails).
-				if len(m.sidebarC.allServices) > 0 {
-					m.sidebarC.setAllServicesActive(true)
-				}
+				m.sidebarC.setAllServicesActive(true)
 				return m, m.doStartAll()
 			}
 			return m, m.doStartTarget()
@@ -828,9 +826,10 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 // a registry with neither services nor targets), which collapses the block.
 //
 // A row is marked active — the green highlight — when it has at least one
-// member and every member is currently running. services is the live daemon
-// view (already scoped) the check reads; the "All services" row weighs every
-// scoped service, a target row only its own members.
+// member and every member is currently running, checked against `services` (the
+// daemon-reported view). The "All services" row weighs every registry service
+// by name, a target row only its own members — both through membersAllRunning,
+// so a configured service the daemon has not reported keeps either row off.
 func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
 	if m.registry == nil || (len(m.registry.Services) == 0 && len(m.registry.Targets) == 0) {
 		return nil
@@ -841,14 +840,11 @@ func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
 			running[s.Name] = true
 		}
 	}
-	allUp := len(services) > 0
-	for _, s := range services {
-		if s.State != "running" {
-			allUp = false
-			break
-		}
+	allNames := make([]string, 0, len(m.registry.Services))
+	for name := range m.registry.Services {
+		allNames = append(allNames, name)
 	}
-	rows := []sidebarTarget{{name: "", active: allUp}} // "All services"
+	rows := []sidebarTarget{{name: "", active: membersAllRunning(allNames, running)}} // "All services"
 	for _, name := range config.SortedTargetNames(m.registry.Targets) {
 		members := m.registry.Targets[name]
 		rows = append(rows, sidebarTarget{
@@ -1320,9 +1316,15 @@ func (m model) renderMain(w, h int) string {
 	}
 
 	// The synthetic "All services" row shows a summary — running count over the
-	// whole scoped project plus the per-service list — in place of logs.
+	// whole scoped project plus the per-service list — in place of logs. Its
+	// active flag comes from the sidebar row so the panel's state word never
+	// disagrees with the sidebar highlight.
 	if m.allServicesRow() {
-		all := &sidebarTarget{name: allServicesLabel, members: m.scopedServiceNames()}
+		all := &sidebarTarget{
+			name:    allServicesLabel,
+			members: m.scopedServiceNames(),
+			active:  m.sidebarC.selectedTarget().active,
+		}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			mainLabel("SUMMARY"),
 			m.targetDetailsC.render(all, m.sidebarC.allServices, w, h-2),

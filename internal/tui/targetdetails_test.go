@@ -17,7 +17,8 @@ func TestTargetDetails_NilOrSyntheticRow(t *testing.T) {
 
 func TestTargetDetails_ShowsNameStateAndMembers(t *testing.T) {
 	var tp targetDetailsPanel
-	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}}
+	// active is what buildTargets computes for "every member running".
+	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}, active: true}
 	infos := []ipc.ServiceInfo{
 		{Name: "api", State: "running", Port: intp(8080), PID: intp(4321)},
 		{Name: "db", State: "running"},
@@ -26,7 +27,7 @@ func TestTargetDetails_ShowsNameStateAndMembers(t *testing.T) {
 	out := plain(tp.render(tgt, infos, 60, 20))
 
 	assert.Contains(t, out, "backend")
-	assert.Contains(t, out, "running") // every member up → state reads running
+	assert.Contains(t, out, "● running") // active row → state reads running
 	assert.Contains(t, out, "2 running / 2")
 	assert.Contains(t, out, "api")
 	assert.Contains(t, out, ":8080")
