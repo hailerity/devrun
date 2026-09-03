@@ -420,6 +420,51 @@ func TestModel_TabAndRightInertWhenTargetFocused(t *testing.T) {
 	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not move focus into a focused target's pane")
 }
 
+// allServicesRowModel returns a 120x40 model with the sidebar cursor parked on
+// the synthetic "All services" row (one running service, one stopped).
+func allServicesRowModel() model {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(
+		[]ipc.ServiceInfo{
+			{Name: "api", State: "running", Port: intp(8080)},
+			{Name: "web", State: "stopped"},
+		},
+		[]sidebarTarget{{name: ""}, {name: "backend", members: []string{"api"}}},
+	)
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 0 // "All services"
+	return m
+}
+
+// TestModel_RenderMain_SummaryOnAllServicesRow verifies the main pane shows the
+// SUMMARY roll-up (not logs) with a running count while the cursor sits on the
+// synthetic row.
+func TestModel_RenderMain_SummaryOnAllServicesRow(t *testing.T) {
+	m := allServicesRowModel()
+	out := plain(m.renderMain(80, 24))
+	assert.Contains(t, out, "SUMMARY")
+	assert.Contains(t, out, "All services")
+	assert.Contains(t, out, "1 running / 2")
+	assert.Contains(t, out, "api")
+	assert.Contains(t, out, "web")
+	assert.NotContains(t, out, "LOGS")
+}
+
+// TestModel_TabAndRightInertOnAllServicesRow verifies focus cannot slip into a
+// hidden logs pane while the summary fills the main area.
+func TestModel_TabAndRightInertOnAllServicesRow(t *testing.T) {
+	m := allServicesRowModel()
+	require.Equal(t, focusSidebar, m.focus)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not focus the hidden logs pane")
+
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not focus the hidden logs pane")
+}
+
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area
 // automatically moves focus to the main panel so that y/v/f shortcuts work.
 func TestModel_MouseClick_SetsFocusMain(t *testing.T) {
