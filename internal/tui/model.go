@@ -136,7 +136,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonRespMsg:
 		m.spinning = false
-		m.sidebarC.update(m.scopedServices(msg.payload.Services), m.buildTargets(msg.payload.ActiveTargets))
+		scoped := m.scopedServices(msg.payload.Services)
+		m.sidebarC.update(scoped, m.buildTargets(scoped))
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -819,23 +820,52 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 // its start/stop-all action — is always reachable; real targets follow it in
 // sorted order. Returns nil only with no config context at all (no registry, or
 // a registry with neither services nor targets), which collapses the block.
-func (m model) buildTargets(active []string) []sidebarTarget {
+//
+// A row is marked active — the green highlight — when it has at least one
+// member and every member is currently running. services is the live daemon
+// view (already scoped) the check reads; the "All services" row weighs every
+// scoped service, a target row only its own members.
+func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
 	if m.registry == nil || (len(m.registry.Services) == 0 && len(m.registry.Targets) == 0) {
 		return nil
 	}
-	activeSet := make(map[string]bool, len(active))
-	for _, a := range active {
-		activeSet[a] = true
+	running := make(map[string]bool, len(services))
+	for _, s := range services {
+		if s.State == "running" {
+			running[s.Name] = true
+		}
 	}
-	rows := []sidebarTarget{{name: ""}} // "All services"
+	allUp := len(services) > 0
+	for _, s := range services {
+		if s.State != "running" {
+			allUp = false
+			break
+		}
+	}
+	rows := []sidebarTarget{{name: "", active: allUp}} // "All services"
 	for _, name := range config.SortedTargetNames(m.registry.Targets) {
+		members := m.registry.Targets[name]
 		rows = append(rows, sidebarTarget{
 			name:    name,
-			members: m.registry.Targets[name],
-			active:  activeSet[name],
+			members: members,
+			active:  membersAllRunning(members, running),
 		})
 	}
 	return rows
+}
+
+// membersAllRunning reports whether members is non-empty and every member name
+// is in the running set.
+func membersAllRunning(members []string, running map[string]bool) bool {
+	if len(members) == 0 {
+		return false
+	}
+	for _, m := range members {
+		if !running[m] {
+			return false
+		}
+	}
+	return true
 }
 
 // focusedTarget returns the highlighted target when the sidebar cursor sits on a

@@ -258,13 +258,32 @@ func TestModel_BuildTargets(t *testing.T) {
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
 		Targets:  map[string][]string{"zeta": {"web"}, "alpha": {"api"}},
 	}
-	rows := m.buildTargets([]string{"alpha"})
+	// api running, web stopped: only "alpha" (member api) is fully up.
+	rows := m.buildTargets([]ipc.ServiceInfo{
+		{Name: "api", State: "running"},
+		{Name: "web", State: "stopped"},
+	})
 	require.Len(t, rows, 3)
 	assert.Equal(t, "", rows[0].name, "All services first")
+	assert.False(t, rows[0].active, "All services not active while web is stopped")
 	assert.Equal(t, "alpha", rows[1].name, "targets sorted")
-	assert.True(t, rows[1].active)
+	assert.True(t, rows[1].active, "alpha active — its only member (api) is running")
 	assert.Equal(t, "zeta", rows[2].name)
-	assert.False(t, rows[2].active)
+	assert.False(t, rows[2].active, "zeta inactive — its member (web) is stopped")
+}
+
+func TestModel_BuildTargets_AllServicesActiveWhenEveryServiceRuns(t *testing.T) {
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
+		Targets:  map[string][]string{"stack": {"web", "api"}},
+	}}
+	rows := m.buildTargets([]ipc.ServiceInfo{
+		{Name: "api", State: "running"},
+		{Name: "web", State: "running"},
+	})
+	require.Len(t, rows, 2)
+	assert.True(t, rows[0].active, "All services active — every service running")
+	assert.True(t, rows[1].active, "stack active — all members running")
 }
 
 func TestModel_SidebarWidth_GrowsForLongTargetName(t *testing.T) {
