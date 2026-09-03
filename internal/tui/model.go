@@ -1140,19 +1140,27 @@ func batchStep(socketPath, reqType string, payload interface{}, name, benignErr 
 
 // classifyBatchResp turns one daemon start/stop reply into a "<name>: <reason>"
 // failure string, or "" when the member succeeded or was already in the wanted
-// state. benignErr is the daemon's wording for that already-in-state case
-// ("is already running" / "is not running") — it mirrors internal/daemon's
-// isAlreadyRunning / isNotRunning, which classify the same responses for
-// target-start / target-stop. A missing response (transport error, or the
-// contract-breaking nil/nil) is itself a failure, never a success.
+// state. benignErr is the daemon's wording for that already-in-state case: the
+// single-service "start" / "stop" handlers reply "<name> is already running" /
+// "<name> is not running" (daemon.startService / stopService), and the same
+// wording is what internal/daemon's isAlreadyRunning / isNotRunning match for
+// the target paths that wrap those methods. A missing response (transport
+// error, or a contract-breaking nil/nil) is itself a failure, never a success;
+// so is a not-OK reply with no error text.
 func classifyBatchResp(resp *ipc.Response, err error, name, benignErr string) string {
 	switch {
 	case err != nil:
 		return fmt.Sprintf("%s: %v", name, err)
 	case resp == nil:
 		return fmt.Sprintf("%s: no response from daemon", name)
-	case !resp.OK && !strings.Contains(resp.Error, benignErr):
-		return fmt.Sprintf("%s: %s", name, resp.Error)
+	case !resp.OK && strings.Contains(resp.Error, benignErr):
+		return "" // already in the wanted state — not a failure
+	case !resp.OK:
+		reason := resp.Error
+		if reason == "" {
+			reason = "request failed"
+		}
+		return fmt.Sprintf("%s: %s", name, reason)
 	}
 	return ""
 }

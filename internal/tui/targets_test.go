@@ -333,6 +333,7 @@ func TestClassifyBatchResp(t *testing.T) {
 		{"benign already running", &ipc.Response{Error: "web is already running"}, nil, "is already running", ""},
 		{"benign not running", &ipc.Response{Error: "web is not running"}, nil, "is not running", ""},
 		{"real failure", &ipc.Response{Error: "exec: no such file"}, nil, "is already running", "web: exec: no such file"},
+		{"not-OK with blank error", &ipc.Response{OK: false, Error: ""}, nil, "is already running", "web: request failed"},
 		{"transport error", nil, errors.New("dial: connection refused"), "is already running", "web: dial: connection refused"},
 		{"nil response, nil error", nil, nil, "is already running", "web: no response from daemon"},
 	}
