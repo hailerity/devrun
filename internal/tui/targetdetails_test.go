@@ -17,8 +17,7 @@ func TestTargetDetails_NilOrSyntheticRow(t *testing.T) {
 
 func TestTargetDetails_ShowsNameStateAndMembers(t *testing.T) {
 	var tp targetDetailsPanel
-	// active is what buildTargets computes for "every member running".
-	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}, active: true}
+	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}}
 	infos := []ipc.ServiceInfo{
 		{Name: "api", State: "running", Port: intp(8080), PID: intp(4321)},
 		{Name: "db", State: "running"},
@@ -27,7 +26,7 @@ func TestTargetDetails_ShowsNameStateAndMembers(t *testing.T) {
 	out := plain(tp.render(tgt, infos, 60, 20))
 
 	assert.Contains(t, out, "backend")
-	assert.Contains(t, out, "● running") // active row → state reads running
+	assert.Contains(t, out, "● running") // every member up → state reads running
 	assert.Contains(t, out, "2 running / 2")
 	assert.Contains(t, out, "api")
 	assert.Contains(t, out, ":8080")
@@ -43,6 +42,20 @@ func TestTargetDetails_PartiallyUpReadsStopped(t *testing.T) {
 	assert.Contains(t, out, "○ stopped", "state reads stopped until every member is up")
 	assert.NotContains(t, out, "● running")
 	assert.Contains(t, out, "1 running / 2")
+}
+
+// TestTargetDetails_StateFollowsCountNotActiveFlag: the panel's state word is
+// driven by the live member count, not sidebarTarget.active — so an
+// optimistically-lit "All services" row (s pressed, poll not yet back) never
+// shows "● running" next to a "0 running / N" line.
+func TestTargetDetails_StateFollowsCountNotActiveFlag(t *testing.T) {
+	var tp targetDetailsPanel
+	tgt := &sidebarTarget{name: "backend", members: []string{"api", "db"}, active: true}
+	infos := []ipc.ServiceInfo{{Name: "api", State: "stopped"}, {Name: "db", State: "stopped"}}
+	out := plain(tp.render(tgt, infos, 60, 20))
+	assert.Contains(t, out, "○ stopped")
+	assert.NotContains(t, out, "● running")
+	assert.Contains(t, out, "0 running / 2")
 }
 
 func TestTargetDetails_InactiveTargetReadsStopped(t *testing.T) {

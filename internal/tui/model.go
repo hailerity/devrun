@@ -287,7 +287,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activeTab = tabLogs
 			m.updateLogFile()
 		case m.sidebarRollup():
-			// A roll-up already fills the main pane — nothing to toggle.
+			// Guard: the cursor is on a roll-up row (real target or "All
+			// services") but the sidebar does not hold focus, so onTargetRow is
+			// false. The main pane already shows that roll-up — Enter must not
+			// fall through and open service DETAILS over it.
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -1316,15 +1319,11 @@ func (m model) renderMain(w, h int) string {
 	}
 
 	// The synthetic "All services" row shows a summary — running count over the
-	// whole scoped project plus the per-service list — in place of logs. Its
-	// active flag comes from the sidebar row so the panel's state word never
-	// disagrees with the sidebar highlight.
+	// whole scoped project plus the per-service list — in place of logs. The
+	// panel derives its own state from the live count, so the synthetic target
+	// needs no active flag.
 	if m.allServicesRow() {
-		all := &sidebarTarget{
-			name:    allServicesLabel,
-			members: m.scopedServiceNames(),
-			active:  m.sidebarC.selectedTarget().active,
-		}
+		all := &sidebarTarget{name: allServicesLabel, members: m.scopedServiceNames()}
 		return lipgloss.JoinVertical(lipgloss.Left,
 			mainLabel("SUMMARY"),
 			m.targetDetailsC.render(all, m.sidebarC.allServices, w, h-2),

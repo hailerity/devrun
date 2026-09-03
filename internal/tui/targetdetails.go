@@ -38,12 +38,14 @@ func (tp targetDetailsPanel) render(t *sidebarTarget, infos []ipc.ServiceInfo, w
 	var sb strings.Builder
 
 	// Summary table — sits directly under the bordered view label that
-	// renderMain draws, so it needs no header of its own. "state" is the same
-	// green highlight the sidebar row carries (t.active, computed once in
-	// buildTargets: every member running); the "services" row carries the raw
-	// live count alongside it.
+	// renderMain draws, so it needs no header of its own. "state" is computed
+	// from the live count shown right below it (running only when every member
+	// is up) rather than from t.active: the sidebar dot may be optimistically
+	// lit ahead of the poll by s/x on "All services", but this panel must stay
+	// self-consistent with the number it prints.
+	allUp := len(t.members) > 0 && running == len(t.members)
 	state := styleMuted.Render("○ stopped")
-	if t.active {
+	if allUp {
 		state = styleGreen.Render("● running")
 	}
 	sb.WriteString(renderTable([][]string{
