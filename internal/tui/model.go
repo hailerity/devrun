@@ -362,6 +362,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Start):
 		if t := m.sidebarC.selectedTarget(); t != nil {
 			if t.name == "" {
+				// Optimistically light the row now; the next poll reconciles it
+				// against live state (or clears it if the batch fails).
+				if len(m.sidebarC.allServices) > 0 {
+					m.sidebarC.setAllServicesActive(true)
+				}
 				return m, m.doStartAll()
 			}
 			return m, m.doStartTarget()
@@ -371,6 +376,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Stop):
 		if t := m.sidebarC.selectedTarget(); t != nil {
 			if t.name == "" {
+				m.sidebarC.setAllServicesActive(false)
 				return m, m.doStopAll()
 			}
 			return m, m.doStopTarget()

@@ -243,6 +243,15 @@ func (s *sidebar) selectedTarget() *sidebarTarget {
 	return &s.targets[s.targetSel]
 }
 
+// setAllServicesActive overrides the "All services" row highlight for immediate
+// feedback when s / x is pressed on it; the next daemon poll rebuilds the row
+// and recomputes the highlight from live service state.
+func (s *sidebar) setAllServicesActive(active bool) {
+	if len(s.targets) > 0 && s.targets[0].name == "" {
+		s.targets[0].active = active
+	}
+}
+
 // stateLabel returns the short status token for a service: its port when
 // running, otherwise the state word.
 func stateLabel(svc ipc.ServiceInfo) string {
