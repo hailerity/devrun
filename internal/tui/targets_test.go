@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -317,6 +318,28 @@ func TestModel_StartStopAll_OnAllServicesRow(t *testing.T) {
 	stopMsg := m.doStopAll()()
 	if err, ok := stopMsg.(daemonErrMsg); assert.True(t, ok, "doStopAll surfaces the unreachable daemon") {
 		assert.Contains(t, err.err.Error(), "stop all:")
+	}
+}
+
+func TestClassifyBatchResp(t *testing.T) {
+	cases := []struct {
+		name    string
+		resp    *ipc.Response
+		err     error
+		benign  string
+		wantOut string
+	}{
+		{"ok", &ipc.Response{OK: true}, nil, "is already running", ""},
+		{"benign already running", &ipc.Response{Error: "web is already running"}, nil, "is already running", ""},
+		{"benign not running", &ipc.Response{Error: "web is not running"}, nil, "is not running", ""},
+		{"real failure", &ipc.Response{Error: "exec: no such file"}, nil, "is already running", "web: exec: no such file"},
+		{"transport error", nil, errors.New("dial: connection refused"), "is already running", "web: dial: connection refused"},
+		{"nil response, nil error", nil, nil, "is already running", "web: no response from daemon"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantOut, classifyBatchResp(tc.resp, tc.err, "web", tc.benign))
+		})
 	}
 }
 

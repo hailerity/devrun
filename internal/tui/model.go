@@ -1092,12 +1092,8 @@ func (m model) doStartAll() tea.Cmd {
 			if reg != nil {
 				cfg = reg.Services[name]
 			}
-			resp, err := sendOnce(sp, "start", ipc.StartPayload{Name: name, Config: cfg})
-			switch {
-			case err != nil:
-				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
-			case !resp.OK && !strings.Contains(resp.Error, "is already running"):
-				failures = append(failures, fmt.Sprintf("%s: %s", name, resp.Error))
+			if f := batchStep(sp, "start", ipc.StartPayload{Name: name, Config: cfg}, name, "is already running"); f != "" {
+				failures = append(failures, f)
 			}
 		}
 		if len(failures) > 0 {
@@ -1123,12 +1119,8 @@ func (m model) doStopAll() tea.Cmd {
 	return func() tea.Msg {
 		var failures []string
 		for _, name := range names {
-			resp, err := sendOnce(sp, "stop", ipc.StopPayload{Name: name})
-			switch {
-			case err != nil:
-				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
-			case !resp.OK && !strings.Contains(resp.Error, "is not running"):
-				failures = append(failures, fmt.Sprintf("%s: %s", name, resp.Error))
+			if f := batchStep(sp, "stop", ipc.StopPayload{Name: name}, name, "is not running"); f != "" {
+				failures = append(failures, f)
 			}
 		}
 		if len(failures) > 0 {
@@ -1136,6 +1128,33 @@ func (m model) doStopAll() tea.Cmd {
 		}
 		return daemonTickMsg{}
 	}
+}
+
+// batchStep runs one request of an "all services" batch and returns a
+// "<name>: <reason>" failure string, or "" when the member succeeded or was
+// already in the wanted state.
+func batchStep(socketPath, reqType string, payload interface{}, name, benignErr string) string {
+	resp, err := sendOnce(socketPath, reqType, payload)
+	return classifyBatchResp(resp, err, name, benignErr)
+}
+
+// classifyBatchResp turns one daemon start/stop reply into a "<name>: <reason>"
+// failure string, or "" when the member succeeded or was already in the wanted
+// state. benignErr is the daemon's wording for that already-in-state case
+// ("is already running" / "is not running") — it mirrors internal/daemon's
+// isAlreadyRunning / isNotRunning, which classify the same responses for
+// target-start / target-stop. A missing response (transport error, or the
+// contract-breaking nil/nil) is itself a failure, never a success.
+func classifyBatchResp(resp *ipc.Response, err error, name, benignErr string) string {
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s: %v", name, err)
+	case resp == nil:
+		return fmt.Sprintf("%s: no response from daemon", name)
+	case !resp.OK && !strings.Contains(resp.Error, benignErr):
+		return fmt.Sprintf("%s: %s", name, resp.Error)
+	}
+	return ""
 }
 
 // sendOnce opens a fresh daemon connection, sends a single request, and returns

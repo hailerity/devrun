@@ -389,7 +389,7 @@ func (s *sidebar) render(width, height int, focused bool) string {
 			fmt.Sprintf("  %d/%d running", running, len(s.allServices)),
 			fmt.Sprintf("SVCS %d", len(s.allServices)),
 		)
-	} else if t := s.selectedTarget(); t != nil && t.name != "" {
+	} else if t != nil { // a real target row (t.name != "")
 		state := styleMuted.Render("stopped")
 		if t.active {
 			state = styleGreen.Render("running")
