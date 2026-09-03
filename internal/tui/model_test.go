@@ -420,6 +420,85 @@ func TestModel_TabAndRightInertWhenTargetFocused(t *testing.T) {
 	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not move focus into a focused target's pane")
 }
 
+// allServicesRowModel returns a 120x40 model with the sidebar cursor parked on
+// the synthetic "All services" row (one running service, one stopped).
+func allServicesRowModel() model {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = m2.(model)
+	m.sidebarC.update(
+		[]ipc.ServiceInfo{
+			{Name: "api", State: "running", Port: intp(8080)},
+			{Name: "web", State: "stopped"},
+		},
+		[]sidebarTarget{{name: ""}, {name: "backend", members: []string{"api"}}},
+	)
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 0 // "All services"
+	return m
+}
+
+// TestModel_RenderMain_SummaryOnAllServicesRow verifies the main pane shows the
+// SUMMARY roll-up (not logs) with a running count while the cursor sits on the
+// synthetic row.
+func TestModel_RenderMain_SummaryOnAllServicesRow(t *testing.T) {
+	m := allServicesRowModel()
+	out := plain(m.renderMain(80, 24))
+	assert.Contains(t, out, "SUMMARY")
+	assert.Contains(t, out, "All services")
+	assert.Contains(t, out, "1 running / 2")
+	assert.Contains(t, out, "api")
+	assert.Contains(t, out, "web")
+	assert.NotContains(t, out, "LOGS")
+}
+
+// TestModel_TabAndRightInertOnAllServicesRow verifies focus cannot slip into a
+// hidden logs pane while the summary fills the main area.
+func TestModel_TabAndRightInertOnAllServicesRow(t *testing.T) {
+	m := allServicesRowModel()
+	require.Equal(t, focusSidebar, m.focus)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not focus the hidden logs pane")
+
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not focus the hidden logs pane")
+}
+
+// TestModel_OptimisticAllServicesHighlight verifies s / x on the "All services"
+// row flips its highlight immediately, and that the next poll reconciles it
+// against live service state.
+func TestModel_OptimisticAllServicesHighlight(t *testing.T) {
+	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{
+		"web": {Name: "web", Command: "x"},
+		"api": {Name: "api", Command: "y"},
+	}}}
+	mixed := []ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "stopped"}}
+	m.sidebarC.update(mixed, m.buildTargets(mixed))
+	m.sidebarC.section = sectionTargets
+	m.sidebarC.targetSel = 0 // "All services"
+	require.False(t, m.sidebarC.targets[0].active, "mixed state → highlight off")
+
+	// s lights the row before any poll.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = m2.(model)
+	assert.True(t, m.sidebarC.targets[0].active, "s optimistically highlights All services")
+
+	// A poll still showing web stopped clears it again.
+	m3, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{Services: mixed}})
+	m = m3.(model)
+	assert.False(t, m.sidebarC.targets[0].active, "poll recomputes the highlight from live state")
+
+	// Everything running → derived highlight on; x clears it immediately.
+	allUp := []ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "running"}}
+	m4, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{Services: allUp}})
+	m = m4.(model)
+	require.True(t, m.sidebarC.targets[0].active, "all running → highlight on")
+	m5, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = m5.(model)
+	assert.False(t, m.sidebarC.targets[0].active, "x un-highlights All services immediately")
+}
+
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area
 // automatically moves focus to the main panel so that y/v/f shortcuts work.
 func TestModel_MouseClick_SetsFocusMain(t *testing.T) {

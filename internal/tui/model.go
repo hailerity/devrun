@@ -136,7 +136,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonRespMsg:
 		m.spinning = false
-		m.sidebarC.update(m.scopedServices(msg.payload.Services), m.buildTargets(msg.payload.ActiveTargets))
+		scoped := m.scopedServices(msg.payload.Services)
+		m.sidebarC.update(scoped, m.buildTargets(scoped))
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -194,9 +195,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickSpin()
 
 	case tea.MouseMsg:
-		// Skip while a target roll-up occupies the main pane — there is no log
+		// Skip while a sidebar roll-up occupies the main pane — there is no log
 		// content under the cursor to select or focus.
-		if m.activeTab == tabLogs && m.focusedTarget() == nil {
+		if m.activeTab == tabLogs && !m.sidebarRollup() {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
 			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
 			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
@@ -251,12 +252,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Left):
 		m.focus = focusSidebar
 
-	// A focused target row shows a non-focusable roll-up in the main pane (like
-	// DETAILS), so → and Tab-in are inert while the cursor sits on one —
-	// otherwise focus would move to a logs pane the user cannot see and the
-	// f/v/y shortcuts would run against hidden scrollback.
+	// A target row or the "All services" row shows a non-focusable roll-up in
+	// the main pane (like DETAILS), so → and Tab-in are inert while the cursor
+	// sits on one — otherwise focus would move to a logs pane the user cannot
+	// see and the f/v/y shortcuts would run against hidden scrollback.
 	case key.Matches(msg, keys.Right):
-		if m.focusedTarget() == nil {
+		if !m.sidebarRollup() {
 			m.focus = focusMain
 			m.activeTab = tabLogs
 		}
@@ -265,7 +266,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
 		switch {
-		case m.focusedTarget() != nil:
+		case m.sidebarRollup():
 			m.focus = focusSidebar
 		case m.focus == focusSidebar:
 			m.focus = focusMain
@@ -285,8 +286,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.sidebarC.toggleTargetSelection()
 			m.activeTab = tabLogs
 			m.updateLogFile()
-		case m.focusedTarget() != nil:
-			// A target roll-up already fills the main pane — nothing to toggle.
+		case m.sidebarRollup():
+			// Guard: the cursor is on a roll-up row (real target or "All
+			// services") but the sidebar does not hold focus, so onTargetRow is
+			// false. The main pane already shows that roll-up — Enter must not
+			// fall through and open service DETAILS over it.
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -361,6 +365,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Start):
 		if t := m.sidebarC.selectedTarget(); t != nil {
 			if t.name == "" {
+				// Optimistically light the row now; the next poll reconciles it
+				// against live state (or clears it if the batch fails).
+				m.sidebarC.setAllServicesActive(true)
 				return m, m.doStartAll()
 			}
 			return m, m.doStartTarget()
@@ -370,6 +377,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Stop):
 		if t := m.sidebarC.selectedTarget(); t != nil {
 			if t.name == "" {
+				m.sidebarC.setAllServicesActive(false)
 				return m, m.doStopAll()
 			}
 			return m, m.doStopTarget()
@@ -819,23 +827,50 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 // its start/stop-all action — is always reachable; real targets follow it in
 // sorted order. Returns nil only with no config context at all (no registry, or
 // a registry with neither services nor targets), which collapses the block.
-func (m model) buildTargets(active []string) []sidebarTarget {
+//
+// A row is marked active — the green highlight — when it has at least one
+// member and every member is currently running, checked against `services` (the
+// daemon-reported view). The "All services" row weighs every registry service
+// by name, a target row only its own members — both through membersAllRunning,
+// so a configured service the daemon has not reported keeps either row off.
+func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
 	if m.registry == nil || (len(m.registry.Services) == 0 && len(m.registry.Targets) == 0) {
 		return nil
 	}
-	activeSet := make(map[string]bool, len(active))
-	for _, a := range active {
-		activeSet[a] = true
+	running := make(map[string]bool, len(services))
+	for _, s := range services {
+		if s.State == "running" {
+			running[s.Name] = true
+		}
 	}
-	rows := []sidebarTarget{{name: ""}} // "All services"
+	allNames := make([]string, 0, len(m.registry.Services))
+	for name := range m.registry.Services {
+		allNames = append(allNames, name)
+	}
+	rows := []sidebarTarget{{name: "", active: membersAllRunning(allNames, running)}} // "All services"
 	for _, name := range config.SortedTargetNames(m.registry.Targets) {
+		members := m.registry.Targets[name]
 		rows = append(rows, sidebarTarget{
 			name:    name,
-			members: m.registry.Targets[name],
-			active:  activeSet[name],
+			members: members,
+			active:  membersAllRunning(members, running),
 		})
 	}
 	return rows
+}
+
+// membersAllRunning reports whether members is non-empty and every member name
+// is in the running set.
+func membersAllRunning(members []string, running map[string]bool) bool {
+	if len(members) == 0 {
+		return false
+	}
+	for _, m := range members {
+		if !running[m] {
+			return false
+		}
+	}
+	return true
 }
 
 // focusedTarget returns the highlighted target when the sidebar cursor sits on a
@@ -847,6 +882,21 @@ func (m model) focusedTarget() *sidebarTarget {
 		return nil
 	}
 	return t
+}
+
+// allServicesRow reports whether the sidebar cursor is parked on the synthetic
+// "All services" row.
+func (m model) allServicesRow() bool {
+	t := m.sidebarC.selectedTarget()
+	return t != nil && t.name == ""
+}
+
+// sidebarRollup reports whether the cursor sits on a sidebar row whose content
+// fills the main pane as a non-focusable roll-up — a real target (its details)
+// or the synthetic "All services" row (the summary). Focus cannot move into the
+// main pane while one is shown, so → / Tab / log-area mouse are inert.
+func (m model) sidebarRollup() bool {
+	return m.focusedTarget() != nil || m.allServicesRow()
 }
 
 // targetMemberInfos returns the daemon-reported ServiceInfo for each member of t
@@ -1230,7 +1280,7 @@ func (m model) View() string {
 	// the screen too but carries no fields, so it is passed as `confirming`.
 	editing := m.editC.open || m.targetEditC.open
 	canEditRow := m.onServiceRow() || m.onTargetEditRow()
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.focusedTarget() != nil, m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.sidebarRollup(), m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
@@ -1250,17 +1300,33 @@ func Run(socketPath string, reg *config.Registry, src config.Source, logDir stri
 }
 
 func (m model) renderMain(w, h int) string {
+	mainLabel := func(text string) string {
+		return lipgloss.NewStyle().
+			Width(w).
+			BorderBottom(true).
+			BorderStyle(lipgloss.NormalBorder()).
+			BorderForeground(colorBorder).
+			Render(styleMuted.Render(text))
+	}
+
 	// A focused target row replaces the LOGS/DETAILS view with a read-only
 	// roll-up of that target and its member services.
 	if t := m.focusedTarget(); t != nil {
 		return lipgloss.JoinVertical(lipgloss.Left,
-			lipgloss.NewStyle().
-				Width(w).
-				BorderBottom(true).
-				BorderStyle(lipgloss.NormalBorder()).
-				BorderForeground(colorBorder).
-				Render(styleMuted.Render("TARGET")),
+			mainLabel("TARGET"),
 			m.targetDetailsC.render(t, m.targetMemberInfos(t), w, h-2),
+		)
+	}
+
+	// The synthetic "All services" row shows a summary — running count over the
+	// whole scoped project plus the per-service list — in place of logs. The
+	// panel derives its own state from the live count, so the synthetic target
+	// needs no active flag.
+	if m.allServicesRow() {
+		all := &sidebarTarget{name: allServicesLabel, members: m.scopedServiceNames()}
+		return lipgloss.JoinVertical(lipgloss.Left,
+			mainLabel("SUMMARY"),
+			m.targetDetailsC.render(all, m.sidebarC.allServices, w, h-2),
 		)
 	}
 
