@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+	"path/filepath"
 	"regexp"
 	"testing"
 
@@ -32,11 +34,11 @@ func svcs(names ...string) []ipc.ServiceInfo {
 	return out
 }
 
-func TestSidebar_NoTargets_HidesBlockAndWrapsWithinServices(t *testing.T) {
+func TestSidebar_NoConfigContext_HidesBlockAndWrapsWithinServices(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web", "zoo"), nil)
 
-	assert.False(t, sb.hasTargets())
+	assert.False(t, sb.showTargets())
 	assert.Nil(t, sb.selectedTarget())
 
 	sb.selected = 0
@@ -216,6 +218,38 @@ func TestSidebar_RendersTargetsBlock(t *testing.T) {
 	assert.Contains(t, out, "SERVICES")
 }
 
+// TestSidebar_AllServicesRowWithoutRealTargets covers the single-row TARGETS
+// block: the "All services" row is shown, navigable, and carries a running-count
+// info block even though no real target is defined.
+func TestSidebar_AllServicesRowWithoutRealTargets(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "api", State: "running"},
+		{Name: "web", State: "stopped"},
+	}, []sidebarTarget{{name: ""}})
+
+	require.True(t, sb.showTargets())
+	require.Equal(t, sectionServices, sb.section, "cursor starts in SERVICES")
+
+	// Up from services[0] lands on the lone "All services" row.
+	sb.moveUp()
+	assert.Equal(t, sectionTargets, sb.section)
+	assert.Equal(t, 0, sb.targetSel)
+	require.NotNil(t, sb.selectedTarget())
+	assert.Equal(t, "", sb.selectedTarget().name)
+
+	// Down from the row returns to the top of SERVICES.
+	sb.moveDown()
+	assert.Equal(t, sectionServices, sb.section)
+	assert.Equal(t, 0, sb.selected)
+
+	sb.section = sectionTargets
+	out := plain(sb.render(30, 24, true))
+	assert.Contains(t, out, "TARGETS")
+	assert.Contains(t, out, "All services")
+	assert.Contains(t, out, "1/2 running", "info block counts running services")
+}
+
 func TestModel_BuildTargets(t *testing.T) {
 	m := model{}
 	assert.Nil(t, m.buildTargets(nil), "nil registry → no targets")
@@ -240,26 +274,83 @@ func TestModel_SidebarWidth_GrowsForLongTargetName(t *testing.T) {
 	assert.Equal(t, len("a-very-long-target-name-here")+4, m.sidebarWidth())
 }
 
-func TestModel_BuildTargets_EmptyWhenNoTargets(t *testing.T) {
+func TestModel_BuildTargets_AllServicesRowWhenNoRealTargets(t *testing.T) {
 	m := model{registry: &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},
 		Targets:  map[string][]string{},
 	}}
-	assert.Nil(t, m.buildTargets(nil))
+	rows := m.buildTargets(nil)
+	require.Len(t, rows, 1, "a registry with services still yields the All services row")
+	assert.Equal(t, "", rows[0].name)
 }
 
-func TestModel_StartStopKey_NoopOnAllServicesRow(t *testing.T) {
+func TestModel_BuildTargets_NilWhenRegistryDefinesNothing(t *testing.T) {
 	m := model{registry: &config.Registry{
-		Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "x"}},
-		Targets:  map[string][]string{"t1": {"web"}},
+		Services: map[string]*config.ServiceConfig{},
+		Targets:  map[string][]string{},
 	}}
+	assert.Nil(t, m.buildTargets(nil), "no services and no targets → no TARGETS block")
+}
+
+func TestModel_StartStopAll_OnAllServicesRow(t *testing.T) {
+	m := model{
+		socketPath: filepath.Join(t.TempDir(), "nonexistent.sock"),
+		registry: &config.Registry{
+			Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "x"}},
+			Targets:  map[string][]string{"t1": {"web"}},
+		},
+	}
 	m.sidebarC.update(svcs("web"), m.buildTargets(nil))
 	m.sidebarC.section = sectionTargets
 	m.sidebarC.targetSel = 0 // "All services"
 
 	require.NotNil(t, m.sidebarC.selectedTarget())
-	assert.Nil(t, m.doStartTarget(), "start on All services is a no-op")
-	assert.Nil(t, m.doStopTarget(), "stop on All services is a no-op")
+	// The target-scoped commands stay no-ops on the synthetic row...
+	assert.Nil(t, m.doStartTarget(), "start-target is a no-op on All services")
+	assert.Nil(t, m.doStopTarget(), "stop-target is a no-op on All services")
+
+	// ...and start/stop-all take over. With the daemon unreachable the batch
+	// reports its failure rather than returning nil.
+	startMsg := m.doStartAll()()
+	if err, ok := startMsg.(daemonErrMsg); assert.True(t, ok, "doStartAll surfaces the unreachable daemon") {
+		assert.Contains(t, err.err.Error(), "start all:")
+	}
+	stopMsg := m.doStopAll()()
+	if err, ok := stopMsg.(daemonErrMsg); assert.True(t, ok, "doStopAll surfaces the unreachable daemon") {
+		assert.Contains(t, err.err.Error(), "stop all:")
+	}
+}
+
+func TestClassifyBatchResp(t *testing.T) {
+	cases := []struct {
+		name    string
+		resp    *ipc.Response
+		err     error
+		benign  string
+		wantOut string
+	}{
+		{"ok", &ipc.Response{OK: true}, nil, "is already running", ""},
+		{"benign already running", &ipc.Response{Error: "web is already running"}, nil, "is already running", ""},
+		{"benign not running", &ipc.Response{Error: "web is not running"}, nil, "is not running", ""},
+		{"real failure", &ipc.Response{Error: "exec: no such file"}, nil, "is already running", "web: exec: no such file"},
+		{"not-OK with blank error", &ipc.Response{OK: false, Error: ""}, nil, "is already running", "web: request failed"},
+		{"transport error", nil, errors.New("dial: connection refused"), "is already running", "web: dial: connection refused"},
+		{"nil response, nil error", nil, nil, "is already running", "web: no response from daemon"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantOut, classifyBatchResp(tc.resp, tc.err, "web", tc.benign))
+		})
+	}
+}
+
+func TestModel_StartStopAll_NoopWithoutSocket(t *testing.T) {
+	m := model{registry: &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "x"}},
+	}}
+	m.sidebarC.update(svcs("web"), m.buildTargets(nil))
+	assert.Nil(t, m.doStartAll(), "no socket → no command")
+	assert.Nil(t, m.doStopAll(), "no socket → no command")
 }
 
 func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {

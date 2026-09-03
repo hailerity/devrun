@@ -360,12 +360,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Start):
 		if t := m.sidebarC.selectedTarget(); t != nil {
+			if t.name == "" {
+				return m, m.doStartAll()
+			}
 			return m, m.doStartTarget()
 		}
 		return m, m.doStart()
 
 	case key.Matches(msg, keys.Stop):
 		if t := m.sidebarC.selectedTarget(); t != nil {
+			if t.name == "" {
+				return m, m.doStopAll()
+			}
 			return m, m.doStopTarget()
 		}
 		return m, m.doStop()
@@ -395,7 +401,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m model) onServiceRow() bool {
 	return m.focus == focusSidebar &&
 		m.registry != nil &&
-		(!m.sidebarC.hasTargets() || m.sidebarC.section == sectionServices) &&
+		(!m.sidebarC.showTargets() || m.sidebarC.section == sectionServices) &&
 		m.sidebarC.selectedService() != nil
 }
 
@@ -807,11 +813,14 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 	return out
 }
 
-// buildTargets turns the registry's target definitions into sidebar rows, with
-// the synthetic "All services" row first. Returns nil when no targets are
-// defined, which collapses the TARGETS block entirely.
+// buildTargets turns the registry's target definitions into sidebar rows, led
+// by the synthetic "All services" row (start/stop-all). The "All services" row
+// is present whenever the registry defines anything, so the TARGETS block — and
+// its start/stop-all action — is always reachable; real targets follow it in
+// sorted order. Returns nil only with no config context at all (no registry, or
+// a registry with neither services nor targets), which collapses the block.
 func (m model) buildTargets(active []string) []sidebarTarget {
-	if m.registry == nil || len(m.registry.Targets) == 0 {
+	if m.registry == nil || (len(m.registry.Services) == 0 && len(m.registry.Targets) == 0) {
 		return nil
 	}
 	activeSet := make(map[string]bool, len(active))
@@ -872,7 +881,7 @@ func (m *model) updateLogFile() {
 // DETAILS. The sidebar's section persists after focus leaves it, so the focus
 // check is what keeps Enter in the LOGS panel meaning "details".
 func (m model) onTargetRow() bool {
-	return m.focus == focusSidebar && m.sidebarC.section == sectionTargets && m.sidebarC.hasTargets()
+	return m.focus == focusSidebar && m.sidebarC.section == sectionTargets && m.sidebarC.showTargets()
 }
 
 const (
@@ -1049,6 +1058,123 @@ func (m model) doStopTarget() tea.Cmd {
 			return daemonTickMsg{}
 		})
 	}
+}
+
+// scopedServiceNames lists the names of every service in the sidebar's scoped
+// view (the unfiltered "All services" set), in the sidebar's sorted order.
+func (m model) scopedServiceNames() []string {
+	names := make([]string, len(m.sidebarC.allServices))
+	for i, s := range m.sidebarC.allServices {
+		names[i] = s.Name
+	}
+	return names
+}
+
+// doStartAll starts every scoped service — the action behind `s` on the
+// synthetic "All services" row, the TUI equivalent of `devrun start --all`. It
+// dials once per service (the daemon serves one request per connection),
+// shipping each definition inline so a project service the daemon has not seen
+// still starts. A service already running is left alone; a member that fails
+// does not abort the rest, and the combined failures surface as one error.
+func (m model) doStartAll() tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	names := m.scopedServiceNames()
+	if len(names) == 0 {
+		return nil
+	}
+	sp, reg := m.socketPath, m.registry
+	return func() tea.Msg {
+		var failures []string
+		for _, name := range names {
+			var cfg *config.ServiceConfig
+			if reg != nil {
+				cfg = reg.Services[name]
+			}
+			if f := batchStep(sp, "start", ipc.StartPayload{Name: name, Config: cfg}, name, "is already running"); f != "" {
+				failures = append(failures, f)
+			}
+		}
+		if len(failures) > 0 {
+			return daemonErrMsg{fmt.Errorf("start all: %s", strings.Join(failures, "; "))}
+		}
+		return daemonTickMsg{}
+	}
+}
+
+// doStopAll stops every scoped service — the action behind `x` on the synthetic
+// "All services" row, the TUI equivalent of `devrun stop --all`. Like
+// doStartAll it dials once per service; a service already stopped is not an
+// error, and per-service failures are collected into one message.
+func (m model) doStopAll() tea.Cmd {
+	if m.socketPath == "" {
+		return nil
+	}
+	names := m.scopedServiceNames()
+	if len(names) == 0 {
+		return nil
+	}
+	sp := m.socketPath
+	return func() tea.Msg {
+		var failures []string
+		for _, name := range names {
+			if f := batchStep(sp, "stop", ipc.StopPayload{Name: name}, name, "is not running"); f != "" {
+				failures = append(failures, f)
+			}
+		}
+		if len(failures) > 0 {
+			return daemonErrMsg{fmt.Errorf("stop all: %s", strings.Join(failures, "; "))}
+		}
+		return daemonTickMsg{}
+	}
+}
+
+// batchStep runs one request of an "all services" batch and returns a
+// "<name>: <reason>" failure string, or "" when the member succeeded or was
+// already in the wanted state.
+func batchStep(socketPath, reqType string, payload interface{}, name, benignErr string) string {
+	resp, err := sendOnce(socketPath, reqType, payload)
+	return classifyBatchResp(resp, err, name, benignErr)
+}
+
+// classifyBatchResp turns one daemon start/stop reply into a "<name>: <reason>"
+// failure string, or "" when the member succeeded or was already in the wanted
+// state. benignErr is the daemon's wording for that already-in-state case: the
+// single-service "start" / "stop" handlers reply "<name> is already running" /
+// "<name> is not running" (daemon.startService / stopService), and the same
+// wording is what internal/daemon's isAlreadyRunning / isNotRunning match for
+// the target paths that wrap those methods. A missing response (transport
+// error, or a contract-breaking nil/nil) is itself a failure, never a success;
+// so is a not-OK reply with no error text.
+func classifyBatchResp(resp *ipc.Response, err error, name, benignErr string) string {
+	switch {
+	case err != nil:
+		return fmt.Sprintf("%s: %v", name, err)
+	case resp == nil:
+		return fmt.Sprintf("%s: no response from daemon", name)
+	case !resp.OK && strings.Contains(resp.Error, benignErr):
+		return "" // already in the wanted state — not a failure
+	case !resp.OK:
+		reason := resp.Error
+		if reason == "" {
+			reason = "request failed"
+		}
+		return fmt.Sprintf("%s: %s", name, reason)
+	}
+	return ""
+}
+
+// sendOnce opens a fresh daemon connection, sends a single request, and returns
+// the response. The daemon serves one request per connection, so batch callers
+// loop with a new call per request rather than reusing a client.
+func sendOnce(socketPath, reqType string, payload interface{}) (*ipc.Response, error) {
+	c, err := client.Connect(socketPath)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	return c.Send(reqType, payload)
 }
 
 func (m model) View() string {

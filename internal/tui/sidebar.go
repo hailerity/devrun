@@ -33,7 +33,7 @@ type sidebar struct {
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
 
-	targets      []sidebarTarget // index 0 is "All services"; len <= 1 → no TARGETS block
+	targets      []sidebarTarget // index 0 is "All services"; empty → no config context, no TARGETS block
 	targetSel    int             // cursor within targets
 	section      sidebarSection  // which list the cursor is in
 	filterTarget string          // name of the explicitly-selected filter target ("" = show all); set only via Enter, not cursor movement
@@ -41,9 +41,11 @@ type sidebar struct {
 	loaded bool // true once the first daemon poll has resolved (response or error)
 }
 
-// hasTargets reports whether there is at least one real target beyond the
-// synthetic "All services" row — i.e. whether the TARGETS block is shown.
-func (s *sidebar) hasTargets() bool { return len(s.targets) > 1 }
+// showTargets reports whether the TARGETS block is rendered. It is shown
+// whenever there is at least one row — the synthetic "All services" row is
+// always present (so start/stop-all is reachable) once the registry defines
+// anything; an empty slice means no config context at all.
+func (s *sidebar) showTargets() bool { return len(s.targets) > 0 }
 
 func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	s.loaded = true
@@ -62,7 +64,7 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	s.allServices = sorted
 	s.targets = targets
 
-	if !s.hasTargets() {
+	if !s.showTargets() {
 		s.section = sectionServices
 		s.targetSel = 0
 		s.filterTarget = ""
@@ -158,11 +160,11 @@ func (s *sidebar) toggleTargetSelection() {
 }
 
 // moveDown / moveUp walk a single circular cursor over the TARGETS rows followed
-// by the (filtered) SERVICES rows. With no targets, they wrap within services —
-// identical to the pre-targets behaviour.
+// by the (filtered) SERVICES rows. With no TARGETS block at all (no config
+// context), they wrap within services — identical to the pre-targets behaviour.
 
 func (s *sidebar) moveDown() {
-	if !s.hasTargets() {
+	if !s.showTargets() {
 		if len(s.services) == 0 {
 			return
 		}
@@ -192,7 +194,7 @@ func (s *sidebar) moveDown() {
 }
 
 func (s *sidebar) moveUp() {
-	if !s.hasTargets() {
+	if !s.showTargets() {
 		if len(s.services) == 0 {
 			return
 		}
@@ -232,7 +234,7 @@ func (s *sidebar) selectedService() *ipc.ServiceInfo {
 // in the services section, there are no targets, or the row is out of range.
 // The synthetic "All services" row is returned like any other (name == "").
 func (s *sidebar) selectedTarget() *sidebarTarget {
-	if !s.hasTargets() || s.section != sectionTargets {
+	if !s.showTargets() || s.section != sectionTargets {
 		return nil
 	}
 	if s.targetSel < 0 || s.targetSel >= len(s.targets) {
@@ -320,7 +322,7 @@ func sectionHeader(label string, width int, accented bool) string {
 }
 
 func (s *sidebar) render(width, height int, focused bool) string {
-	if len(s.allServices) == 0 && !s.hasTargets() {
+	if len(s.allServices) == 0 && !s.showTargets() {
 		if !s.loaded {
 			return styleMuted.Render("Loading services…")
 		}
@@ -329,8 +331,10 @@ func (s *sidebar) render(width, height int, focused bool) string {
 
 	var top []string
 
-	// --- TARGETS block (only when a real target exists) ---
-	if s.hasTargets() {
+	// --- TARGETS block: shown whenever there is a config context. It always
+	// leads with the synthetic "All services" row, so a start/stop-all is
+	// reachable even before any real target is defined. ---
+	if s.showTargets() {
 		top = append(top, sectionHeader("TARGETS", width, focused && s.section == sectionTargets))
 		for i, t := range s.targets {
 			label := t.name
@@ -353,7 +357,7 @@ func (s *sidebar) render(width, height int, focused bool) string {
 	}
 
 	// --- SERVICES block ---
-	servicesActive := !s.hasTargets() || s.section == sectionServices
+	servicesActive := !s.showTargets() || s.section == sectionServices
 	top = append(top, sectionHeader("SERVICES", width, focused && servicesActive))
 
 	if len(s.services) == 0 {
@@ -372,7 +376,20 @@ func (s *sidebar) render(width, height int, focused bool) string {
 	// bottom edge so their position doesn't drift with the list length. ---
 
 	var bottom []string
-	if t := s.selectedTarget(); t != nil && t.name != "" {
+	if t := s.selectedTarget(); t != nil && t.name == "" {
+		// The synthetic "All services" row: s/x act on every scoped service.
+		running := 0
+		for _, svc := range s.allServices {
+			if svc.State == "running" {
+				running++
+			}
+		}
+		bottom = append(bottom,
+			styleMuted.Render("── "+truncateName(allServicesLabel, width-6)+" ──"),
+			fmt.Sprintf("  %d/%d running", running, len(s.allServices)),
+			fmt.Sprintf("SVCS %d", len(s.allServices)),
+		)
+	} else if t != nil { // a real target row (t.name != "")
 		state := styleMuted.Render("stopped")
 		if t.active {
 			state = styleGreen.Render("running")
