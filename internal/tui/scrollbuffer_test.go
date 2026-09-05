@@ -308,6 +308,150 @@ func TestScrollBuffer_MouseClickEmptyBufferNoopNoPanic(t *testing.T) {
 	sb.handleMouse(msg, 3, 23) // must not panic
 }
 
+// --- line-wrap tests ---
+//
+// A line wider than the pane wraps onto continuation rows instead of being
+// cut off (renderLine/View), which means a variable number of logical lines
+// fit per screen depending on content — the scrolling math below (rowsForLine,
+// topForBottom, maxYOffset, lineVisible, lineAtRow) exists to keep yOffset,
+// cursor visibility, and mouse clicks correct under that variability.
+
+func TestScrollBuffer_ViewWrapsLongLineInsteadOfTruncating(t *testing.T) {
+	sb := scrollBuffer{
+		lines:  []string{"abcdefghijklmno"}, // 15 chars, wider than the 10-col pane
+		height: 5,
+		width:  10,
+		cursor: 99, // off the highlighted path so this renders at the full width
+	}
+	out := sb.View()
+	rows := strings.Split(out, "\n")
+	assert.Len(t, rows, 2, "a 15-char line at width 10 must wrap to 2 rows, not truncate to 1")
+	assert.Contains(t, rows[0], "abcdefghij")
+	assert.Contains(t, rows[1], "klmno")
+}
+
+func TestScrollBuffer_ViewCapsWrappedRowsAtBudget(t *testing.T) {
+	// A single line wrapping to far more rows than the screen has must not
+	// blow the row budget — the exact failure mode of the header-hiding bug
+	// this feature could reintroduce if the budget weren't enforced here.
+	sb := scrollBuffer{
+		lines:  []string{strings.Repeat("x", 100)}, // wraps to 10 rows at width 10
+		height: 3,
+		width:  10,
+		cursor: 99,
+	}
+	out := sb.View()
+	rows := strings.Split(out, "\n")
+	assert.Len(t, rows, 3, "output must never exceed the row budget, even mid-line")
+}
+
+func TestScrollBuffer_RowsForLineCountsWrappedRows(t *testing.T) {
+	sb := scrollBuffer{lines: []string{"abcdefghijklmno"}, width: 10}
+	assert.Equal(t, 2, sb.rowsForLine(0))
+}
+
+func TestScrollBuffer_RowsForLineIsOneWhenWidthUnset(t *testing.T) {
+	// width<=0 (not yet sized) degrades to the old fixed "1 line = 1 row"
+	// assumption rather than wrapping against a nonsensical width.
+	sb := scrollBuffer{lines: []string{strings.Repeat("x", 500)}}
+	assert.Equal(t, 1, sb.rowsForLine(0))
+}
+
+func TestScrollBuffer_GotoBottomAccountsForWrappedLines(t *testing.T) {
+	sb := scrollBuffer{
+		lines: []string{
+			"short0",
+			"short1",
+			"abcdefghijklmno", // wraps to 2 rows at width 10
+			"short2",
+			"short3",
+		},
+		height: 3,
+		width:  10,
+	}
+	sb.gotoBottom()
+	assert.Equal(t, 4, sb.cursor)
+	assert.Equal(t, 3, sb.yOffset,
+		"the wrapped line (2 rows) doesn't fit alongside both trailing short lines in a 3-row budget")
+}
+
+func TestScrollBuffer_MoveDownScrollsPastWrappedLine(t *testing.T) {
+	sb := scrollBuffer{
+		lines: []string{
+			"abcdefghijklmno", // idx0, wraps to 2 rows at width 10
+			"short1",          // idx1
+			"short2",          // idx2
+		},
+		height:  2,
+		width:   10,
+		yOffset: 0,
+		cursor:  0,
+	}
+	sb.moveDown()
+	// idx0 alone already fills the 2-row budget, so idx1 isn't visible yet —
+	// moveDown must scroll so the cursor's line becomes the bottom line.
+	assert.Equal(t, 1, sb.cursor)
+	assert.Equal(t, 1, sb.yOffset)
+}
+
+func TestScrollBuffer_LineAtRowMapsWrappedRowsToSameLine(t *testing.T) {
+	sb := scrollBuffer{
+		lines: []string{
+			"abcdefghijklmno", // idx0, wraps to 2 rows at width 10
+			"short1",          // idx1
+		},
+		height:  5,
+		width:   10,
+		yOffset: 0,
+	}
+	assert.Equal(t, 0, sb.lineAtRow(0), "first physical row of the wrapped line")
+	assert.Equal(t, 0, sb.lineAtRow(1), "second physical row of the same wrapped line")
+	assert.Equal(t, 1, sb.lineAtRow(2), "next logical line starts after both wrapped rows")
+}
+
+func TestRenderLine_CursorHighlightWrapsMultiRow(t *testing.T) {
+	sb := scrollBuffer{width: 10, height: 5, cursor: 0}
+	out := sb.renderLine(0, "abcdefghijklmno")
+	rows := strings.Split(out, "\n")
+	assert.Greater(t, len(rows), 1, "a long cursor line must wrap, not truncate, across multiple rows")
+}
+
+// --- wrap/no-wrap toggle tests ('w' key, scrollBuffer.noWrap) ---
+
+func TestScrollBuffer_NoWrapTruncatesInsteadOfWrapping(t *testing.T) {
+	sb := scrollBuffer{width: 10, height: 5, cursor: 99, noWrap: true}
+	out := sb.renderLine(0, "abcdefghijklmno")
+	rows := strings.Split(out, "\n")
+	assert.Len(t, rows, 1, "noWrap must render a long line as a single, truncated row")
+	assert.NotContains(t, out, "klmno", "the tail past the pane width must be cut off, not wrapped")
+}
+
+func TestScrollBuffer_NoWrapRowsForLineIsAlwaysOne(t *testing.T) {
+	sb := scrollBuffer{lines: []string{strings.Repeat("x", 500)}, width: 10, noWrap: true}
+	assert.Equal(t, 1, sb.rowsForLine(0))
+}
+
+func TestScrollBuffer_NoWrapRestoresOldScrollArithmetic(t *testing.T) {
+	// With noWrap set, every line is 1 row again regardless of length, so
+	// gotoBottom must land on the exact same yOffset as the pre-wrap formula
+	// (len(lines)-height), even with a line long enough to wrap when noWrap
+	// is off.
+	sb := scrollBuffer{
+		lines: []string{
+			"short0",
+			strings.Repeat("x", 500), // would wrap to many rows if noWrap were false
+			"short1",
+			"short2",
+		},
+		height: 2,
+		width:  10,
+		noWrap: true,
+	}
+	sb.gotoBottom()
+	assert.Equal(t, 3, sb.cursor)
+	assert.Equal(t, 2, sb.yOffset) // len(lines)-height = 4-2 = 2
+}
+
 // --- ANSI safety tests ---
 
 func TestStripUnsafe_RemovesCarriageReturn(t *testing.T) {

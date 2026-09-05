@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -49,19 +50,19 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 		BorderForeground(colorBorder)
 
 	if f.toast != "" {
-		return base.Foreground(colorAccent).Render(f.toast)
+		return base.Foreground(colorAccent).Render(ansi.Truncate(f.toast, width, ""))
 	}
 
 	// The modals draw their own hint line; the footer just names its keys.
 	if confirming {
-		return base.Render(strings.Join([]string{
+		return base.Render(ansi.Truncate(strings.Join([]string{
 			renderHint("y", "remove"), renderHint("n/Esc", "cancel"),
-		}, "  "))
+		}, "  "), width, ""))
 	}
 	if editing {
-		return base.Render(strings.Join([]string{
+		return base.Render(ansi.Truncate(strings.Join([]string{
 			renderHint("Tab", "field"), renderHint("↵", "save"), renderHint("Esc", "cancel"),
-		}, "  "))
+		}, "  "), width, ""))
 	}
 
 	var hints []string
@@ -80,7 +81,7 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 		hints = append(hints, renderHint("↵", "details"))
 	}
 	if !targetFocused && focus == focusMain && activeTab == tabLogs {
-		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"))
+		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"), renderHint("w", "wrap"))
 	}
 	if visualMode {
 		hints = append(hints, renderHint("Esc", "cancel"))
@@ -93,7 +94,15 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 		hints = append(hints, renderHint("d", "remove"))
 	}
 	hints = append(hints, renderHint("q", "quit"))
-	return base.Render(strings.Join(hints, "  "))
+	// The hint list grows with context (visual mode, edit/remove-able rows,
+	// the log-pane shortcuts) and can outgrow a narrow terminal. lipgloss's
+	// Width() only ever pads short content up to width — it never caps long
+	// content back down — so an overlong, unbudgeted line here would wrap in
+	// the real terminal and scroll the whole screen, pushing the header off
+	// the top exactly like the earlier logs-panel bug. Truncate defensively:
+	// losing the least-essential (rightmost) hints beats corrupting the
+	// layout.
+	return base.Render(ansi.Truncate(strings.Join(hints, "  "), width, ""))
 }
 
 func renderHint(k, label string) string {

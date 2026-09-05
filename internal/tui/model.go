@@ -329,6 +329,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.followMode = !m.logsC.sb.followMode
 		}
 
+	case key.Matches(msg, keys.Wrap):
+		if m.focus == focusMain && m.activeTab == tabLogs {
+			m.logsC.sb.noWrap = !m.logsC.sb.noWrap
+		}
+
 	case key.Matches(msg, keys.Visual):
 		if m.focus == focusMain && m.activeTab == tabLogs {
 			m.logsC.sb.enterVisual()
@@ -1342,6 +1347,9 @@ func (m model) renderMain(w, h int) string {
 		}
 		if m.logsC.sb.followMode {
 			tabBar += styleMuted.Render("  ● follow")
+		}
+		if m.logsC.sb.noWrap {
+			tabBar += styleMuted.Render("  no-wrap")
 		}
 	} else {
 		tabBar = styleMuted.Render("DETAILS")
