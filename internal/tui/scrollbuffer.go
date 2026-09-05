@@ -94,15 +94,36 @@ func stripANSI(s string) string {
 // unsafeSeqRe matches control sequences that are not SGR colour codes.
 // These corrupt TUI layout or bleed colour into adjacent widgets when rendered raw:
 //   - Carriage return: physically moves cursor to column 0
-//   - Non-SGR CSI: cursor movement, erase, show/hide cursor, etc. (final byte ≠ 'm')
-//   - OSC: window title, hyperlinks (BEL or ST terminated)
+//   - Non-SGR CSI: cursor movement, erase, show/hide cursor, etc. (final byte ≠ 'm').
+//     The full ECMA-48 grammar is matched — parameter bytes 0x30-0x3F, intermediate
+//     bytes 0x20-0x2F, then any final byte — not just a bare "digits + letter"
+//     shape, so sequences like "ESC[6 q" (an intermediate byte) are caught too.
+//   - String sequences (OSC/DCS/SOS/PM/APC): window title, hyperlinks, and other
+//     ESC-]/P/X/^/_ ... (BEL or ST)-terminated payloads.
+//   - Bare (no-argument) escapes: e.g. ESC M (reverse index — scrolls the real
+//     terminal and can shove the TUI's own header off screen), ESC D (index),
+//     ESC c (full reset), ESC 7/8 (save/restore cursor). These have no "[" or
+//     "]" so the CSI/OSC branches above never see them, and a naive filter that
+//     only strips bracketed sequences lets them straight through to the terminal.
 var unsafeSeqRe = regexp.MustCompile(
 	`\r` +
-		`|\x1b\[[0-9;?]*[A-Za-ln-z]` +
-		`|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`,
+		`|\x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)` +
+		`|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x6c\x6e-\x7e]` +
+		`|\x1b[\x30-\x4f\x51-\x5a\x5c\x60-\x7e]`,
 )
 
 func stripUnsafe(s string) string {
+	// Expand literal tabs before anything else. ansi.Truncate's width pass
+	// treats \t as a zero-width control byte (it's not a "print" action), but
+	// a real terminal jumps the cursor to the next tab stop — up to 7 columns
+	// it never told us about. That mismatch makes us under-truncate: the line
+	// we hand the terminal is wider than we believe, so the terminal wraps it
+	// into an extra physical row our fixed-height layout never budgeted for.
+	// One tab-indented line (a Go panic's "\t<file>:<line>" stack frames are
+	// the common case) is enough to push everything below it down a row, and
+	// with several such lines the header itself scrolls out of view. Expanding
+	// to plain spaces makes our width count match what actually gets printed.
+	s = strings.ReplaceAll(s, "\t", "    ")
 	return unsafeSeqRe.ReplaceAllString(s, "")
 }
 

@@ -335,6 +335,38 @@ func TestStripUnsafe_PreservesSgrSequences(t *testing.T) {
 	assert.Equal(t, "\x1b[32mfoo\x1b[0m", stripUnsafe("\x1b[32mfoo\x1b[0m"))
 }
 
+// A bare two-byte (Fe) escape has no "[" or "]", so the CSI/OSC branches never
+// see it. Left unstripped it reaches the real terminal and executes: ESC M
+// (reverse index) scrolls the whole screen, which can shove the TUI's header
+// off the top — this reproduced the reported bug against a live log file.
+func TestStripUnsafe_RemovesBareReverseIndex(t *testing.T) {
+	assert.Equal(t, "foobar", stripUnsafe("foo\x1bMbar"))
+}
+
+func TestStripUnsafe_RemovesBareFullReset(t *testing.T) {
+	assert.Equal(t, "foobar", stripUnsafe("foo\x1bcbar"))
+}
+
+func TestStripUnsafe_RemovesBareSaveRestoreCursor(t *testing.T) {
+	assert.Equal(t, "foobar", stripUnsafe("foo\x1b7\x1b8bar"))
+}
+
+func TestStripUnsafe_RemovesCsiWithIntermediateByte(t *testing.T) {
+	// DECSCUSR (set cursor style) carries an intermediate byte (the space)
+	// before its final byte — the old "[0-9;?]* + letter" shape missed it.
+	assert.Equal(t, "foo", stripUnsafe("foo\x1b[2 q"))
+}
+
+// A leading tab — the shape of every frame in a Go panic's stack trace
+// ("\t<file>:<line>") — must not survive as a literal tab: ansi.Truncate
+// counts it as zero-width, but a real terminal burns a full tab stop on it,
+// so our truncation budget and the terminal's actual column count disagree
+// and the line wraps into an extra, unbudgeted row. This reproduced against
+// the daemon's real api.log (a Go panic) and scrolled the header off screen.
+func TestStripUnsafe_ExpandsTabs(t *testing.T) {
+	assert.Equal(t, "    /pkg/file.go:58", stripUnsafe("\t/pkg/file.go:58"))
+}
+
 func TestRenderLine_PlainLineEndsWithReset(t *testing.T) {
 	// Unclosed SGR in a plain line must not bleed — output must end with reset.
 	// Use idx=1 with cursor=0 (default) to exercise the plain (non-highlighted) path.
