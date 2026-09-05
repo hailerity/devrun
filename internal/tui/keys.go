@@ -20,6 +20,7 @@ type keyMap struct {
 	Escape key.Binding
 	Top    key.Binding
 	Bottom key.Binding
+	Wrap   key.Binding
 }
 
 var keys = keyMap{
@@ -40,4 +41,5 @@ var keys = keyMap{
 	Escape: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "cancel")),
 	Top:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
 	Bottom: key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+	Wrap:   key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wrap")),
 }
