@@ -55,7 +55,7 @@ func (p *targetPicker) selected(targets []sidebarTarget) string {
 	return targets[p.cursor-1].name
 }
 
-func (p targetPicker) view(targets []sidebarTarget, all []ipc.ServiceInfo, filter string, width, height int) string {
+func (p targetPicker) view(targets []sidebarTarget, all []ipc.ServiceInfo, filter string) string {
 	state := make(map[string]string, len(all))
 	running := 0
 	for _, s := range all {
@@ -143,13 +143,9 @@ func (p targetPicker) view(targets []sidebarTarget, all []ipc.ServiceInfo, filte
 
 	b.WriteString("\n" + styleMuted.Render("↵ filter · e edit · Esc close"))
 
-	box := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
 		Render(b.String())
-	if height < lipgloss.Height(box) {
-		height = lipgloss.Height(box)
-	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }

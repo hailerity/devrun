@@ -1203,16 +1203,20 @@ func (m model) View() string {
 		m.renderMain(mainW, bodyH),
 	)
 
-	// An open modal takes over the body area.
+	// An open modal floats over the dimmed panes rather than replacing them.
+	var modal string
 	switch {
 	case m.editC.open:
-		body = m.editC.view(m.width, bodyH)
+		modal = m.editC.view()
 	case m.targetEditC.open:
-		body = m.targetEditC.view(m.width, bodyH)
+		modal = m.targetEditC.view()
 	case m.removeC.open:
-		body = m.removeC.view(m.width, bodyH)
+		modal = m.removeC.view()
 	case m.pickerC.open:
-		body = m.pickerC.view(m.sidebarC.targets, m.sidebarC.allServices, m.sidebarC.filterTarget, m.width, bodyH)
+		modal = m.pickerC.view(m.sidebarC.targets, m.sidebarC.allServices, m.sidebarC.filterTarget)
+	}
+	if modal != "" {
+		body = overlay(body, modal, m.width, bodyH)
 	}
 
 	// Footer. `editing` is the form modals only; the remove-confirm modal owns

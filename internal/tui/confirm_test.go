@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,19 +23,11 @@ func TestRemoveConfirm_OpenForAndClose(t *testing.T) {
 func TestRemoveConfirm_ViewMentionsServiceAndKeys(t *testing.T) {
 	var c removeConfirm
 	c.openFor("api")
-	out := c.view(80, 24)
+	out := c.view()
 	assert.Contains(t, out, "api")
 	assert.Contains(t, out, "y remove")
 	assert.Contains(t, out, "Esc")
 
 	c.errMsg = "service \"api\" not found"
-	assert.Contains(t, c.view(80, 24), "not found")
-}
-
-func TestRemoveConfirm_ViewGrowsToFitBox(t *testing.T) {
-	var c removeConfirm
-	c.openFor("web")
-	// A height smaller than the rendered box must not clip it.
-	out := c.view(80, 1)
-	assert.GreaterOrEqual(t, strings.Count(out, "\n"), 6)
+	assert.Contains(t, c.view(), "not found")
 }

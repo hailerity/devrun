@@ -141,7 +141,7 @@ func TestTargetPicker_ViewMarksFilterAndUnreportedMembers(t *testing.T) {
 	var p targetPicker
 	rows := targetRows()
 	p.openAt(rows, "t2") // members: api, db — db is not reported
-	out := plain(p.view(rows, []ipc.ServiceInfo{{Name: "api", State: "running"}}, "t2", 80, 30))
+	out := plain(p.view(rows, []ipc.ServiceInfo{{Name: "api", State: "running"}}, "t2"))
 	assert.Contains(t, out, "▸")
 	assert.Contains(t, out, "1/2")
 	assert.Contains(t, out, "not reported")
@@ -262,7 +262,7 @@ func TestTargetPicker_LongListsStayBounded(t *testing.T) {
 	var p targetPicker
 	p.openAt(rows, "target-29") // cursor on the last row
 
-	out := plain(p.view(rows, nil, "target-29", 100, 36))
+	out := plain(p.view(rows, nil, "target-29"))
 	assert.LessOrEqual(t, lipgloss.Height(out), 36)
 	assert.Contains(t, out, "target-29", "the window follows the cursor")
 	assert.NotContains(t, out, "target-05")

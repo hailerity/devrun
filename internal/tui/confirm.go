@@ -30,7 +30,7 @@ func (c *removeConfirm) close() {
 	c.pending = false
 }
 
-func (c removeConfirm) view(width, height int) string {
+func (c removeConfirm) view() string {
 	var b strings.Builder
 	b.WriteString(styleRed.Bold(true).Render("Remove "+c.name) + "\n\n")
 	b.WriteString(styleText.Render("Remove this service from the active config?") + "\n")
@@ -40,13 +40,9 @@ func (c removeConfirm) view(width, height int) string {
 	}
 	b.WriteString("\n" + styleMuted.Render("y remove · n/Esc cancel"))
 
-	box := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorRed).
 		Padding(1, 2).
 		Render(b.String())
-	if height < lipgloss.Height(box) {
-		height = lipgloss.Height(box)
-	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
