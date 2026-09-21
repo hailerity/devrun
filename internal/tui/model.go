@@ -220,7 +220,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// the log content. leftOffset: sidebar + the main pane's left border
 			// and padding; reserved for future character-level selection.
 			_, mainW := m.paneWidths()
-			_ = m.logsC.sb.handleMouse(msg, headerRows+1, m.width-mainW+1+mainPadLeft)
+			_ = m.logsC.sb.handleMouse(msg, m.headerRows()+1, m.width-mainW+1+mainPadLeft)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -1043,9 +1043,11 @@ const (
 	sidebarMinW = 31
 	sidebarMaxW = 47
 
-	headerRows  = 1
-	footerRows  = 1
-	mainPadLeft = 1 // blank column between the main pane's border and its content
+	// gapMinHeight is the terminal height from which a blank row separates the
+	// header and the footer from the panes. Shorter terminals keep those two
+	// rows for content instead.
+	gapMinHeight = 18
+	mainPadLeft  = 1 // blank column between the main pane's border and its content
 )
 
 // sidebarWidth is the sidebar pane's outer column count: wide enough for the
@@ -1085,7 +1087,20 @@ func (m model) paneWidths() (side, main int) {
 }
 
 // bodyHeight is the row count left for the panes between header and footer.
-func (m model) bodyHeight() int { return max(0, m.height-headerRows-footerRows) }
+func (m model) bodyHeight() int { return max(0, m.height-m.headerRows()-m.footerRows()) }
+
+// gap is the breathing room, in rows, between the panes and the header above /
+// footer below them: one blank row when the terminal can spare it.
+func (m model) gap() int {
+	if m.height >= gapMinHeight {
+		return 1
+	}
+	return 0
+}
+
+// headerRows / footerRows are the rows above and below the panes, gap included.
+func (m model) headerRows() int { return 1 + m.gap() }
+func (m model) footerRows() int { return 1 + m.gap() }
 
 // mainFrame is the main pane's border, minus the labels renderMain sets.
 func (m model) mainFrame() paneFrame {
@@ -1423,6 +1438,9 @@ func (m model) View() string {
 		narrow:       m.narrow(),
 	}, m.width)
 
+	if m.gap() > 0 {
+		return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer)
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 

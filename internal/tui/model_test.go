@@ -138,7 +138,7 @@ func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	m.focus = focusMain
 
 	first := screenRow(m, "line-00")
-	require.Equal(t, headerRows+1, first, "log content starts under the header and the pane's top border")
+	require.Equal(t, m.headerRows()+1, first, "log content starts under the header and the pane's top border")
 
 	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: first})
 	assert.Equal(t, 0, m2.(model).logsC.sb.cursor, "clicking the first drawn log row selects line 0")
@@ -371,7 +371,7 @@ func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
 		rows := strings.Split(plain(m.View()), "\n")
 		require.Len(t, rows, 16)
 		found := false
-		for _, row := range rows[headerRows+1 : 16-footerRows-1] {
+		for _, row := range rows[m.headerRows()+1 : 16-m.footerRows()-1] {
 			// Only the sidebar's share of the row — the main pane's title
 			// names the service too and must not satisfy the check.
 			if strings.Contains(ansi.Truncate(row, m.sidebarWidth(), ""), name) {
@@ -381,6 +381,28 @@ func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
 		require.True(t, found, "%s is selected but not drawn in the sidebar", name)
 		m = pressKey(m, 'j')
 	}
+}
+
+// TestModel_GapSeparatesChromeFromPanes verifies a blank row sits between the
+// header and the panes and between the panes and the footer — and that a short
+// terminal gives those rows back to the content.
+func TestModel_GapSeparatesChromeFromPanes(t *testing.T) {
+	m := resized(setupLogModel(), 100, 30)
+	rows := strings.Split(plain(m.View()), "\n")
+	require.Len(t, rows, 30)
+	assert.Contains(t, rows[0], "devrun")
+	assert.Empty(t, strings.TrimSpace(rows[1]), "blank row under the header")
+	assert.True(t, strings.HasPrefix(rows[2], "╭"), "then the panes")
+	assert.True(t, strings.HasPrefix(rows[27], "╰"))
+	assert.Empty(t, strings.TrimSpace(rows[28]), "blank row above the footer")
+	assert.Contains(t, rows[29], "quit")
+
+	short := resized(setupLogModel(), 100, gapMinHeight-1)
+	rows = strings.Split(plain(short.View()), "\n")
+	require.Len(t, rows, gapMinHeight-1)
+	assert.True(t, strings.HasPrefix(rows[1], "╭"), "a short terminal keeps the rows for content")
+	assertViewFits(t, short, 100, gapMinHeight-1)
+	assertViewFits(t, resized(short, 100, gapMinHeight), 100, gapMinHeight)
 }
 
 // TestModel_ViewNamesServiceInMainPaneTitle verifies the log pane always says
