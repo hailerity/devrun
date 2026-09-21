@@ -184,15 +184,26 @@ func truncateName(s string, w int) string {
 	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }
 
-func stateDot(state string) string {
+// stateGlyph returns the marker and colour for a service state. The shape alone
+// identifies the state — ● running, ◐ in transition (starting / stopping),
+// ✖ crashed, ○ not running — so it still reads under --no-color or for a
+// colour-blind user; the colour only reinforces it.
+func stateGlyph(state string) (string, lipgloss.TerminalColor) {
 	switch state {
 	case "running":
-		return styleGreen.Render("●")
+		return "●", colorGreen
+	case "starting", "stopping":
+		return "◐", colorYellow
 	case "crashed":
-		return styleRed.Render("●")
+		return "✖", colorRed
 	default:
-		return styleMuted.Render("●")
+		return "○", colorMuted
 	}
+}
+
+func stateDot(state string) string {
+	glyph, fg := stateGlyph(state)
+	return lipgloss.NewStyle().Foreground(fg).Render(glyph)
 }
 
 // sectionHeader renders a bordered sidebar column heading, accented while the
@@ -278,17 +289,8 @@ func (s *sidebar) render(width, height int, focused bool) string {
 func selectedServiceRow(width int, state, name string) string {
 	sel := lipgloss.NewStyle().Background(colorSelSidebar)
 
-	var dotFg lipgloss.Color
-	switch state {
-	case "running":
-		dotFg = colorGreen
-	case "crashed":
-		dotFg = colorRed
-	default:
-		dotFg = colorMuted
-	}
-
-	dot := sel.Foreground(dotFg).Render("●")
+	glyph, dotFg := stateGlyph(state)
+	dot := sel.Foreground(dotFg).Render(glyph)
 	namePart := sel.Foreground(colorText).Render(" " + name)
 	content := dot + namePart
 

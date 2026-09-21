@@ -31,13 +31,13 @@ func TestRenderStateLabel_Running(t *testing.T) {
 func TestRenderStateLabel_Crashed(t *testing.T) {
 	out := renderStateLabel("crashed")
 	assert.Contains(t, out, "crashed")
-	assert.Contains(t, out, "●")
+	assert.Contains(t, out, "✖")
 }
 
 func TestRenderStateLabel_Stopped(t *testing.T) {
 	out := renderStateLabel("stopped")
 	assert.Contains(t, out, "stopped")
-	assert.Contains(t, out, "●")
+	assert.Contains(t, out, "○")
 }
 
 func TestRenderCPUFull_LowUncolored(t *testing.T) {

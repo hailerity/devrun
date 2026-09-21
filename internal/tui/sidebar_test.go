@@ -163,3 +163,22 @@ func TestSidebar_LongListStillRenders(t *testing.T) {
 	lines := strings.Split(sb.render(26, 12, false), "\n")
 	assert.Contains(t, lines[len(lines)-1], "stop", "hints still render below an overflowing list")
 }
+
+// State must be readable from the glyph's shape alone — with --no-color, or for
+// a colour-blind user, a crashed service cannot look like a stopped one.
+func TestStateGlyph_DistinctShapePerState(t *testing.T) {
+	seen := map[string]string{}
+	for _, st := range []string{"running", "starting", "crashed", "stopped"} {
+		g, _ := stateGlyph(st)
+		if prev, dup := seen[g]; dup {
+			t.Fatalf("%q and %q share the glyph %q", prev, st, g)
+		}
+		seen[g] = st
+	}
+	stopping, _ := stateGlyph("stopping")
+	starting, _ := stateGlyph("starting")
+	assert.Equal(t, starting, stopping, "both transitions use the in-progress glyph")
+	exited, _ := stateGlyph("exited")
+	stopped, _ := stateGlyph("stopped")
+	assert.Equal(t, stopped, exited, "any not-running state falls back to the hollow glyph")
+}

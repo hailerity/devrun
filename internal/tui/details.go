@@ -65,14 +65,8 @@ func (dp detailsPanel) render(svc *ipc.ServiceInfo, cfg *config.ServiceConfig, w
 }
 
 func renderStateLabel(state string) string {
-	switch state {
-	case "running":
-		return styleGreen.Render("● running")
-	case "crashed":
-		return styleRed.Render("● crashed")
-	default:
-		return styleMuted.Render("● " + state)
-	}
+	glyph, fg := stateGlyph(state)
+	return lipgloss.NewStyle().Foreground(fg).Render(glyph + " " + state)
 }
 
 func renderPID(pid *int) string {
