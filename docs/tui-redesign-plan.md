@@ -96,5 +96,12 @@ Removes the TARGETS rows, the two-list cursor, and every roll-up guard in
 
 ## Verification for every task
 
-`go build ./... && go test ./... -count=1 && go vet ./...`, plus a manual run
-of `bin/devrun` against `testdata` services before each PR is opened.
+`go build ./... && go test ./... -count=1 && go vet ./...`. Layout is verified
+by tests that render `model.View()` at several terminal sizes and assert the
+output is exactly the terminal's rows and columns (an extra row scrolls the
+header off a real terminal), and by reading rendered frames during development.
+
+Not covered by the automated checks: running the real binary in a terminal.
+Starting `devrun` spawns the daemon against the user's own state directory, so
+that pass — true-colour rendering, light-terminal colours, mouse selection,
+resize behaviour — is left to the human reviewer of each PR.
