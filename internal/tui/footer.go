@@ -42,7 +42,7 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targetFocused, onTargetRow, canEditRow, canRemoveRow, editing, confirming bool, width int) string {
+func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, onServiceRow, editing, confirming, picking bool, width int) string {
 	base := lipgloss.NewStyle().
 		Width(width).
 		BorderTop(true).
@@ -64,34 +64,30 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, targe
 			renderHint("Tab", "field"), renderHint("↵", "save"), renderHint("Esc", "cancel"),
 		}, "  "), width, ""))
 	}
+	if picking {
+		return base.Render(ansi.Truncate(strings.Join([]string{
+			renderHint("↵", "filter"), renderHint("e", "edit"), renderHint("Esc", "close"),
+		}, "  "), width, ""))
+	}
 
 	var hints []string
 	hints = append(hints, renderHint("Tab", "switch"))
-	// On a target row Enter selects/clears the filter. Otherwise, unless a
-	// target roll-up fills the main pane, Enter toggles LOGS <-> DETAILS and the
-	// log-pane shortcuts (copy, follow) apply.
-	switch {
-	case onTargetRow:
-		hints = append(hints, renderHint("↵", "filter"))
-	case targetFocused:
-		// target detail fills the main pane — nothing for Enter to toggle
-	case activeTab == tabDetails:
+	// Enter toggles LOGS <-> DETAILS; the log-pane shortcuts (copy, follow)
+	// apply only while the log pane holds focus.
+	if activeTab == tabDetails {
 		hints = append(hints, renderHint("↵", "logs"))
-	default:
+	} else {
 		hints = append(hints, renderHint("↵", "details"))
 	}
-	if !targetFocused && focus == focusMain && activeTab == tabLogs {
+	if focus == focusMain && activeTab == tabLogs {
 		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"), renderHint("w", "wrap"))
 	}
 	if visualMode {
 		hints = append(hints, renderHint("Esc", "cancel"))
 	}
-	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"))
-	if canEditRow {
-		hints = append(hints, renderHint("e", "edit"))
-	}
-	if canRemoveRow {
-		hints = append(hints, renderHint("d", "remove"))
+	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"), renderHint("S/X", "all"), renderHint("t", "target"))
+	if onServiceRow {
+		hints = append(hints, renderHint("e", "edit"), renderHint("d", "remove"))
 	}
 	hints = append(hints, renderHint("q", "quit"))
 	// The hint list grows with context (visual mode, edit/remove-able rows,

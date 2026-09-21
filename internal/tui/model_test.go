@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"strings"
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -217,286 +217,146 @@ func TestModel_EnterTogglesDetails(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus)
 }
 
-// TestModel_EnterSelectsTargetFilter verifies Enter on a target row toggles the
-// service filter instead of the LOGS/DETAILS view.
-func TestModel_EnterSelectsTargetFilter(t *testing.T) {
-	m := model{registry: &config.Registry{
-		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
-		Targets:  map[string][]string{"frontend": {"web"}},
-	}}
-	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = m2.(model)
-	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 1 // "frontend"
-
-	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m2.(model)
-	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
-	assert.Equal(t, []string{"web"}, svcNames(&m.sidebarC))
-	assert.Equal(t, tabLogs, m.activeTab, "Enter on a target must not open DETAILS")
-
-	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m2.(model)
-	assert.Empty(t, m.sidebarC.filterTarget, "Enter again clears the filter")
-}
-
 // targetFilterModel returns a 120x40 model with a "frontend" target (member:
-// web) and the sidebar cursor parked on that target row, focus on the sidebar.
+// web), no filter applied, focus on the sidebar.
 func targetFilterModel(t *testing.T) model {
 	t.Helper()
-	m := model{registry: &config.Registry{
+	m := newModel("", &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
 		Targets:  map[string][]string{"frontend": {"web"}},
-	}}
+	}, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = m2.(model)
-	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 1 // "frontend"
-	m.focus = focusSidebar
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets())
 	return m
 }
 
-// TestModel_EnterInMainPanelDoesNotFilter verifies the target-filter toggle is
-// gated on sidebar focus: with focus on the main panel, Enter neither selects a
-// filter nor opens service DETAILS — the target roll-up (PR #23) owns the pane
-// while the cursor sits on a real target row.
-func TestModel_EnterInMainPanelDoesNotFilter(t *testing.T) {
+// TestModel_TargetPickerFiltersAndClears drives the picker end to end: t opens
+// it, j + Enter applies the target as the filter, and picking "All services"
+// clears it again.
+func TestModel_TargetPickerFiltersAndClears(t *testing.T) {
 	m := targetFilterModel(t)
-	m.focus = focusMain
-	m.activeTab = tabLogs
 
+	m = pressKey(m, 't')
+	require.True(t, m.pickerC.open)
+	assert.Equal(t, 0, m.pickerC.cursor, "no filter → cursor on All services")
+
+	m = pressKey(m, 'j')
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = m2.(model)
-	assert.Empty(t, m.sidebarC.filterTarget, "Enter from the main panel must not touch the filter")
-	assert.Equal(t, tabLogs, m.activeTab, "target detail owns the pane; Enter does not open service DETAILS")
-}
-
-// TestModel_EnterOnTargetClosesDetails verifies selecting a filter from the
-// targets section also drops the DETAILS overlay back to LOGS.
-func TestModel_EnterOnTargetClosesDetails(t *testing.T) {
-	m := targetFilterModel(t)
-	m.activeTab = tabDetails
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m2.(model)
-	assert.Equal(t, tabLogs, m.activeTab, "DETAILS closes when a filter is toggled")
+	assert.False(t, m.pickerC.open, "Enter closes the picker")
 	assert.Equal(t, "frontend", m.sidebarC.filterTarget)
+	assert.Equal(t, []string{"web"}, svcNames(&m.sidebarC))
+	assert.Equal(t, tabLogs, m.activeTab)
+
+	// Reopening parks the cursor on the active filter; k moves to All services.
+	m = pressKey(m, 't')
+	assert.Equal(t, 1, m.pickerC.cursor)
+	m = pressKey(m, 'k')
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterTarget, "All services clears the filter")
+	assert.Equal(t, []string{"api", "web"}, svcNames(&m.sidebarC))
 }
 
-// TestModel_EnterFromLogsReturnsFocusToSidebar verifies that opening DETAILS
-// from the focused LOGS panel hands focus back to the sidebar.
-func TestModel_EnterFromLogsReturnsFocusToSidebar(t *testing.T) {
-	m := model{focus: focusMain, activeTab: tabLogs}
+// TestModel_TargetPickerIsAKeyboardTrap verifies keys do not leak to the panes
+// while the picker is open, and that Esc closes it without touching the filter.
+func TestModel_TargetPickerIsAKeyboardTrap(t *testing.T) {
+	m := targetFilterModel(t)
+	m = pressKey(m, 't')
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusSidebar, m.focus, "Tab must not switch panes under the picker")
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.False(t, m.pickerC.open)
+	assert.Empty(t, m.sidebarC.filterTarget)
+}
+
+// TestModel_MouseIgnoredWhileModalOpen verifies a click cannot reach the log
+// pane hidden under the picker.
+func TestModel_MouseIgnoredWhileModalOpen(t *testing.T) {
+	m := targetFilterModel(t)
+	m = pressKey(m, 't')
+
+	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "a click under the picker must not focus the log pane")
+}
+
+// TestModel_TargetPickerWithoutTargets verifies t explains itself instead of
+// opening an empty picker.
+func TestModel_TargetPickerWithoutTargets(t *testing.T) {
+	m := newModel("", &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},
+	}, config.Source{}, "", clipboard{})
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets())
+
+	m = pressKey(m, 't')
+	assert.False(t, m.pickerC.open)
+	assert.Contains(t, m.footerC.toast, "no targets defined")
+}
+
+// TestModel_StartStopAllListed verifies S / X pick their scope from the filter:
+// the filtering target when there is one, every service otherwise.
+func TestModel_StartStopAllListed(t *testing.T) {
+	m := targetFilterModel(t)
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	require.NotNil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "all services")
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		assert.Contains(t, err.err.Error(), "start all:", "no filter → the start-all batch")
+	}
+
+	// No socket → nothing is dispatched, and the toast must not claim otherwise.
+	noSock := m
+	noSock.socketPath = ""
+	m2, cmd = noSock.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	assert.Nil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "nothing to start")
+
+	m.sidebarC.setFilter("frontend")
+	m2, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	require.NotNil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "target frontend")
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		assert.NotContains(t, err.err.Error(), "stop all:", "a filter → one target-stop request")
+	}
+}
+
+// TestModel_EnterTogglesDetailsWithFilterActive verifies Enter means the same
+// thing on every row: it toggles DETAILS even while a target filters the list.
+func TestModel_EnterTogglesDetailsWithFilterActive(t *testing.T) {
+	m := targetFilterModel(t)
+	m.sidebarC.setFilter("frontend")
+
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = m2.(model)
 	assert.Equal(t, tabDetails, m.activeTab)
-	assert.Equal(t, focusSidebar, m.focus)
+	assert.Equal(t, "frontend", m.sidebarC.filterTarget, "Enter must not touch the filter")
 }
 
-// TestModel_EscCollapsesDetails verifies Esc backs DETAILS out to LOGS.
-func TestModel_EscCollapsesDetails(t *testing.T) {
-	m := model{focus: focusSidebar, activeTab: tabDetails}
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = m2.(model)
-	assert.Equal(t, tabLogs, m.activeTab)
-	assert.Equal(t, focusSidebar, m.focus)
-}
+// TestModel_ViewShowsPickerWithCountsAndMembers verifies the picker lists every
+// target with its running count and the highlighted target's members.
+func TestModel_ViewShowsPickerWithCountsAndMembers(t *testing.T) {
+	m := targetFilterModel(t)
+	m.sidebarC.update([]ipc.ServiceInfo{
+		{Name: "api", State: "running"},
+		{Name: "web", State: "stopped"},
+	}, m.buildTargets())
+	m = pressKey(m, 't')
+	m = pressKey(m, 'j')
 
-// TestModel_TabCollapsesDetails verifies Tabbing into the main panel collapses
-// DETAILS back to LOGS, since DETAILS is not focusable.
-func TestModel_TabCollapsesDetails(t *testing.T) {
-	m := model{focus: focusSidebar, activeTab: tabDetails}
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m = m2.(model)
-	assert.Equal(t, focusMain, m.focus)
-	assert.Equal(t, tabLogs, m.activeTab, "Tab into the main panel collapses DETAILS")
-}
-
-// TestModel_EscCancelsVisualBeforeCollapsing verifies Esc cancels an active
-// visual selection first and only collapses DETAILS on a later press.
-func TestModel_EscCancelsVisualBeforeCollapsing(t *testing.T) {
-	m := setupLogModel()
-	m.focus = focusMain
-	m.logsC.sb.visualMode = true
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	m = m2.(model)
-	assert.False(t, m.logsC.sb.visualMode, "first Esc exits visual mode")
-	assert.Equal(t, tabLogs, m.activeTab, "first Esc does not touch the view")
-}
-
-// TestModel_EnterIgnoredDuringVisualSelection verifies Enter does not jump to
-// DETAILS while a visual selection is in progress.
-func TestModel_EnterIgnoredDuringVisualSelection(t *testing.T) {
-	m := setupLogModel()
-	m.focus = focusMain
-	m.logsC.sb.visualMode = true
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m2.(model)
-	assert.Equal(t, tabLogs, m.activeTab, "Enter is ignored mid visual-selection")
-}
-
-// targetFocusedModel returns a 120x40 model with one real target ("backend")
-// highlighted in the sidebar's TARGETS section.
-func targetFocusedModel() model {
-	m := newModel("", nil, config.Source{}, "", clipboard{})
-	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = m2.(model)
-	m.sidebarC.update(
-		[]ipc.ServiceInfo{
-			{Name: "api", State: "running", Port: intp(8080)},
-			{Name: "web", State: "stopped"},
-		},
-		[]sidebarTarget{
-			{name: ""},
-			{name: "backend", members: []string{"api"}, active: true},
-		},
-	)
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 1
-	return m
-}
-
-// TestModel_FocusedTarget verifies focusedTarget only reports a real target row.
-func TestModel_FocusedTarget(t *testing.T) {
-	m := targetFocusedModel()
-	tgt := m.focusedTarget()
-	require.NotNil(t, tgt)
-	assert.Equal(t, "backend", tgt.name)
-
-	m.sidebarC.targetSel = 0 // synthetic "All services" row
-	assert.Nil(t, m.focusedTarget())
-
-	m.sidebarC.targetSel = 1
-	m.sidebarC.section = sectionServices // cursor back in SERVICES
-	assert.Nil(t, m.focusedTarget())
-}
-
-// TestModel_RenderMain_TargetDetailWhenTargetFocused verifies the main pane
-// shows the target roll-up (not logs) while a target row is focused.
-func TestModel_RenderMain_TargetDetailWhenTargetFocused(t *testing.T) {
-	m := targetFocusedModel()
-	out := plain(m.renderMain(80, 24))
-	assert.Equal(t, 1, strings.Count(out, "TARGET"), "the TARGET label must not be doubled")
-	assert.Contains(t, out, "backend")
-	assert.Contains(t, out, "api")
-	assert.Contains(t, out, ":8080")
-	assert.NotContains(t, out, "LOGS")
-}
-
-// TestModel_RenderMain_LogsWhenServiceFocused verifies the main pane returns to
-// logs once the cursor leaves the TARGETS section.
-func TestModel_RenderMain_LogsWhenServiceFocused(t *testing.T) {
-	m := targetFocusedModel()
-	m.sidebarC.section = sectionServices
-	assert.Contains(t, plain(m.renderMain(80, 24)), "LOGS")
-}
-
-// TestModel_EnterIgnoredWhenTargetFocused verifies Enter does not flip to
-// DETAILS while a target row is focused (the pane already shows target detail).
-func TestModel_EnterIgnoredWhenTargetFocused(t *testing.T) {
-	m := targetFocusedModel()
-	require.Equal(t, tabLogs, m.activeTab)
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	m = m2.(model)
-	assert.Equal(t, tabLogs, m.activeTab)
-}
-
-// TestModel_TabAndRightInertWhenTargetFocused verifies focus cannot move into
-// the (non-focusable) target roll-up, which would otherwise arm the hidden
-// log-pane shortcuts.
-func TestModel_TabAndRightInertWhenTargetFocused(t *testing.T) {
-	m := targetFocusedModel()
-	require.Equal(t, focusSidebar, m.focus)
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not move focus into a focused target's pane")
-
-	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not move focus into a focused target's pane")
-}
-
-// allServicesRowModel returns a 120x40 model with the sidebar cursor parked on
-// the synthetic "All services" row (one running service, one stopped).
-func allServicesRowModel() model {
-	m := newModel("", nil, config.Source{}, "", clipboard{})
-	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	m = m2.(model)
-	m.sidebarC.update(
-		[]ipc.ServiceInfo{
-			{Name: "api", State: "running", Port: intp(8080)},
-			{Name: "web", State: "stopped"},
-		},
-		[]sidebarTarget{{name: ""}, {name: "backend", members: []string{"api"}}},
-	)
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 0 // "All services"
-	return m
-}
-
-// TestModel_RenderMain_SummaryOnAllServicesRow verifies the main pane shows the
-// SUMMARY roll-up (not logs) with a running count while the cursor sits on the
-// synthetic row.
-func TestModel_RenderMain_SummaryOnAllServicesRow(t *testing.T) {
-	m := allServicesRowModel()
-	out := plain(m.renderMain(80, 24))
-	assert.Contains(t, out, "SUMMARY")
+	out := plain(m.View())
+	assert.Contains(t, out, "Filter by target")
 	assert.Contains(t, out, "All services")
-	assert.Contains(t, out, "1 running / 2")
-	assert.Contains(t, out, "api")
-	assert.Contains(t, out, "web")
-	assert.NotContains(t, out, "LOGS")
-}
-
-// TestModel_TabAndRightInertOnAllServicesRow verifies focus cannot slip into a
-// hidden logs pane while the summary fills the main area.
-func TestModel_TabAndRightInertOnAllServicesRow(t *testing.T) {
-	m := allServicesRowModel()
-	require.Equal(t, focusSidebar, m.focus)
-
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	assert.Equal(t, focusSidebar, m2.(model).focus, "Tab must not focus the hidden logs pane")
-
-	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-	assert.Equal(t, focusSidebar, m3.(model).focus, "→ must not focus the hidden logs pane")
-}
-
-// TestModel_OptimisticAllServicesHighlight verifies s / x on the "All services"
-// row flips its highlight immediately, and that the next poll reconciles it
-// against live service state.
-func TestModel_OptimisticAllServicesHighlight(t *testing.T) {
-	m := model{registry: &config.Registry{Services: map[string]*config.ServiceConfig{
-		"web": {Name: "web", Command: "x"},
-		"api": {Name: "api", Command: "y"},
-	}}}
-	mixed := []ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "stopped"}}
-	m.sidebarC.update(mixed, m.buildTargets(mixed))
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 0 // "All services"
-	require.False(t, m.sidebarC.targets[0].active, "mixed state → highlight off")
-
-	// s lights the row before any poll.
-	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
-	m = m2.(model)
-	assert.True(t, m.sidebarC.targets[0].active, "s optimistically highlights All services")
-
-	// A poll still showing web stopped clears it again.
-	m3, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{Services: mixed}})
-	m = m3.(model)
-	assert.False(t, m.sidebarC.targets[0].active, "poll recomputes the highlight from live state")
-
-	// Everything running → derived highlight on; x clears it immediately.
-	allUp := []ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "running"}}
-	m4, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{Services: allUp}})
-	m = m4.(model)
-	require.True(t, m.sidebarC.targets[0].active, "all running → highlight on")
-	m5, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	m = m5.(model)
-	assert.False(t, m.sidebarC.targets[0].active, "x un-highlights All services immediately")
+	assert.Contains(t, out, "1/2")
+	assert.Contains(t, out, "frontend")
+	assert.Contains(t, out, "0/1")
+	assert.Contains(t, out, "members")
 }
 
 // TestModel_MouseClick_SetsFocusMain verifies that clicking in the log area

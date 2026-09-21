@@ -67,15 +67,15 @@ type model struct {
 	focus     focusKind
 	activeTab tabKind
 
-	sidebarC       sidebar
-	logsC          logsPanel
-	detailsC       detailsPanel
-	targetDetailsC targetDetailsPanel
-	editC          editPanel
-	targetEditC    targetEditPanel
-	removeC        removeConfirm
-	headerC        headerBar
-	footerC        footerBar
+	sidebarC    sidebar
+	logsC       logsPanel
+	detailsC    detailsPanel
+	editC       editPanel
+	targetEditC targetEditPanel
+	removeC     removeConfirm
+	pickerC     targetPicker
+	headerC     headerBar
+	footerC     footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -137,7 +137,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonRespMsg:
 		m.spinning = false
 		scoped := m.scopedServices(msg.payload.Services)
-		m.sidebarC.update(scoped, m.buildTargets(scoped))
+		m.sidebarC.update(scoped, m.buildTargets())
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -195,9 +195,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickSpin()
 
 	case tea.MouseMsg:
-		// Skip while a sidebar roll-up occupies the main pane — there is no log
-		// content under the cursor to select or focus.
-		if m.activeTab == tabLogs && !m.sidebarRollup() {
+		// A modal owns the screen: the log pane under it is hidden, so a click
+		// or drag must not move focus there or start a selection.
+		if m.modalOpen() {
+			return m, nil
+		}
+		if m.activeTab == tabLogs {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
 			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
 			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
@@ -227,6 +230,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.removeC.open {
 		return m.handleRemoveKey(msg)
 	}
+	if m.pickerC.open {
+		return m.handlePickerKey(msg)
+	}
 
 	switch {
 	// ctrl+c with an active visual selection copies instead of quitting.
@@ -252,45 +258,26 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Left):
 		m.focus = focusSidebar
 
-	// A target row or the "All services" row shows a non-focusable roll-up in
-	// the main pane (like DETAILS), so → and Tab-in are inert while the cursor
-	// sits on one — otherwise focus would move to a logs pane the user cannot
-	// see and the f/v/y shortcuts would run against hidden scrollback.
 	case key.Matches(msg, keys.Right):
-		if !m.sidebarRollup() {
-			m.focus = focusMain
-			m.activeTab = tabLogs
-		}
+		m.focus = focusMain
+		m.activeTab = tabLogs
 
 	// Tab toggles focus between the sidebar and the main panel. The main panel
 	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
-		switch {
-		case m.sidebarRollup():
-			m.focus = focusSidebar
-		case m.focus == focusSidebar:
+		if m.focus == focusSidebar {
 			m.focus = focusMain
 			m.activeTab = tabLogs
-		default:
+		} else {
 			m.focus = focusSidebar
 		}
 
-	// Enter on a target row selects that target as the service filter (or
-	// clears it if already selected) and returns to LOGS. Elsewhere it toggles
-	// LOGS <-> DETAILS for the selected service. DETAILS is a read-only overlay,
-	// not a focus target: focus stays on the sidebar so j/k keeps walking
-	// services and the panel updates live. Ignored mid-selection.
+	// Enter toggles LOGS <-> DETAILS for the selected service — the same on
+	// every row. DETAILS is a read-only overlay, not a focus target: focus stays
+	// on the sidebar so j/k keeps walking services and the panel updates live.
+	// Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
-		case m.onTargetRow():
-			m.sidebarC.toggleTargetSelection()
-			m.activeTab = tabLogs
-			m.updateLogFile()
-		case m.sidebarRollup():
-			// Guard: the cursor is on a roll-up row (real target or "All
-			// services") but the sidebar does not hold focus, so onTargetRow is
-			// false. The main pane already shows that roll-up — Enter must not
-			// fall through and open service DETAILS over it.
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -368,34 +355,31 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, keys.Start):
-		if t := m.sidebarC.selectedTarget(); t != nil {
-			if t.name == "" {
-				// Optimistically light the row now; the next poll reconciles it
-				// against live state (or clears it if the batch fails).
-				m.sidebarC.setAllServicesActive(true)
-				return m, m.doStartAll()
-			}
-			return m, m.doStartTarget()
-		}
 		return m, m.doStart()
 
 	case key.Matches(msg, keys.Stop):
-		if t := m.sidebarC.selectedTarget(); t != nil {
-			if t.name == "" {
-				m.sidebarC.setAllServicesActive(false)
-				return m, m.doStopAll()
-			}
-			return m, m.doStopTarget()
-		}
 		return m, m.doStop()
 
-	// e opens the editor for the highlighted service or target row.
+	// S / X act on everything listed: the filtering target when there is one
+	// (so the daemon tracks it as an active target), otherwise every service.
+	case key.Matches(msg, keys.StartAll):
+		return m.runAllListed("start", m.doStartTarget, m.doStartAll)
+
+	case key.Matches(msg, keys.StopAll):
+		return m.runAllListed("stop", m.doStopTarget, m.doStopAll)
+
+	// t opens the target picker: choose which target filters the service list.
+	case key.Matches(msg, keys.Target):
+		if len(m.sidebarC.targets) == 0 {
+			m.footerC.showToastLong("no targets defined — add a targets: block to the config")
+			break
+		}
+		m.pickerC.openAt(m.sidebarC.targets, m.sidebarC.filterTarget)
+
+	// e opens the editor for the highlighted service.
 	case key.Matches(msg, keys.Edit):
 		if m.onServiceRow() {
 			return m.openEditor()
-		}
-		if m.onTargetEditRow() {
-			return m.openTargetEditor()
 		}
 
 	// d asks to remove the highlighted service (service rows only).
@@ -408,21 +392,69 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onServiceRow reports whether the sidebar has focus with its cursor on a
-// service row (not a target row), a service is selected, and there is a registry
-// to persist an edit to. It gates both the `e` key and the footer's edit hint.
+// onServiceRow reports whether the sidebar has focus, a service is selected, and
+// there is a registry to persist an edit to. It gates both the `e` key and the footer's edit hint.
 func (m model) onServiceRow() bool {
 	return m.focus == focusSidebar &&
 		m.registry != nil &&
-		(!m.sidebarC.showTargets() || m.sidebarC.section == sectionServices) &&
 		m.sidebarC.selectedService() != nil
 }
 
-// onTargetEditRow reports whether the sidebar has focus with its cursor on a
-// real target row (not the synthetic "All services" entry) and there is a
-// registry to persist an edit to.
-func (m model) onTargetEditRow() bool {
-	return m.focus == focusSidebar && m.registry != nil && m.focusedTarget() != nil
+// runAllListed runs the S / X action over everything listed — forTarget with the
+// filtering target when there is one, otherwise forAll — and toasts what it is
+// doing. The toast only promises an action that was actually dispatched: with no
+// daemon socket, or nothing runnable in scope, it says so instead.
+func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll func() tea.Cmd) (tea.Model, tea.Cmd) {
+	scope := "all services"
+	var cmd tea.Cmd
+	if name := m.sidebarC.filterTarget; name != "" {
+		scope = "target " + name
+		cmd = forTarget(name)
+	} else {
+		cmd = forAll()
+	}
+	if cmd == nil {
+		m.footerC.showToast("nothing to " + verb + " in " + scope)
+		return m, nil
+	}
+	m.footerC.showToast(verb + "ing " + scope)
+	return m, cmd
+}
+
+// modalOpen reports whether a modal — an editor, the remove confirm, or the
+// target picker — currently owns the screen and all input.
+func (m model) modalOpen() bool {
+	return m.editC.open || m.targetEditC.open || m.removeC.open || m.pickerC.open
+}
+
+// handlePickerKey routes a key to the open target picker: j/k move, Enter
+// applies the highlighted row as the service filter ("All services" clears it),
+// e opens the target editor for a real target, and Esc / t / q close.
+func (m model) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	targets := m.sidebarC.targets
+	switch {
+	case msg.Type == tea.KeyCtrlC:
+		return m, tea.Quit
+	case key.Matches(msg, keys.Escape), key.Matches(msg, keys.Target), msg.String() == "q":
+		m.pickerC.close()
+	case key.Matches(msg, keys.Up):
+		m.pickerC.move(-1, len(targets))
+	case key.Matches(msg, keys.Down):
+		m.pickerC.move(1, len(targets))
+	case key.Matches(msg, keys.Enter):
+		m.sidebarC.setFilter(m.pickerC.selected(targets))
+		m.pickerC.close()
+		m.focus = focusSidebar
+		m.activeTab = tabLogs
+		m.updateLogFile()
+		m.relayout()
+	case key.Matches(msg, keys.Edit):
+		if name := m.pickerC.selected(targets); name != "" && m.registry != nil {
+			m.pickerC.close()
+			return m.openTargetEditor(name)
+		}
+	}
+	return m, nil
 }
 
 // openEditor prefills the edit modal for the selected service.
@@ -698,8 +730,8 @@ func (m model) doRemove(name string) tea.Cmd {
 
 // openTargetEditor prefills the target modal for the focused target: every
 // registry service is listed, the target's current members checked.
-func (m model) openTargetEditor() (tea.Model, tea.Cmd) {
-	t := m.focusedTarget()
+func (m model) openTargetEditor(name string) (tea.Model, tea.Cmd) {
+	t := m.sidebarC.target(name)
 	if t == nil || m.registry == nil {
 		return m, nil
 	}
@@ -826,100 +858,18 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 	return out
 }
 
-// buildTargets turns the registry's target definitions into sidebar rows, led
-// by the synthetic "All services" row (start/stop-all). The "All services" row
-// is present whenever the registry defines anything, so the TARGETS block — and
-// its start/stop-all action — is always reachable; real targets follow it in
-// sorted order. Returns nil only with no config context at all (no registry, or
-// a registry with neither services nor targets), which collapses the block.
-//
-// A row is marked active — the green highlight — when it has at least one
-// member and every member is currently running, checked against `services` (the
-// daemon-reported view). The "All services" row weighs every registry service
-// by name, a target row only its own members — both through membersAllRunning,
-// so a configured service the daemon has not reported keeps either row off.
-func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
-	if m.registry == nil || (len(m.registry.Services) == 0 && len(m.registry.Targets) == 0) {
+// buildTargets turns the registry's target definitions into the sorted list the
+// target picker and the service filter work from. Returns nil with no registry
+// or no targets.
+func (m model) buildTargets() []sidebarTarget {
+	if m.registry == nil || len(m.registry.Targets) == 0 {
 		return nil
 	}
-	running := make(map[string]bool, len(services))
-	for _, s := range services {
-		if s.State == "running" {
-			running[s.Name] = true
-		}
-	}
-	allNames := make([]string, 0, len(m.registry.Services))
-	for name := range m.registry.Services {
-		allNames = append(allNames, name)
-	}
-	rows := []sidebarTarget{{name: "", active: membersAllRunning(allNames, running)}} // "All services"
+	var rows []sidebarTarget
 	for _, name := range config.SortedTargetNames(m.registry.Targets) {
-		members := m.registry.Targets[name]
-		rows = append(rows, sidebarTarget{
-			name:    name,
-			members: members,
-			active:  membersAllRunning(members, running),
-		})
+		rows = append(rows, sidebarTarget{name: name, members: m.registry.Targets[name]})
 	}
 	return rows
-}
-
-// membersAllRunning reports whether members is non-empty and every member name
-// is in the running set.
-func membersAllRunning(members []string, running map[string]bool) bool {
-	if len(members) == 0 {
-		return false
-	}
-	for _, m := range members {
-		if !running[m] {
-			return false
-		}
-	}
-	return true
-}
-
-// focusedTarget returns the highlighted target when the sidebar cursor sits on a
-// real target row. The synthetic "All services" row (empty name) and a cursor in
-// the SERVICES section both yield nil, leaving the main pane on logs.
-func (m model) focusedTarget() *sidebarTarget {
-	t := m.sidebarC.selectedTarget()
-	if t == nil || t.name == "" {
-		return nil
-	}
-	return t
-}
-
-// allServicesRow reports whether the sidebar cursor is parked on the synthetic
-// "All services" row.
-func (m model) allServicesRow() bool {
-	t := m.sidebarC.selectedTarget()
-	return t != nil && t.name == ""
-}
-
-// sidebarRollup reports whether the cursor sits on a sidebar row whose content
-// fills the main pane as a non-focusable roll-up — a real target (its details)
-// or the synthetic "All services" row (the summary). Focus cannot move into the
-// main pane while one is shown, so → / Tab / log-area mouse are inert.
-func (m model) sidebarRollup() bool {
-	return m.focusedTarget() != nil || m.allServicesRow()
-}
-
-// targetMemberInfos returns the daemon-reported ServiceInfo for each member of t
-// that the daemon currently knows about, drawn from the registry-scoped service
-// list (not the active-target filter). Order is unspecified — the sole caller
-// keys the result by name.
-func (m model) targetMemberInfos(t *sidebarTarget) []ipc.ServiceInfo {
-	want := make(map[string]bool, len(t.members))
-	for _, name := range t.members {
-		want[name] = true
-	}
-	out := make([]ipc.ServiceInfo, 0, len(t.members))
-	for _, svc := range m.sidebarC.allServices {
-		if want[svc.Name] {
-			out = append(out, svc)
-		}
-	}
-	return out
 }
 
 func (m *model) updateLogFile() {
@@ -929,14 +879,6 @@ func (m *model) updateLogFile() {
 			m.logsC.setFile(path)
 		}
 	}
-}
-
-// onTargetRow reports whether the sidebar has focus with its cursor parked on a
-// target row — the state in which Enter selects a filter rather than toggling
-// DETAILS. The sidebar's section persists after focus leaves it, so the focus
-// check is what keeps Enter in the LOGS panel meaning "details".
-func (m model) onTargetRow() bool {
-	return m.focus == focusSidebar && m.sidebarC.section == sectionTargets && m.sidebarC.showTargets()
 }
 
 const (
@@ -951,15 +893,6 @@ func (m model) sidebarWidth() int {
 	w := sidebarMinW
 	for _, svc := range m.sidebarC.allServices {
 		if n := lipgloss.Width(svc.Name) + 3; n > w {
-			w = n
-		}
-	}
-	for _, t := range m.sidebarC.targets {
-		label := t.name
-		if label == "" {
-			label = allServicesLabel
-		}
-		if n := lipgloss.Width(label) + 4; n > w { // +1 vs services for the filter marker gutter
 			w = n
 		}
 	}
@@ -1059,23 +992,22 @@ func (m model) doStop() tea.Cmd {
 	}
 }
 
-// doStartTarget starts every service in the highlighted target. The "All
-// services" row (empty name) is a no-op, as is a target with no runnable
-// members. Member definitions are shipped inline so a project target works
+// doStartTarget starts every service in the target called name. An unknown
+// target is a no-op, as is one with no runnable members. Member definitions are shipped inline so a project target works
 // without a registry entry.
-func (m model) doStartTarget() tea.Cmd {
+func (m model) doStartTarget(name string) tea.Cmd {
 	if m.socketPath == "" || m.registry == nil {
 		return nil
 	}
-	t := m.sidebarC.selectedTarget()
-	if t == nil || t.name == "" {
+	t := m.sidebarC.target(name)
+	if t == nil {
 		return nil
 	}
 	members := m.registry.TargetMemberConfigs(t.name)
 	if len(members) == 0 {
 		return nil
 	}
-	sp, name := m.socketPath, t.name
+	sp := m.socketPath
 	return func() tea.Msg {
 		return dial(sp, func(c *client.Client) tea.Msg {
 			resp, err := c.Send("target-start", ipc.TargetStartPayload{Name: name, Services: members})
@@ -1090,17 +1022,13 @@ func (m model) doStartTarget() tea.Cmd {
 	}
 }
 
-// doStopTarget stops the highlighted target; the daemon keeps any member still
-// held by another running target. "All services" is a no-op.
-func (m model) doStopTarget() tea.Cmd {
-	if m.socketPath == "" {
+// doStopTarget stops the target called name; the daemon keeps any member still
+// held by another running target. An unknown target is a no-op.
+func (m model) doStopTarget(name string) tea.Cmd {
+	if m.socketPath == "" || m.sidebarC.target(name) == nil {
 		return nil
 	}
-	t := m.sidebarC.selectedTarget()
-	if t == nil || t.name == "" {
-		return nil
-	}
-	sp, name := m.socketPath, t.name
+	sp := m.socketPath
 	return func() tea.Msg {
 		return dial(sp, func(c *client.Client) tea.Msg {
 			resp, err := c.Send("target-stop", ipc.TargetStopPayload{Name: name})
@@ -1125,8 +1053,8 @@ func (m model) scopedServiceNames() []string {
 	return names
 }
 
-// doStartAll starts every scoped service — the action behind `s` on the
-// synthetic "All services" row, the TUI equivalent of `devrun start --all`. It
+// doStartAll starts every scoped service — the action behind `S` with no target
+// filter, the TUI equivalent of `devrun start --all`. It
 // dials once per service (the daemon serves one request per connection),
 // shipping each definition inline so a project service the daemon has not seen
 // still starts. A service already running is left alone; a member that fails
@@ -1158,8 +1086,8 @@ func (m model) doStartAll() tea.Cmd {
 	}
 }
 
-// doStopAll stops every scoped service — the action behind `x` on the synthetic
-// "All services" row, the TUI equivalent of `devrun stop --all`. Like
+// doStopAll stops every scoped service — the action behind `X` with no target
+// filter, the TUI equivalent of `devrun stop --all`. Like
 // doStartAll it dials once per service; a service already stopped is not an
 // error, and per-service failures are collected into one message.
 func (m model) doStopAll() tea.Cmd {
@@ -1279,13 +1207,14 @@ func (m model) View() string {
 		body = m.targetEditC.view(m.width, bodyH)
 	case m.removeC.open:
 		body = m.removeC.view(m.width, bodyH)
+	case m.pickerC.open:
+		body = m.pickerC.view(m.sidebarC.targets, m.sidebarC.allServices, m.sidebarC.filterTarget, m.width, bodyH)
 	}
 
 	// Footer. `editing` is the form modals only; the remove-confirm modal owns
 	// the screen too but carries no fields, so it is passed as `confirming`.
 	editing := m.editC.open || m.targetEditC.open
-	canEditRow := m.onServiceRow() || m.onTargetEditRow()
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.sidebarRollup(), m.onTargetRow(), canEditRow, m.onServiceRow(), editing, m.removeC.open, m.width)
+	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.onServiceRow(), editing, m.removeC.open, m.pickerC.open, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
@@ -1305,36 +1234,6 @@ func Run(socketPath string, reg *config.Registry, src config.Source, logDir stri
 }
 
 func (m model) renderMain(w, h int) string {
-	mainLabel := func(text string) string {
-		return lipgloss.NewStyle().
-			Width(w).
-			BorderBottom(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(colorBorder).
-			Render(styleMuted.Render(text))
-	}
-
-	// A focused target row replaces the LOGS/DETAILS view with a read-only
-	// roll-up of that target and its member services.
-	if t := m.focusedTarget(); t != nil {
-		return lipgloss.JoinVertical(lipgloss.Left,
-			mainLabel("TARGET"),
-			m.targetDetailsC.render(t, m.targetMemberInfos(t), w, h-2),
-		)
-	}
-
-	// The synthetic "All services" row shows a summary — running count over the
-	// whole scoped project plus the per-service list — in place of logs. The
-	// panel derives its own state from the live count, so the synthetic target
-	// needs no active flag.
-	if m.allServicesRow() {
-		all := &sidebarTarget{name: allServicesLabel, members: m.scopedServiceNames()}
-		return lipgloss.JoinVertical(lipgloss.Left,
-			mainLabel("SUMMARY"),
-			m.targetDetailsC.render(all, m.sidebarC.allServices, w, h-2),
-		)
-	}
-
 	// Tab bar: only the active view's label is shown. LOGS is accented only
 	// while the main panel holds focus; DETAILS is never accented — it is a
 	// read-only overlay, not a focus target.

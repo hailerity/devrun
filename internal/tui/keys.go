@@ -3,43 +3,49 @@ package tui
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Up     key.Binding
-	Down   key.Binding
-	Left   key.Binding
-	Right  key.Binding
-	Tab    key.Binding
-	Enter  key.Binding
-	Start  key.Binding
-	Stop   key.Binding
-	Edit   key.Binding
-	Remove key.Binding
-	Quit   key.Binding
-	Follow key.Binding
-	Copy   key.Binding
-	Visual key.Binding
-	Escape key.Binding
-	Top    key.Binding
-	Bottom key.Binding
-	Wrap   key.Binding
+	Up       key.Binding
+	Down     key.Binding
+	Left     key.Binding
+	Right    key.Binding
+	Tab      key.Binding
+	Enter    key.Binding
+	Start    key.Binding
+	Stop     key.Binding
+	Edit     key.Binding
+	Remove   key.Binding
+	Quit     key.Binding
+	Follow   key.Binding
+	Copy     key.Binding
+	Visual   key.Binding
+	Escape   key.Binding
+	Top      key.Binding
+	Bottom   key.Binding
+	Wrap     key.Binding
+	Target   key.Binding
+	StartAll key.Binding
+	StopAll  key.Binding
 }
 
 var keys = keyMap{
-	Up:     key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("k/↑", "up")),
-	Down:   key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/↓", "down")),
-	Left:   key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "sidebar")),
-	Right:  key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "main")),
-	Tab:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("Tab", "switch panel")),
-	Enter:  key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "details")),
-	Start:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start")),
-	Stop:   key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
-	Edit:   key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-	Remove: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
-	Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Follow: key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "follow")),
-	Copy:   key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy")),
-	Visual: key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "select")),
-	Escape: key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "cancel")),
-	Top:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
-	Bottom: key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
-	Wrap:   key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wrap")),
+	Up:       key.NewBinding(key.WithKeys("k", "up"), key.WithHelp("k/↑", "up")),
+	Down:     key.NewBinding(key.WithKeys("j", "down"), key.WithHelp("j/↓", "down")),
+	Left:     key.NewBinding(key.WithKeys("left"), key.WithHelp("←", "sidebar")),
+	Right:    key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "main")),
+	Tab:      key.NewBinding(key.WithKeys("tab"), key.WithHelp("Tab", "switch panel")),
+	Enter:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "details")),
+	Start:    key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "start")),
+	Stop:     key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "stop")),
+	Edit:     key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
+	Remove:   key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "remove")),
+	Quit:     key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
+	Follow:   key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "follow")),
+	Copy:     key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "copy")),
+	Visual:   key.NewBinding(key.WithKeys("v"), key.WithHelp("v", "select")),
+	Escape:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("Esc", "cancel")),
+	Top:      key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
+	Bottom:   key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
+	Wrap:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wrap")),
+	Target:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "target")),
+	StartAll: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "start all listed")),
+	StopAll:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop all listed")),
 }

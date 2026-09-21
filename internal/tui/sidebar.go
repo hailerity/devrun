@@ -9,43 +9,27 @@ import (
 	"github.com/hailerity/devrun/internal/ipc"
 )
 
-// sidebarTarget is one row of the TARGETS list. The row at index 0 is the
-// synthetic "All services" entry, distinguished by an empty name.
+// sidebarTarget is one configured target: its name and its declared members.
+// Targets are not sidebar rows — they feed the target picker and the service
+// filter.
 type sidebarTarget struct {
 	name    string
 	members []string
-	active  bool
 }
 
-// allServicesLabel is the rendered text of the synthetic clear-filter row
-// (sidebarTarget{name: ""}).
+// allServicesLabel names the "no filter" choice in the target picker.
 const allServicesLabel = "All services"
-
-type sidebarSection int
-
-const (
-	sectionServices sidebarSection = iota
-	sectionTargets
-)
 
 type sidebar struct {
 	allServices []ipc.ServiceInfo // full scoped list, sorted by Name
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
 
-	targets      []sidebarTarget // index 0 is "All services"; empty → no config context, no TARGETS block
-	targetSel    int             // cursor within targets
-	section      sidebarSection  // which list the cursor is in
-	filterTarget string          // name of the explicitly-selected filter target ("" = show all); set only via Enter, not cursor movement
+	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
+	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
 
 	loaded bool // true once the first daemon poll has resolved (response or error)
 }
-
-// showTargets reports whether the TARGETS block is rendered. It is shown
-// whenever there is at least one row — the synthetic "All services" row is
-// always present (so start/stop-all is reachable) once the registry defines
-// anything; an empty slice means no config context at all.
-func (s *sidebar) showTargets() bool { return len(s.targets) > 0 }
 
 func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	s.loaded = true
@@ -54,33 +38,15 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	if s.selected < len(s.services) {
 		curSvc = s.services[s.selected].Name
 	}
-	var curTarget string
-	if s.targetSel < len(s.targets) {
-		curTarget = s.targets[s.targetSel].name
-	}
 
 	sorted := append([]ipc.ServiceInfo(nil), svcs...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	s.allServices = sorted
 	s.targets = targets
 
-	if !s.showTargets() {
-		s.section = sectionServices
-		s.targetSel = 0
+	// Keep the filter across the poll; drop it only if that target is gone.
+	if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
 		s.filterTarget = ""
-	} else {
-		s.targetSel = 0
-		for i, t := range s.targets {
-			if t.name == curTarget {
-				s.targetSel = i
-				break
-			}
-		}
-		// Keep the selected filter across the poll; drop it only if that target
-		// is gone. Cursor position does not touch it.
-		if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
-			s.filterTarget = ""
-		}
 	}
 
 	s.refilter()
@@ -99,21 +65,28 @@ func (s *sidebar) selectServiceByName(n string) {
 	}
 }
 
+// target returns the configured target called name, or nil.
+func (s *sidebar) target(name string) *sidebarTarget {
+	for i := range s.targets {
+		if s.targets[i].name == name {
+			return &s.targets[i]
+		}
+	}
+	return nil
+}
+
+// targetExists reports whether a target with the given name is configured.
+func (s *sidebar) targetExists(name string) bool { return s.target(name) != nil }
+
 // refilter recomputes s.services from s.allServices and the active target
 // filter, then clamps the service cursor into range.
 func (s *sidebar) refilter() {
-	if s.filterTarget == "" {
+	if t := s.target(s.filterTarget); s.filterTarget == "" || t == nil {
 		s.services = s.allServices
 	} else {
-		var members map[string]bool
-		for _, t := range s.targets {
-			if t.name == s.filterTarget {
-				members = make(map[string]bool, len(t.members))
-				for _, m := range t.members {
-					members[m] = true
-				}
-				break
-			}
+		members := make(map[string]bool, len(t.members))
+		for _, m := range t.members {
+			members[m] = true
 		}
 		out := make([]ipc.ServiceInfo, 0, len(s.allServices))
 		for _, svc := range s.allServices {
@@ -128,99 +101,35 @@ func (s *sidebar) refilter() {
 	}
 }
 
-// targetExists reports whether a target with the given name is in the list.
-func (s *sidebar) targetExists(name string) bool {
-	for _, t := range s.targets {
-		if t.name == name {
-			return true
-		}
-	}
-	return false
-}
-
-// toggleTargetSelection makes the target under the cursor the service filter,
-// or clears the filter if that target is already selected. The synthetic
-// "All services" row always clears. No-op unless the cursor is on a target row.
-func (s *sidebar) toggleTargetSelection() {
-	t := s.selectedTarget()
-	if t == nil {
-		return
-	}
+// setFilter makes the target called name the service filter ("" or an unknown
+// name clears it), keeping the highlight on the same service if it survived.
+func (s *sidebar) setFilter(name string) {
 	var curSvc string
 	if s.selected < len(s.services) {
 		curSvc = s.services[s.selected].Name
 	}
-	if t.name == "" || t.name == s.filterTarget {
-		s.filterTarget = ""
-	} else {
-		s.filterTarget = t.name
+	if !s.targetExists(name) {
+		name = ""
 	}
+	s.filterTarget = name
 	s.refilter()
-	s.selectServiceByName(curSvc) // keep the highlight on the same service if it survived the filter
+	s.selectServiceByName(curSvc)
 }
 
-// moveDown / moveUp walk a single circular cursor over the TARGETS rows followed
-// by the (filtered) SERVICES rows. With no TARGETS block at all (no config
-// context), they wrap within services — identical to the pre-targets behaviour.
+// moveDown / moveUp walk the (filtered) service list, wrapping at the ends.
 
 func (s *sidebar) moveDown() {
-	if !s.showTargets() {
-		if len(s.services) == 0 {
-			return
-		}
-		if s.selected == len(s.services)-1 {
-			s.selected = 0
-		} else {
-			s.selected++
-		}
+	if len(s.services) == 0 {
 		return
 	}
-	switch s.section {
-	case sectionTargets:
-		if s.targetSel < len(s.targets)-1 {
-			s.targetSel++
-		} else {
-			s.section = sectionServices
-			s.selected = 0
-		}
-	case sectionServices:
-		if len(s.services) > 0 && s.selected < len(s.services)-1 {
-			s.selected++
-		} else {
-			s.section = sectionTargets
-			s.targetSel = 0
-		}
-	}
+	s.selected = (s.selected + 1) % len(s.services)
 }
 
 func (s *sidebar) moveUp() {
-	if !s.showTargets() {
-		if len(s.services) == 0 {
-			return
-		}
-		if s.selected == 0 {
-			s.selected = len(s.services) - 1
-		} else {
-			s.selected--
-		}
+	if len(s.services) == 0 {
 		return
 	}
-	switch s.section {
-	case sectionServices:
-		if s.selected > 0 {
-			s.selected--
-		} else {
-			s.section = sectionTargets
-			s.targetSel = len(s.targets) - 1
-		}
-	case sectionTargets:
-		if s.targetSel > 0 {
-			s.targetSel--
-		} else {
-			s.section = sectionServices
-			s.selected = max(0, len(s.services)-1)
-		}
-	}
+	s.selected = (s.selected - 1 + len(s.services)) % len(s.services)
 }
 
 func (s *sidebar) selectedService() *ipc.ServiceInfo {
@@ -228,28 +137,6 @@ func (s *sidebar) selectedService() *ipc.ServiceInfo {
 		return nil
 	}
 	return &s.services[s.selected]
-}
-
-// selectedTarget returns the highlighted target row, or nil when the cursor is
-// in the services section, there are no targets, or the row is out of range.
-// The synthetic "All services" row is returned like any other (name == "").
-func (s *sidebar) selectedTarget() *sidebarTarget {
-	if !s.showTargets() || s.section != sectionTargets {
-		return nil
-	}
-	if s.targetSel < 0 || s.targetSel >= len(s.targets) {
-		return nil
-	}
-	return &s.targets[s.targetSel]
-}
-
-// setAllServicesActive overrides the "All services" row highlight for immediate
-// feedback when s / x is pressed on it; the next daemon poll rebuilds the row
-// and recomputes the highlight from live service state.
-func (s *sidebar) setAllServicesActive(active bool) {
-	if len(s.targets) > 0 && s.targets[0].name == "" {
-		s.targets[0].active = active
-	}
 }
 
 // stateLabel returns the short status token for a service: its port when
@@ -308,13 +195,6 @@ func stateDot(state string) string {
 	}
 }
 
-func targetDot(t sidebarTarget) string {
-	if t.active {
-		return styleGreen.Render("●")
-	}
-	return styleMuted.Render("○")
-}
-
 // sectionHeader renders a bordered sidebar column heading, accented while the
 // cursor is in that section.
 func sectionHeader(label string, width int, accented bool) string {
@@ -331,84 +211,38 @@ func sectionHeader(label string, width int, accented bool) string {
 }
 
 func (s *sidebar) render(width, height int, focused bool) string {
-	if len(s.allServices) == 0 && !s.showTargets() {
+	if len(s.allServices) == 0 {
 		if !s.loaded {
 			return styleMuted.Render("Loading services…")
 		}
 		return styleMuted.Render("No services — run devrun add <name>")
 	}
 
-	var top []string
-
-	// --- TARGETS block: shown whenever there is a config context. It always
-	// leads with the synthetic "All services" row, so a start/stop-all is
-	// reachable even before any real target is defined. ---
-	if s.showTargets() {
-		top = append(top, sectionHeader("TARGETS", width, focused && s.section == sectionTargets))
-		for i, t := range s.targets {
-			label := t.name
-			if label == "" {
-				label = allServicesLabel
-			}
-			label = truncateName(label, width-4) // marker(1) + dot(1) + space(1) + margin(1)
-			// A leading "▸" marks the target currently selected as the filter.
-			marker := " "
-			if t.name != "" && t.name == s.filterTarget {
-				marker = "▸"
-			}
-			if s.section == sectionTargets && i == s.targetSel {
-				top = append(top, selectedTargetRow(width, t, label, marker))
-			} else {
-				top = append(top, marker+targetDot(t)+" "+label)
-			}
-		}
-		top = append(top, "")
+	// The heading names the active target filter, so the reason a service is
+	// missing from the list is always on screen.
+	heading := "SERVICES"
+	if s.filterTarget != "" {
+		heading += " · " + truncateName(s.filterTarget, max(1, width-len(heading)-3))
 	}
-
-	// --- SERVICES block ---
-	servicesActive := !s.showTargets() || s.section == sectionServices
-	top = append(top, sectionHeader("SERVICES", width, focused && servicesActive))
+	top := []string{sectionHeader(heading, width, focused)}
 
 	if len(s.services) == 0 {
 		top = append(top, styleMuted.Render("  (no services in target)"))
 	}
 	for i, svc := range s.services {
 		name := truncateName(svc.Name, width-3) // dot(1) + space(1) + margin(1)
-		if servicesActive && i == s.selected {
+		if i == s.selected {
 			top = append(top, selectedServiceRow(width, svc.State, name))
 		} else {
 			top = append(top, stateDot(svc.State)+" "+name)
 		}
 	}
 
-	// --- Bottom: info block for the selected row + action hints, pinned to the
-	// bottom edge so their position doesn't drift with the list length. ---
+	// --- Bottom: info block for the selected service + action hints, pinned to
+	// the bottom edge so their position doesn't drift with the list length. ---
 
 	var bottom []string
-	if t := s.selectedTarget(); t != nil && t.name == "" {
-		// The synthetic "All services" row: s/x act on every scoped service.
-		running := 0
-		for _, svc := range s.allServices {
-			if svc.State == "running" {
-				running++
-			}
-		}
-		bottom = append(bottom,
-			styleMuted.Render("── "+truncateName(allServicesLabel, width-6)+" ──"),
-			fmt.Sprintf("  %d/%d running", running, len(s.allServices)),
-			fmt.Sprintf("SVCS %d", len(s.allServices)),
-		)
-	} else if t != nil { // a real target row (t.name != "")
-		state := styleMuted.Render("stopped")
-		if t.active {
-			state = styleGreen.Render("running")
-		}
-		bottom = append(bottom,
-			styleMuted.Render("── "+truncateName(t.name, width-6)+" ──"),
-			"  "+state,
-			fmt.Sprintf("SVCS %d", len(t.members)),
-		)
-	} else if svc := s.selectedService(); svc != nil {
+	if svc := s.selectedService(); svc != nil {
 		sep := "── " + truncateName(svc.Name, width-6) + " ──"
 		bottom = append(bottom,
 			styleMuted.Render(sep),
@@ -459,27 +293,6 @@ func selectedServiceRow(width int, state, name string) string {
 	content := dot + namePart
 
 	// Fill remaining columns with the selection background.
-	if pad := width - lipgloss.Width(content); pad > 0 {
-		content += sel.Render(strings.Repeat(" ", pad))
-	}
-	return content
-}
-
-// selectedTargetRow is selectedServiceRow's equivalent for a TARGETS row: the
-// dot is green for an active target, muted otherwise. marker is the 1-column
-// filter indicator ("▸" or " ") that leads every target row.
-func selectedTargetRow(width int, t sidebarTarget, label, marker string) string {
-	sel := lipgloss.NewStyle().Background(colorSelSidebar)
-
-	dotFg := colorMuted
-	glyph := "○"
-	if t.active {
-		dotFg = colorGreen
-		glyph = "●"
-	}
-	dot := sel.Foreground(dotFg).Render(marker + glyph)
-	namePart := sel.Foreground(colorText).Render(" " + label)
-	content := dot + namePart
 	if pad := width - lipgloss.Width(content); pad > 0 {
 		content += sel.Render(strings.Repeat(" ", pad))
 	}
