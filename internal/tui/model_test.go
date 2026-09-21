@@ -138,7 +138,7 @@ func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	m.focus = focusMain
 
 	first := screenRow(m, "line-00")
-	require.Equal(t, m.headerRows()+1, first, "log content starts under the header and the pane's top border")
+	require.Equal(t, headerRows+1, first, "log content starts under the header and the pane's top border")
 
 	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: first})
 	assert.Equal(t, 0, m2.(model).logsC.sb.cursor, "clicking the first drawn log row selects line 0")
@@ -371,7 +371,7 @@ func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
 		rows := strings.Split(plain(m.View()), "\n")
 		require.Len(t, rows, 16)
 		found := false
-		for _, row := range rows[m.headerRows()+1 : 16-m.footerRows()-1] {
+		for _, row := range rows[headerRows+1 : 16-footerRows-1] {
 			// Only the sidebar's share of the row — the main pane's title
 			// names the service too and must not satisfy the check.
 			if strings.Contains(ansi.Truncate(row, m.sidebarWidth(), ""), name) {
@@ -383,26 +383,35 @@ func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
 	}
 }
 
-// TestModel_GapSeparatesChromeFromPanes verifies a blank row sits between the
-// header and the panes and between the panes and the footer — and that a short
-// terminal gives those rows back to the content.
-func TestModel_GapSeparatesChromeFromPanes(t *testing.T) {
+// TestModel_HeaderAndFooterAreBars verifies the header and footer sit directly
+// on the panes — no blank rows — and are separated by a full-width background
+// band that survives the resets inside their styled segments.
+func TestModel_HeaderAndFooterAreBars(t *testing.T) {
 	m := resized(setupLogModel(), 100, 30)
+	raw := strings.Split(m.View(), "\n")
 	rows := strings.Split(plain(m.View()), "\n")
 	require.Len(t, rows, 30)
 	assert.Contains(t, rows[0], "devrun")
-	assert.Empty(t, strings.TrimSpace(rows[1]), "blank row under the header")
-	assert.True(t, strings.HasPrefix(rows[2], "╭"), "then the panes")
-	assert.True(t, strings.HasPrefix(rows[27], "╰"))
-	assert.Empty(t, strings.TrimSpace(rows[28]), "blank row above the footer")
+	assert.True(t, strings.HasPrefix(rows[1], "╭"), "the panes start right under the header")
+	assert.True(t, strings.HasPrefix(rows[28], "╰"))
 	assert.Contains(t, rows[29], "quit")
 
-	short := resized(setupLogModel(), 100, gapMinHeight-1)
-	rows = strings.Split(plain(short.View()), "\n")
-	require.Len(t, rows, gapMinHeight-1)
-	assert.True(t, strings.HasPrefix(rows[1], "╭"), "a short terminal keeps the rows for content")
-	assertViewFits(t, short, 100, gapMinHeight-1)
-	assertViewFits(t, resized(short, 100, gapMinHeight), 100, gapMinHeight)
+	for _, i := range []int{0, 29} {
+		assert.Equal(t, 100, lipgloss.Width(raw[i]), "row %d: the band spans the full width", i)
+		// Every reset inside the row is followed by the band being switched
+		// back on; only the final one is left to end it.
+		on := raw[i][:strings.Index(raw[i], "m")+1]
+		body := strings.TrimSuffix(raw[i], "\x1b[0m")
+		assert.Equal(t, strings.Count(body, "\x1b[0m"), strings.Count(body, "\x1b[0m"+on), "row %d: a reset left a hole in the band", i)
+	}
+	assert.NotContains(t, raw[5], raw[0][:strings.Index(raw[0], "m")+1], "the panes are not painted")
+}
+
+func TestBarBackground_PadsAndKeepsText(t *testing.T) {
+	out := barBackground(styleAccent.Render("hi")+" there", 20)
+	assert.Equal(t, 20, lipgloss.Width(out))
+	assert.Equal(t, "hi there", strings.TrimRight(plain(out), " "))
+	assert.Equal(t, 30, lipgloss.Width(barBackground(strings.Repeat("x", 30), 20)), "never truncates: the caller already fitted the row")
 }
 
 // TestModel_ViewNamesServiceInMainPaneTitle verifies the log pane always says

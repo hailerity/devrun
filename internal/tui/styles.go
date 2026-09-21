@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // The palette is adaptive: each colour is a light/dark pair, and lipgloss picks
 // the side that matches the terminal's background. The dark side is GitHub Dark
@@ -18,6 +22,9 @@ var (
 	colorSelSidebar = lipgloss.AdaptiveColor{Light: "#eaeef2", Dark: "#2d333b"} // sidebar selection
 	colorSelCursor  = lipgloss.AdaptiveColor{Light: "#e2e8ee", Dark: "#343b45"} // logs cursor line
 	colorVisBg      = lipgloss.AdaptiveColor{Light: "#ddf4ff", Dark: "#1f3a5f"} // visual selection
+
+	colorBar  = lipgloss.AdaptiveColor{Light: "#eaeef2", Dark: "#161b22"} // header / footer band
+	colorChip = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#30363d"} // key chips on that band
 )
 
 var (
@@ -49,3 +56,30 @@ var (
 				BorderForeground(colorAccent).
 				BorderBackground(colorSelCursor)
 )
+
+// barBackground paints row — one already-styled line — on the colorBar band,
+// padded to width. The row is built from many separately styled segments, each
+// ending in an SGR reset that would punch a hole in a background applied from
+// outside, so the band is re-asserted after every reset instead. With colour
+// disabled there is no sequence to emit and the row is returned unpainted.
+func barBackground(row string, width int) string {
+	hex := colorBar.Light
+	if lipgloss.HasDarkBackground() {
+		hex = colorBar.Dark
+	}
+	c := lipgloss.ColorProfile().Color(hex)
+	if c == nil {
+		return row
+	}
+	seq := c.Sequence(true)
+	if seq == "" {
+		return row
+	}
+	on := "\x1b[" + seq + "m"
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += strings.Repeat(" ", pad)
+	}
+	row = strings.ReplaceAll(row, "\x1b[0m", "\x1b[0m"+on)
+	row = strings.ReplaceAll(row, "\x1b[m", "\x1b[m"+on)
+	return on + row + "\x1b[0m"
+}

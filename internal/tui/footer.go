@@ -215,7 +215,7 @@ func (f *footerBar) render(c footerCtx, width int) string {
 
 func renderHint(k, label string) string {
 	key := lipgloss.NewStyle().
-		Background(colorBorder).
+		Background(colorChip).
 		Foreground(colorText).
 		Padding(0, 1).
 		Render(k)
