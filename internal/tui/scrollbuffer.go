@@ -28,6 +28,8 @@ type scrollBuffer struct {
 	// by any route clears it.
 	unseen int
 
+	search logSearch
+
 	// noWrap disables line wrapping (see fitLine): a long line is truncated
 	// to one row instead of spread across continuation rows. false (wrap) is
 	// the zero value so every scrollBuffer{...} literal that doesn't set it —
@@ -269,6 +271,52 @@ func stripUnsafe(s string) string {
 	return unsafeSeqRe.ReplaceAllString(s, "")
 }
 
+// setQuery changes the search query and re-matches. It does not move the
+// cursor: typing a query previews the match count without losing your place.
+func (sb *scrollBuffer) setQuery(q string) {
+	sb.search.query = q
+	sb.search.refresh(sb.lines)
+}
+
+// jumpTo puts the cursor on line idx and scrolls it into view. Follow goes off:
+// the next appended line must not yank the view away from what was just found.
+func (sb *scrollBuffer) jumpTo(idx int) {
+	sb.cursor = sb.clampLine(idx)
+	sb.followMode = false
+	if sb.visualMode {
+		sb.selEnd = sb.cursor
+	}
+	if sb.cursor < sb.yOffset {
+		sb.yOffset = sb.cursor
+	} else if !sb.lineVisible(sb.cursor) {
+		sb.yOffset = sb.topForBottom(sb.cursor)
+	}
+	if sb.cursor == len(sb.lines)-1 {
+		sb.unseen = 0
+	}
+}
+
+// searchStep moves to the next (dir > 0) or previous match, wrapping. It
+// reports whether there was a match to move to.
+func (sb *scrollBuffer) searchStep(dir int) bool {
+	sb.search.refresh(sb.lines)
+	idx, ok := sb.search.next(sb.cursor, dir)
+	if ok {
+		sb.jumpTo(idx)
+	}
+	return ok
+}
+
+// searchConfirm lands on the match nearest the cursor looking upward.
+func (sb *scrollBuffer) searchConfirm() bool {
+	sb.search.refresh(sb.lines)
+	idx, ok := sb.search.nearestAtOrBefore(sb.cursor)
+	if ok {
+		sb.jumpTo(idx)
+	}
+	return ok
+}
+
 func (sb *scrollBuffer) enterVisual() {
 	sb.visualMode = true
 	sb.selStart = sb.cursor
@@ -346,6 +394,13 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 	// rendering. These would corrupt TUI layout or bleed into adjacent widgets.
 	safe := stripUnsafe(line)
 	colored := colorizeLog(safe)
+	// A line that matches the search is drawn from its plain text with the
+	// matches marked. It loses its own colours while the search is active —
+	// splicing highlight codes into a line that already carries SGR sequences
+	// is how colours bleed — and the visible text, so the wrap, is unchanged.
+	if sb.search.active() && sb.search.position(idx) > 0 {
+		colored = highlight(stripANSI(safe), sb.search.query)
+	}
 	lo := min(sb.selStart, sb.selEnd)
 	hi := max(sb.selStart, sb.selEnd)
 	// Both highlighted styles carry a BorderLeft(true) gutter bar (+1 column),

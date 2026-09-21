@@ -75,8 +75,11 @@ type model struct {
 	removeC     removeConfirm
 	pickerC     targetPicker
 	helpC       helpPanel
-	headerC     headerBar
-	footerC     footerBar
+
+	searching bool            // the footer's search input has the keyboard
+	searchC   textinput.Model // the `/` input; its value is committed to logsC.sb on Enter
+	headerC   headerBar
+	footerC   footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -92,6 +95,7 @@ type model struct {
 func newModel(socketPath string, reg *config.Registry, src config.Source, logDir string, cb clipboard) model {
 	return model{
 		logsC:       newLogsPanel(),
+		searchC:     newSearchInput(),
 		editC:       newEditPanel(),
 		targetEditC: newTargetEditPanel(),
 		socketPath:  socketPath,
@@ -100,6 +104,13 @@ func newModel(socketPath string, reg *config.Registry, src config.Source, logDir
 		logDir:      logDir,
 		cb:          cb,
 	}
+}
+
+func newSearchInput() textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = "/"
+	ti.CharLimit = 128
+	return ti
 }
 
 func (m model) Init() tea.Cmd {
@@ -235,6 +246,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pickerC.open {
 		return m.handlePickerKey(msg)
 	}
+	if m.searching {
+		return m.handleSearchKey(msg)
+	}
 	if m.helpC.open {
 		// Any of the keys a user would reach for closes it; nothing leaks to
 		// the panes behind.
@@ -340,12 +354,40 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.enterVisual()
 		}
 
+	// / opens the search input. It always lands in the log pane — searching
+	// from the sidebar or from DETAILS means "search this service's log".
+	case key.Matches(msg, keys.Search):
+		if m.sidebarC.selectedService() == nil {
+			break
+		}
+		m.focus = focusMain
+		m.activeTab = tabLogs
+		m.searching = true
+		m.searchC.SetValue(m.logsC.sb.search.query)
+		m.searchC.CursorEnd()
+		m.searchC.Focus()
+		return m, textinput.Blink
+
+	case key.Matches(msg, keys.Next), key.Matches(msg, keys.Prev):
+		if m.activeTab != tabLogs || !m.logsC.sb.search.active() {
+			break
+		}
+		dir := 1
+		if key.Matches(msg, keys.Prev) {
+			dir = -1
+		}
+		if !m.logsC.sb.searchStep(dir) {
+			m.footerC.showToast("no matches for " + m.logsC.sb.search.query)
+		}
+
 	// Esc backs out one level: it cancels an active visual selection first,
-	// otherwise it collapses DETAILS back to LOGS.
+	// then clears an active search, otherwise it collapses DETAILS back to LOGS.
 	case key.Matches(msg, keys.Escape):
 		switch {
 		case m.focus == focusMain && m.activeTab == tabLogs && m.logsC.sb.visualMode:
 			m.logsC.sb.exitVisual()
+		case m.activeTab == tabLogs && m.logsC.sb.search.active():
+			m.logsC.sb.setQuery("")
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		}
@@ -442,6 +484,33 @@ func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll 
 // picker, or the help overlay — currently owns the screen and all input.
 func (m model) modalOpen() bool {
 	return m.editC.open || m.targetEditC.open || m.removeC.open || m.pickerC.open || m.helpC.open
+}
+
+// handleSearchKey routes a key to the footer's search input. The query is
+// matched live as it is typed — the border's match count updates — but the
+// cursor only moves on Enter, so abandoning a search with Esc costs nothing.
+func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.searching = false
+		m.searchC.Blur()
+		m.logsC.sb.setQuery("")
+		return m, nil
+	case tea.KeyEnter:
+		m.searching = false
+		m.searchC.Blur()
+		q := m.logsC.sb.search.query
+		if q != "" && !m.logsC.sb.searchConfirm() {
+			m.footerC.showToast("no matches for " + q)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchC, cmd = m.searchC.Update(msg)
+	m.logsC.sb.setQuery(m.searchC.Value())
+	return m, cmd
 }
 
 // handlePickerKey routes a key to the open target picker: j/k move, Enter
@@ -1248,6 +1317,9 @@ func (m model) View() string {
 		confirming:   m.removeC.open,
 		picking:      m.pickerC.open,
 		helping:      m.helpC.open,
+		searching:    m.searching,
+		hasQuery:     m.logsC.sb.search.active(),
+		searchInput:  m.searchC.View(),
 	}, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -1327,6 +1399,22 @@ func (m model) renderMain(w, h int) string {
 	sb := &m.logsC.sb
 	if n := len(sb.lines); n > 0 {
 		frame.footLeft = styleMuted.Render(formatCount(n) + " lines")
+	}
+	if sb.search.active() {
+		// "3/17 matches" while the cursor sits on a match, "17 matches" when it
+		// does not, and a plain statement when there is nothing to step through.
+		found := styleYellow.Render("no matches")
+		if total := len(sb.search.matches); total > 0 {
+			found = formatCount(total) + " matches"
+			if at := sb.search.position(sb.cursor); at > 0 {
+				found = formatCount(at) + "/" + found
+			}
+			found = styleAccent.Render(found)
+		}
+		if frame.footLeft != "" {
+			frame.footLeft += styleMuted.Render(" · ")
+		}
+		frame.footLeft += found
 	}
 	// Follow off is only interesting if something arrived meanwhile: say how
 	// much, in the warning colour, so it is clear the view is behind.

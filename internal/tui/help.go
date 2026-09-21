@@ -27,7 +27,7 @@ func helpGroups() [][]helpGroup {
 		},
 		{ // right column
 			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.StartAll, keys.StopAll, keys.Target, keys.Edit, keys.Remove}},
-			{"LOGS", []key.Binding{keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
+			{"LOGS", []key.Binding{keys.Search, keys.Next, keys.Prev, keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
 		},
 	}
 }

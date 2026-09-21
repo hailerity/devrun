@@ -25,6 +25,9 @@ type keyMap struct {
 	StartAll key.Binding
 	StopAll  key.Binding
 	Help     key.Binding
+	Search   key.Binding
+	Next     key.Binding
+	Prev     key.Binding
 }
 
 // The help text here is what the `?` overlay prints, so each description says
@@ -52,4 +55,7 @@ var keys = keyMap{
 	StartAll: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "start everything listed")),
 	StopAll:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop everything listed")),
 	Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show this help")),
+	Search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
+	Next:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match (down)")),
+	Prev:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match (up)")),
 }

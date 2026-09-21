@@ -49,6 +49,7 @@ func allFooterContexts() map[string]footerCtx {
 		"confirming":      {confirming: true},
 		"picking":         {picking: true},
 		"helping":         {helping: true},
+		"logs+query":      {tab: tabLogs, focus: focusMain, hasQuery: true},
 	}
 }
 

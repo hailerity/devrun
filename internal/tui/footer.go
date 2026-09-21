@@ -46,12 +46,15 @@ func (f *footerBar) tick(dt time.Duration) {
 type footerCtx struct {
 	tab          tabKind
 	focus        focusKind
-	visual       bool // a visual selection is active in the log pane
-	onServiceRow bool // e / d apply to the selected service
-	editing      bool // a form modal (service or target editor) is open
-	confirming   bool // the remove confirm is open
-	picking      bool // the target picker is open
-	helping      bool // the help overlay is open
+	visual       bool   // a visual selection is active in the log pane
+	onServiceRow bool   // e / d apply to the selected service
+	editing      bool   // a form modal (service or target editor) is open
+	confirming   bool   // the remove confirm is open
+	picking      bool   // the target picker is open
+	helping      bool   // the help overlay is open
+	searching    bool   // the search input has the keyboard
+	hasQuery     bool   // a search is active in the log pane
+	searchInput  string // the rendered search input, shown while searching
 }
 
 // hint is one key/label pair in the footer. pri ranks it for narrow terminals:
@@ -110,15 +113,21 @@ func (c footerCtx) hints() []hint {
 		if c.visual {
 			return []hint{{"y/^C", "copy", 0}, {"Esc", "cancel", 1}, {"j/k", "extend", 2}}
 		}
-		return []hint{
-			{"Tab", "services", 2},
-			{"f", "follow", 1},
-			{"y", "copy", 3},
-			{"v", "select", 4},
-			{"w", "wrap", 6},
-			{"g/G", "top/end", 7},
-			{"↵", "details", 5},
+		out := []hint{}
+		if c.hasQuery {
+			// While a search is active stepping through it is the point.
+			out = append(out, hint{"n/N", "next/prev", 0}, hint{"Esc", "clear", 1})
 		}
+		return append(out,
+			hint{"/", "search", 1},
+			hint{"Tab", "services", 2},
+			hint{"f", "follow", 2},
+			hint{"y", "copy", 3},
+			hint{"v", "select", 4},
+			hint{"w", "wrap", 6},
+			hint{"g/G", "top/end", 7},
+			hint{"↵", "details", 5},
+		)
 	}
 
 	enter := "details"
@@ -130,11 +139,12 @@ func (c footerCtx) hints() []hint {
 		{"x", "stop", 1},
 		{"↵", enter, 2},
 		{"t", "target", 4},
+		{"/", "search", 5},
 	}
 	if c.onServiceRow {
-		out = append(out, hint{"e", "edit", 5}, hint{"d", "remove", 6})
+		out = append(out, hint{"e", "edit", 6}, hint{"d", "remove", 7})
 	}
-	return append(out, hint{"S/X", "all", 7}, hint{"Tab", "logs", 3})
+	return append(out, hint{"S/X", "all", 8}, hint{"Tab", "logs", 3})
 }
 
 // pinnedHints sit at the right edge in every non-modal context, so the way out
@@ -156,6 +166,15 @@ func (f *footerBar) render(c footerCtx, width int) string {
 	}
 	if c.confirming || c.editing || c.picking || c.helping {
 		return base.Render(fitHints(c.hints(), inner))
+	}
+	if c.searching {
+		// The input takes the left; its two keys are pinned right. The input is
+		// truncated to what is left, so a long query cannot wrap the row.
+		right := fitHints([]hint{{"↵", "find", 0}, {"Esc", "cancel", 1}}, inner)
+		room := max(0, inner-lipgloss.Width(right)-len(hintGap))
+		left := ansi.Truncate(c.searchInput, room, "")
+		gap := max(0, inner-lipgloss.Width(left)-lipgloss.Width(right))
+		return base.Render(left + strings.Repeat(" ", gap) + right)
 	}
 
 	// The pinned pair claims its space first; the context hints get the rest.

@@ -62,6 +62,9 @@ func (lp *logsPanel) poll() bool {
 	lp.fileOffset, _ = f.Seek(0, io.SeekCurrent)
 	lp.noLogMsg = ""
 
+	// Match the new lines here, on the real model: View() runs on a copy, so a
+	// refresh there would be thrown away and redone every frame.
+	lp.sb.search.refresh(lp.sb.lines)
 	lp.sb.appended(added)
 	return added > 0
 }
