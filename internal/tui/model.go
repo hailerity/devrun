@@ -416,6 +416,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Stop):
 		return m, m.doStop()
 
+	// r restarts the selected service; on one that is not running it is simply
+	// a start, so there is no wrong state to press it in.
+	case key.Matches(msg, keys.Restart):
+		cmd := m.doRestart()
+		if cmd != nil {
+			m.footerC.showToast("restarting " + m.sidebarC.selectedService().Name)
+		}
+		return m, cmd
+
 	// S / X act on everything listed: the filtering target when there is one
 	// (so the daemon tracks it as an active target), otherwise every service.
 	case key.Matches(msg, keys.StartAll):
@@ -672,6 +681,21 @@ func (m model) doRestartForEdit(oldName, newName string, cfg *config.ServiceConf
 			return daemonTickMsg{}
 		})
 	}
+}
+
+// doRestart stops then starts the selected service under its current
+// definition. It shares the editor's restart path, which already tolerates a
+// service that is not running — the stop is best-effort, the start decides.
+func (m model) doRestart() tea.Cmd {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return nil
+	}
+	var cfg *config.ServiceConfig
+	if m.registry != nil {
+		cfg = m.registry.Services[svc.Name]
+	}
+	return m.doRestartForEdit(svc.Name, svc.Name, cfg)
 }
 
 // applyEditToRegistry mirrors the just-persisted edit into the in-memory

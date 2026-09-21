@@ -185,6 +185,31 @@ func TestModel_ViewFillsTerminalExactly(t *testing.T) {
 	}
 }
 
+// TestModel_RestartDispatchesStopThenStart verifies r reaches the daemon path
+// for the selected service, and stays quiet when there is nothing it could do.
+func TestModel_RestartDispatchesStopThenStart(t *testing.T) {
+	m := targetFilterModel(t)
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+	name := m.sidebarC.selectedService().Name
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	require.NotNil(t, cmd)
+	assert.Equal(t, "restarting "+name, m2.(model).footerC.toast)
+	_, isErr := cmd().(daemonErrMsg)
+	assert.True(t, isErr, "with the daemon unreachable the start half reports it")
+
+	// No socket: nothing is dispatched, so nothing is announced.
+	m.socketPath = ""
+	m2, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.Nil(t, cmd)
+	assert.Empty(t, m2.(model).footerC.toast)
+
+	// No service selected: must not panic on the nil selection.
+	empty := newModel("/tmp/x.sock", nil, config.Source{}, "", clipboard{})
+	_, cmd = empty.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.Nil(t, cmd)
+}
+
 // TestModel_LogBorderReportsNewLines checks the border text end to end: follow,
 // then "N new" once lines arrive behind a parked view, then back to follow on G.
 func TestModel_LogBorderReportsNewLines(t *testing.T) {

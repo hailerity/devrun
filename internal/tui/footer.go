@@ -137,14 +137,15 @@ func (c footerCtx) hints() []hint {
 	out := []hint{
 		{"s", "start", 0},
 		{"x", "stop", 1},
+		{"r", "restart", 4},
 		{"↵", enter, 2},
-		{"t", "target", 4},
-		{"/", "search", 5},
+		{"t", "target", 5},
+		{"/", "search", 6},
 	}
 	if c.onServiceRow {
-		out = append(out, hint{"e", "edit", 6}, hint{"d", "remove", 7})
+		out = append(out, hint{"e", "edit", 7}, hint{"d", "remove", 8})
 	}
-	return append(out, hint{"S/X", "all", 8}, hint{"Tab", "logs", 3})
+	return append(out, hint{"S/X", "all", 9}, hint{"Tab", "logs", 3})
 }
 
 // pinnedHints sit at the right edge in every non-modal context, so the way out

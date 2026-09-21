@@ -28,6 +28,7 @@ type keyMap struct {
 	Search   key.Binding
 	Next     key.Binding
 	Prev     key.Binding
+	Restart  key.Binding
 }
 
 // The help text here is what the `?` overlay prints, so each description says
@@ -58,4 +59,5 @@ var keys = keyMap{
 	Search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
 	Next:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match (down)")),
 	Prev:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match (up)")),
+	Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart the selected service")),
 }

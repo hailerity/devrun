@@ -26,7 +26,7 @@ func helpGroups() [][]helpGroup {
 			{"OTHER", []key.Binding{keys.Escape, keys.Help, keys.Quit}},
 		},
 		{ // right column
-			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.StartAll, keys.StopAll, keys.Target, keys.Edit, keys.Remove}},
+			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.Restart, keys.StartAll, keys.StopAll, keys.Target, keys.Edit, keys.Remove}},
 			{"LOGS", []key.Binding{keys.Search, keys.Next, keys.Prev, keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
 		},
 	}
