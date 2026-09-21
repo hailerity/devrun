@@ -1221,10 +1221,15 @@ func (m model) View() string {
 		body = overlay(body, modal, m.width, bodyH)
 	}
 
-	// Footer. `editing` is the form modals only; the remove-confirm modal owns
-	// the screen too but carries no fields, so it is passed as `confirming`.
-	editing := m.editC.open || m.targetEditC.open
-	footer := m.footerC.render(m.activeTab, m.focus, m.logsC.sb.visualMode, m.onServiceRow(), editing, m.removeC.open, m.pickerC.open, m.width)
+	footer := m.footerC.render(footerCtx{
+		tab:          m.activeTab,
+		focus:        m.focus,
+		visual:       m.logsC.sb.visualMode,
+		onServiceRow: m.onServiceRow(),
+		editing:      m.editC.open || m.targetEditC.open,
+		confirming:   m.removeC.open,
+		picking:      m.pickerC.open,
+	}, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }

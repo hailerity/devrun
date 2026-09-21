@@ -42,61 +42,124 @@ func (f *footerBar) tick(dt time.Duration) {
 	}
 }
 
-func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, onServiceRow, editing, confirming, picking bool, width int) string {
-	// One row, no rule: the pane borders above already separate the footer.
+// footerCtx is what the footer needs to know to pick its hints.
+type footerCtx struct {
+	tab          tabKind
+	focus        focusKind
+	visual       bool // a visual selection is active in the log pane
+	onServiceRow bool // e / d apply to the selected service
+	editing      bool // a form modal (service or target editor) is open
+	confirming   bool // the remove confirm is open
+	picking      bool // the target picker is open
+}
+
+// hint is one key/label pair in the footer. pri ranks it for narrow terminals:
+// 0 is kept longest, larger numbers are dropped first.
+type hint struct {
+	key, label string
+	pri        int
+}
+
+const hintGap = "  "
+
+// fitHints renders as many hints as fit in width, in their given order. When
+// they do not all fit, whole hints are removed — highest pri number first —
+// rather than the line being cut mid-label, so what remains always reads
+// correctly and the most useful keys are the last to go.
+func fitHints(hints []hint, width int) string {
+	kept := append([]hint(nil), hints...)
+	for {
+		parts := make([]string, len(kept))
+		for i, h := range kept {
+			parts[i] = renderHint(h.key, h.label)
+		}
+		line := strings.Join(parts, hintGap)
+		if lipgloss.Width(line) <= width || len(kept) == 0 {
+			if len(kept) == 0 {
+				return ""
+			}
+			return line
+		}
+		drop := 0
+		for i, h := range kept {
+			// >= so that among equal priorities the rightmost goes first.
+			if h.pri >= kept[drop].pri {
+				drop = i
+			}
+		}
+		kept = append(kept[:drop], kept[drop+1:]...)
+	}
+}
+
+// hints returns the context's key hints in display order.
+func (c footerCtx) hints() []hint {
+	// The modals are keyboard traps: only their own keys apply.
+	switch {
+	case c.confirming:
+		return []hint{{"y", "remove", 0}, {"n/Esc", "cancel", 1}}
+	case c.editing:
+		return []hint{{"Tab", "field", 2}, {"↵", "save", 0}, {"Esc", "cancel", 1}}
+	case c.picking:
+		return []hint{{"↵", "filter", 0}, {"e", "edit", 2}, {"Esc", "close", 1}}
+	}
+
+	if c.focus == focusMain && c.tab == tabLogs {
+		if c.visual {
+			return []hint{{"y/^C", "copy", 0}, {"Esc", "cancel", 1}, {"j/k", "extend", 2}}
+		}
+		return []hint{
+			{"Tab", "services", 2},
+			{"f", "follow", 1},
+			{"y", "copy", 3},
+			{"v", "select", 4},
+			{"w", "wrap", 6},
+			{"g/G", "top/end", 7},
+			{"↵", "details", 5},
+		}
+	}
+
+	enter := "details"
+	if c.tab == tabDetails {
+		enter = "logs"
+	}
+	out := []hint{
+		{"s", "start", 0},
+		{"x", "stop", 1},
+		{"↵", enter, 2},
+		{"t", "target", 4},
+	}
+	if c.onServiceRow {
+		out = append(out, hint{"e", "edit", 5}, hint{"d", "remove", 6})
+	}
+	return append(out, hint{"S/X", "all", 7}, hint{"Tab", "logs", 3})
+}
+
+// pinnedHints sit at the right edge in every non-modal context, so the way out
+// and the way to learn the rest are never the hints a narrow terminal loses.
+var pinnedHints = []hint{{"?", "help", 1}, {"q", "quit", 0}}
+
+// render draws the one-row footer: context hints on the left, help and quit
+// pinned right. One row, no rule — the pane borders above already separate it.
+//
+// Everything is fitted to the width, never left to wrap: lipgloss's Width()
+// only pads short content, it never caps long content, and a footer that wraps
+// on the real terminal scrolls the header off the top.
+func (f *footerBar) render(c footerCtx, width int) string {
 	base := lipgloss.NewStyle().Width(width).PaddingLeft(1)
-	width = max(0, width-1)
+	inner := max(0, width-1)
 
 	if f.toast != "" {
-		return base.Foreground(colorAccent).Render(ansi.Truncate(f.toast, width, ""))
+		return base.Foreground(colorAccent).Render(ansi.Truncate(f.toast, inner, ""))
+	}
+	if c.confirming || c.editing || c.picking {
+		return base.Render(fitHints(c.hints(), inner))
 	}
 
-	// The modals draw their own hint line; the footer just names its keys.
-	if confirming {
-		return base.Render(ansi.Truncate(strings.Join([]string{
-			renderHint("y", "remove"), renderHint("n/Esc", "cancel"),
-		}, "  "), width, ""))
-	}
-	if editing {
-		return base.Render(ansi.Truncate(strings.Join([]string{
-			renderHint("Tab", "field"), renderHint("↵", "save"), renderHint("Esc", "cancel"),
-		}, "  "), width, ""))
-	}
-	if picking {
-		return base.Render(ansi.Truncate(strings.Join([]string{
-			renderHint("↵", "filter"), renderHint("e", "edit"), renderHint("Esc", "close"),
-		}, "  "), width, ""))
-	}
-
-	var hints []string
-	hints = append(hints, renderHint("Tab", "switch"))
-	// Enter toggles LOGS <-> DETAILS; the log-pane shortcuts (copy, follow)
-	// apply only while the log pane holds focus.
-	if activeTab == tabDetails {
-		hints = append(hints, renderHint("↵", "logs"))
-	} else {
-		hints = append(hints, renderHint("↵", "details"))
-	}
-	if focus == focusMain && activeTab == tabLogs {
-		hints = append(hints, renderHint("y/^C", "copy"), renderHint("v", "select"), renderHint("f", "follow"), renderHint("w", "wrap"))
-	}
-	if visualMode {
-		hints = append(hints, renderHint("Esc", "cancel"))
-	}
-	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"), renderHint("S/X", "all"), renderHint("t", "target"))
-	if onServiceRow {
-		hints = append(hints, renderHint("e", "edit"), renderHint("d", "remove"))
-	}
-	hints = append(hints, renderHint("q", "quit"))
-	// The hint list grows with context (visual mode, edit/remove-able rows,
-	// the log-pane shortcuts) and can outgrow a narrow terminal. lipgloss's
-	// Width() only ever pads short content up to width — it never caps long
-	// content back down — so an overlong, unbudgeted line here would wrap in
-	// the real terminal and scroll the whole screen, pushing the header off
-	// the top exactly like the earlier logs-panel bug. Truncate defensively:
-	// losing the least-essential (rightmost) hints beats corrupting the
-	// layout.
-	return base.Render(ansi.Truncate(strings.Join(hints, "  "), width, ""))
+	// The pinned pair claims its space first; the context hints get the rest.
+	right := fitHints(pinnedHints, inner)
+	left := fitHints(c.hints(), max(0, inner-lipgloss.Width(right)-len(hintGap)))
+	gap := max(0, inner-lipgloss.Width(left)-lipgloss.Width(right))
+	return base.Render(left + strings.Repeat(" ", gap) + right)
 }
 
 func renderHint(k, label string) string {
