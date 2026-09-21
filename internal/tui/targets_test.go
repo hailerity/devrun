@@ -20,7 +20,6 @@ func plain(s string) string { return sgrRe.ReplaceAllString(s, "") }
 
 func targetRows() []sidebarTarget {
 	return []sidebarTarget{
-		{name: ""},
 		{name: "t1", members: []string{"web"}, active: true},
 		{name: "t2", members: []string{"api", "db"}},
 	}
@@ -34,220 +33,116 @@ func svcs(names ...string) []ipc.ServiceInfo {
 	return out
 }
 
-func TestSidebar_NoConfigContext_HidesBlockAndWrapsWithinServices(t *testing.T) {
+func TestSidebar_TargetsAreNotRows(t *testing.T) {
 	sb := &sidebar{}
-	sb.update(svcs("api", "web", "zoo"), nil)
+	sb.update(svcs("api", "web", "zoo"), targetRows())
 
-	assert.False(t, sb.showTargets())
-	assert.Nil(t, sb.selectedTarget())
-
-	sb.selected = 0
+	// The cursor only ever walks services, wrapping at the ends.
 	sb.moveUp()
 	assert.Equal(t, 2, sb.selected, "wraps to last service")
 	sb.moveDown()
 	assert.Equal(t, 0, sb.selected, "wraps back to first")
 
-	out := sb.render(28, 24, true)
+	out := plain(sb.render(28, 24, true))
 	assert.NotContains(t, out, "TARGETS")
+	assert.NotContains(t, out, "t1")
 }
 
-func TestSidebar_WithTargets_CircularCursor(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(svcs("api", "web"), targetRows())
-
-	// Starts in the services section at row 0.
-	require.Equal(t, sectionServices, sb.section)
-	require.Equal(t, 0, sb.selected)
-
-	// Up from services[0] → last target row.
-	sb.moveUp()
-	assert.Equal(t, sectionTargets, sb.section)
-	assert.Equal(t, 2, sb.targetSel)
-
-	// Up through the targets to the top.
-	sb.moveUp()
-	assert.Equal(t, 1, sb.targetSel)
-	sb.moveUp()
-	assert.Equal(t, 0, sb.targetSel)
-
-	// Up from targets[0] → wraps to the bottom of services.
-	sb.moveUp()
-	assert.Equal(t, sectionServices, sb.section)
-	assert.Equal(t, 1, sb.selected)
-
-	// Down from services[last] → back to targets[0].
-	sb.moveDown()
-	assert.Equal(t, sectionTargets, sb.section)
-	assert.Equal(t, 0, sb.targetSel)
-}
-
-func TestSidebar_TargetCursorDoesNotFilter(t *testing.T) {
+func TestSidebar_SetFilterAndClear(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "db", "web"), targetRows())
 
-	// Walk the cursor onto t1 (members: web) without pressing Enter.
-	sb.section = sectionServices
-	sb.selected = 0
-	sb.moveUp() // → targets[last] == t2
-	sb.moveUp() // → t1
-	require.Equal(t, "t1", sb.targets[sb.targetSel].name)
-	assert.Empty(t, sb.filterTarget, "cursor movement alone selects nothing")
-	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb), "list stays unfiltered")
-}
-
-func TestSidebar_EnterSelectsAndClearsFilter(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(svcs("api", "db", "web"), targetRows())
-
-	sb.section = sectionTargets
-	sb.targetSel = 1 // t1 (members: web)
-
-	sb.toggleTargetSelection()
+	sb.setFilter("t1")
 	assert.Equal(t, "t1", sb.filterTarget)
 	assert.Equal(t, []string{"web"}, svcNames(sb), "filtered to t1's members")
 
-	// Enter again on the same row clears it.
-	sb.toggleTargetSelection()
+	sb.setFilter("")
 	assert.Empty(t, sb.filterTarget)
 	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb))
 }
 
-func TestSidebar_ToggleFilterKeepsSelectedService(t *testing.T) {
+func TestSidebar_SetFilterUnknownTargetClears(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(svcs("api", "web"), targetRows())
+	sb.setFilter("t1")
+
+	sb.setFilter("nope")
+	assert.Empty(t, sb.filterTarget, "an unknown target must not leave a filter nothing matches")
+	assert.Equal(t, []string{"api", "web"}, svcNames(sb))
+}
+
+func TestSidebar_SetFilterKeepsSelectedService(t *testing.T) {
 	sb := &sidebar{}
 	// t2 members: api, db.
 	sb.update(svcs("api", "db", "web"), targetRows())
 	sb.selected = 1 // "db" in the unfiltered list
 	require.Equal(t, "db", sb.services[sb.selected].Name)
 
-	sb.section = sectionTargets
-	sb.targetSel = 2 // t2
-	sb.toggleTargetSelection()
+	sb.setFilter("t2")
 	assert.Equal(t, "db", sb.services[sb.selected].Name, "highlight follows the service, not the index")
 
-	// Clearing the filter keeps it on db too.
-	sb.toggleTargetSelection()
+	sb.setFilter("")
 	assert.Equal(t, "db", sb.services[sb.selected].Name)
 }
 
-func TestSidebar_EnterAllServicesClearsFilter(t *testing.T) {
+func TestSidebar_FilterShownInHeading(t *testing.T) {
 	sb := &sidebar{}
-	sb.update(svcs("api", "db", "web"), targetRows())
-	sb.section = sectionTargets
+	sb.update(svcs("api", "web"), targetRows())
+	assert.NotContains(t, plain(sb.render(30, 24, true)), "·")
 
-	sb.targetSel = 2 // t2
-	sb.toggleTargetSelection()
-	require.Equal(t, "t2", sb.filterTarget)
-
-	sb.targetSel = 0 // "All services"
-	sb.toggleTargetSelection()
-	assert.Empty(t, sb.filterTarget, "All services row always clears the filter")
-	assert.Equal(t, []string{"api", "db", "web"}, svcNames(sb))
+	sb.setFilter("t1")
+	assert.Contains(t, plain(sb.render(30, 24, true)), "SERVICES · t1")
 }
 
-func TestSidebar_FilterMarkerShownWhileCursorElsewhere(t *testing.T) {
+func TestSidebar_FilterPreservedAcrossUpdate(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-	sb.section = sectionTargets
-	sb.targetSel = 1 // t1
-	sb.toggleTargetSelection()
+	sb.setFilter("t2")
 
-	// Move the cursor away; the filter (and its ▸ marker) must persist.
-	sb.targetSel = 2
-	out := plain(sb.render(30, 24, true))
-	assert.Contains(t, out, "▸")
-	require.Equal(t, "t1", sb.filterTarget)
-}
-
-func TestSidebar_SelectedTargetOnlyInTargetsSection(t *testing.T) {
-	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-
-	sb.section = sectionServices
-	assert.Nil(t, sb.selectedTarget())
-
-	sb.section = sectionTargets
-	sb.targetSel = 1
-	tgt := sb.selectedTarget()
-	require.NotNil(t, tgt)
-	assert.Equal(t, "t1", tgt.name)
-
-	sb.targetSel = 0
-	require.NotNil(t, sb.selectedTarget())
-	assert.Equal(t, "", sb.selectedTarget().name, "All services row is still a selectable target row")
-}
-
-func TestSidebar_TargetSelectionPreservedAcrossUpdate(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(svcs("api", "web"), targetRows())
-	sb.section = sectionTargets
-	sb.targetSel = 2 // t2
-	sb.toggleTargetSelection()
-	require.Equal(t, "t2", sb.filterTarget)
-
-	// A fresh poll with the same targets in the same order keeps both the
-	// cursor (by name) and the selected filter.
-	sb.update(svcs("api", "web"), targetRows())
-	assert.Equal(t, 2, sb.targetSel, "cursor stays on t2 by name")
 	assert.Equal(t, "t2", sb.filterTarget, "selected filter survives the poll")
 }
 
 func TestSidebar_FilterClearedWhenTargetVanishes(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-	sb.section = sectionTargets
-	sb.targetSel = 2 // t2
-	sb.toggleTargetSelection()
-	require.Equal(t, "t2", sb.filterTarget)
+	sb.setFilter("t2")
 
 	// t2 is gone from the next poll.
 	sb.update(svcs("api", "web"), []sidebarTarget{
-		{name: ""},
 		{name: "t1", members: []string{"web"}, active: true},
 	})
 	assert.Empty(t, sb.filterTarget, "filter drops when its target no longer exists")
 	assert.Equal(t, []string{"api", "web"}, svcNames(sb))
 }
 
-func TestSidebar_RendersTargetsBlock(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(svcs("api", "web"), targetRows())
-	out := plain(sb.render(30, 24, true))
-	assert.Contains(t, out, "TARGETS")
-	assert.Contains(t, out, "All services")
-	assert.Contains(t, out, "t1")
-	assert.Contains(t, out, "SERVICES")
+func TestTargetPicker_CursorWrapsAndSelects(t *testing.T) {
+	var p targetPicker
+	rows := targetRows()
+	p.openAt(rows, "")
+	assert.Equal(t, 0, p.cursor)
+	assert.Equal(t, "", p.selected(rows), "row 0 is All services")
+
+	p.move(-1, len(rows))
+	assert.Equal(t, "t2", p.selected(rows), "up from the top wraps to the last target")
+	p.move(1, len(rows))
+	assert.Equal(t, "", p.selected(rows))
+
+	p.openAt(rows, "t2")
+	assert.Equal(t, "t2", p.selected(rows), "opens on the active filter")
+
+	// A list that shrank under an open picker must not index out of range.
+	assert.Equal(t, "", p.selected(rows[:1]))
 }
 
-// TestSidebar_AllServicesRowWithoutRealTargets covers the single-row TARGETS
-// block: the "All services" row is shown, navigable, and carries a running-count
-// info block even though no real target is defined.
-func TestSidebar_AllServicesRowWithoutRealTargets(t *testing.T) {
-	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{
-		{Name: "api", State: "running"},
-		{Name: "web", State: "stopped"},
-	}, []sidebarTarget{{name: ""}})
-
-	require.True(t, sb.showTargets())
-	require.Equal(t, sectionServices, sb.section, "cursor starts in SERVICES")
-
-	// Up from services[0] lands on the lone "All services" row.
-	sb.moveUp()
-	assert.Equal(t, sectionTargets, sb.section)
-	assert.Equal(t, 0, sb.targetSel)
-	require.NotNil(t, sb.selectedTarget())
-	assert.Equal(t, "", sb.selectedTarget().name)
-
-	// Down from the row returns to the top of SERVICES.
-	sb.moveDown()
-	assert.Equal(t, sectionServices, sb.section)
-	assert.Equal(t, 0, sb.selected)
-
-	sb.section = sectionTargets
-	out := plain(sb.render(30, 24, true))
-	assert.Contains(t, out, "TARGETS")
-	assert.Contains(t, out, "All services")
-	assert.Contains(t, out, "1/2 running", "info block counts running services")
+func TestTargetPicker_ViewMarksFilterAndUnreportedMembers(t *testing.T) {
+	var p targetPicker
+	rows := targetRows()
+	p.openAt(rows, "t2") // members: api, db — db is not reported
+	out := plain(p.view(rows, []ipc.ServiceInfo{{Name: "api", State: "running"}}, "t2", 80, 30))
+	assert.Contains(t, out, "▸")
+	assert.Contains(t, out, "1/2")
+	assert.Contains(t, out, "not reported")
 }
 
 func TestModel_BuildTargets(t *testing.T) {
@@ -263,55 +158,22 @@ func TestModel_BuildTargets(t *testing.T) {
 		{Name: "api", State: "running"},
 		{Name: "web", State: "stopped"},
 	})
-	require.Len(t, rows, 3)
-	assert.Equal(t, "", rows[0].name, "All services first")
-	assert.False(t, rows[0].active, "All services not active while web is stopped")
-	assert.Equal(t, "alpha", rows[1].name, "targets sorted")
-	assert.True(t, rows[1].active, "alpha active — its only member (api) is running")
-	assert.Equal(t, "zeta", rows[2].name)
-	assert.False(t, rows[2].active, "zeta inactive — its member (web) is stopped")
-}
-
-func TestModel_BuildTargets_AllServicesActiveWhenEveryServiceRuns(t *testing.T) {
-	m := model{registry: &config.Registry{
-		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
-		Targets:  map[string][]string{"stack": {"web", "api"}},
-	}}
-	rows := m.buildTargets([]ipc.ServiceInfo{
-		{Name: "api", State: "running"},
-		{Name: "web", State: "running"},
-	})
 	require.Len(t, rows, 2)
-	assert.True(t, rows[0].active, "All services active — every service running")
-	assert.True(t, rows[1].active, "stack active — all members running")
+	assert.Equal(t, "alpha", rows[0].name, "targets sorted")
+	assert.True(t, rows[0].active, "alpha active — its only member (api) is running")
+	assert.Equal(t, "zeta", rows[1].name)
+	assert.False(t, rows[1].active, "zeta inactive — its member (web) is stopped")
 }
 
-func TestModel_SidebarWidth_GrowsForLongTargetName(t *testing.T) {
-	m := model{width: 200}
-	m.sidebarC.allServices = []ipc.ServiceInfo{{Name: "a"}}
-	m.sidebarC.targets = []sidebarTarget{{name: ""}, {name: "a-very-long-target-name-here"}}
-	assert.Equal(t, len("a-very-long-target-name-here")+4, m.sidebarWidth())
-}
-
-func TestModel_BuildTargets_AllServicesRowWhenNoRealTargets(t *testing.T) {
+func TestModel_BuildTargets_NilWithoutTargets(t *testing.T) {
 	m := model{registry: &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},
 		Targets:  map[string][]string{},
 	}}
-	rows := m.buildTargets(nil)
-	require.Len(t, rows, 1, "a registry with services still yields the All services row")
-	assert.Equal(t, "", rows[0].name)
+	assert.Nil(t, m.buildTargets(nil))
 }
 
-func TestModel_BuildTargets_NilWhenRegistryDefinesNothing(t *testing.T) {
-	m := model{registry: &config.Registry{
-		Services: map[string]*config.ServiceConfig{},
-		Targets:  map[string][]string{},
-	}}
-	assert.Nil(t, m.buildTargets(nil), "no services and no targets → no TARGETS block")
-}
-
-func TestModel_StartStopAll_OnAllServicesRow(t *testing.T) {
+func TestModel_StartStopTarget_UnknownTargetIsNoop(t *testing.T) {
 	m := model{
 		socketPath: filepath.Join(t.TempDir(), "nonexistent.sock"),
 		registry: &config.Registry{
@@ -320,16 +182,22 @@ func TestModel_StartStopAll_OnAllServicesRow(t *testing.T) {
 		},
 	}
 	m.sidebarC.update(svcs("web"), m.buildTargets(nil))
-	m.sidebarC.section = sectionTargets
-	m.sidebarC.targetSel = 0 // "All services"
 
-	require.NotNil(t, m.sidebarC.selectedTarget())
-	// The target-scoped commands stay no-ops on the synthetic row...
-	assert.Nil(t, m.doStartTarget(), "start-target is a no-op on All services")
-	assert.Nil(t, m.doStopTarget(), "stop-target is a no-op on All services")
+	assert.Nil(t, m.doStartTarget(""), "no target name → no command")
+	assert.Nil(t, m.doStopTarget("gone"), "unknown target → no command")
+	assert.NotNil(t, m.doStartTarget("t1"))
+	assert.NotNil(t, m.doStopTarget("t1"))
+}
 
-	// ...and start/stop-all take over. With the daemon unreachable the batch
-	// reports its failure rather than returning nil.
+func TestModel_StartStopAll_SurfacesUnreachableDaemon(t *testing.T) {
+	m := model{
+		socketPath: filepath.Join(t.TempDir(), "nonexistent.sock"),
+		registry: &config.Registry{
+			Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "x"}},
+		},
+	}
+	m.sidebarC.update(svcs("web"), nil)
+
 	startMsg := m.doStartAll()()
 	if err, ok := startMsg.(daemonErrMsg); assert.True(t, ok, "doStartAll surfaces the unreachable daemon") {
 		assert.Contains(t, err.err.Error(), "start all:")
@@ -376,12 +244,9 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 	sb := &sidebar{}
 	// t2 members api/db, but no such services exist → filtered list is empty.
 	sb.update(svcs("web"), targetRows())
-	sb.section = sectionTargets
-	sb.targetSel = 2
-	sb.toggleTargetSelection()
+	sb.setFilter("t2")
 	require.Empty(t, sb.services)
 
 	out := plain(sb.render(30, 24, true))
 	assert.Contains(t, out, "no services in target")
-	assert.Contains(t, out, "TARGETS")
 }

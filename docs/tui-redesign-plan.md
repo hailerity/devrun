@@ -40,18 +40,19 @@ Removes the TARGETS rows, the two-list cursor, and every roll-up guard in
 `handleKey`. The sidebar becomes one list with one cursor.
 
 1. **Plan document** — goal: this file is in the repo.
-2. **Target picker overlay** — goal: `t` opens a modal listing "All services"
-   and every target with `running/total` counts and the highlighted target's
-   members; `j/k` move, `↵` applies the filter, `e` opens the target editor,
-   `Esc`/`t` close. Done when picker unit tests pass.
-3. **Single-list sidebar** — goal: `sidebar` holds only services plus
+2. **Target picker and single-list sidebar** — goal: `t` opens a modal listing
+   "All services" and every target with `running/total` counts and the
+   highlighted target's members; `j/k` move, `↵` applies the filter, `e` opens
+   the target editor, `Esc`/`t` close. `sidebar` holds only services plus
    `filterTarget`; `sectionTargets`, target rows, `sidebarRollup`,
    `targetDetailsPanel` and the SUMMARY/TARGET main-pane views are gone; the
    active filter shows in the section header (`SERVICES · backend`); `↵` always
-   toggles LOGS ⇄ DETAILS. Done when the rewritten sidebar/targets tests pass.
-4. **`S` / `X` act on everything listed** — goal: with a filter they send
+   toggles LOGS ⇄ DETAILS. (One commit: the picker cannot build against the
+   old two-list sidebar.) Done when the picker and rewritten sidebar tests pass.
+3. **`S` / `X` act on everything listed** — goal: with a filter they send
    `target-start` / `target-stop`; without one they run the start-all /
    stop-all batch. Done when model tests cover both paths.
+4. **README** — goal: the TUI section describes the picker and the new keys.
 
 ## PR 2 — visual structure (`feat/tui-redesign-visual`, stacked on PR 1)
 

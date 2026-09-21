@@ -21,6 +21,7 @@ type keyMap struct {
 	Top    key.Binding
 	Bottom key.Binding
 	Wrap   key.Binding
+	Target key.Binding
 }
 
 var keys = keyMap{
@@ -42,4 +43,5 @@ var keys = keyMap{
 	Top:    key.NewBinding(key.WithKeys("g"), key.WithHelp("g", "top")),
 	Bottom: key.NewBinding(key.WithKeys("G"), key.WithHelp("G", "bottom")),
 	Wrap:   key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "wrap")),
+	Target: key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "target")),
 }

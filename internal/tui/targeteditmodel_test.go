@@ -14,8 +14,8 @@ import (
 )
 
 // targetEditModel builds a 120x40 model backed by a temp project devrun.yaml
-// with services web+api and a target "fe" (member: web), the sidebar cursor
-// parked on that target row.
+// with services web+api and a target "fe" (member: web), the target picker open
+// with its cursor on that target.
 func targetEditModel(t *testing.T) (model, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -32,11 +32,11 @@ func targetEditModel(t *testing.T) (model, string) {
 		ActiveTargets: nil,
 	}})
 	m = m2.(model)
-	// Park the cursor on the "fe" target row.
-	m.sidebarC.section = sectionTargets
+	// Open the picker and park its cursor on "fe".
+	m = pressKey(m, 't')
 	for i, tt := range m.sidebarC.targets {
 		if tt.name == "fe" {
-			m.sidebarC.targetSel = i
+			m.pickerC.cursor = i + 1
 		}
 	}
 	return m, dir
@@ -49,10 +49,11 @@ func pressKey(m model, r rune) model {
 
 func TestModel_TargetEditOpensPrefilledAndCancels(t *testing.T) {
 	m, _ := targetEditModel(t)
-	require.True(t, m.onTargetEditRow())
+	require.True(t, m.pickerC.open)
 
 	m = pressKey(m, 'e')
 	require.True(t, m.targetEditC.open)
+	assert.False(t, m.pickerC.open, "the editor replaces the picker")
 	name, members := m.targetEditC.values()
 	assert.Equal(t, "fe", name)
 	assert.Equal(t, []string{"web"}, members)
@@ -64,8 +65,7 @@ func TestModel_TargetEditOpensPrefilledAndCancels(t *testing.T) {
 
 func TestModel_TargetEditKeyIgnoredOnAllServicesRow(t *testing.T) {
 	m, _ := targetEditModel(t)
-	m.sidebarC.targetSel = 0 // "All services"
-	assert.False(t, m.onTargetEditRow())
+	m.pickerC.cursor = 0 // "All services"
 	assert.False(t, pressKey(m, 'e').targetEditC.open)
 }
 
@@ -119,10 +119,10 @@ func TestModel_TargetEditSave_InMemoryOrderMatchesFile(t *testing.T) {
 		Services: []ipc.ServiceInfo{{Name: "web", State: "stopped"}, {Name: "api", State: "stopped"}},
 	}})
 	m = m2.(model)
-	m.sidebarC.section = sectionTargets
+	m = pressKey(m, 't')
 	for i, tt := range m.sidebarC.targets {
 		if tt.name == "fe" {
-			m.sidebarC.targetSel = i
+			m.pickerC.cursor = i + 1
 		}
 	}
 
