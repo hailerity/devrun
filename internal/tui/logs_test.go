@@ -174,3 +174,49 @@ func TestLogsPanel_PollCountsLinesArrivingWhileScrolledAway(t *testing.T) {
 	lp.setFile(filepath.Join(t.TempDir(), "web.log"))
 	assert.Equal(t, 0, lp.sb.unseen, "another service's log starts clean")
 }
+
+// Switching service replaces the whole buffer. The search query carries over,
+// but its matches are line numbers in the OLD file: they must be thrown away
+// even when the new log is as long or longer — length says nothing about
+// whether the contents are the same.
+func TestLogsPanel_SwitchingFileRematchesTheSearch(t *testing.T) {
+	dir := t.TempDir()
+	apiLog, webLog := filepath.Join(dir, "api.log"), filepath.Join(dir, "web.log")
+	appendToFile(t, apiLog, "hay\nneedle in api\nhay\n")
+	appendToFile(t, webLog, "needle first in web\nhay\nhay\nhay\nneedle last in web\n") // longer
+
+	lp := newLogsPanel()
+	lp.sb.resize(40, 10)
+	lp.setFile(apiLog)
+	lp.poll()
+	lp.sb.setQuery("needle")
+	require.Equal(t, []int{1}, lp.sb.search.matches)
+
+	lp.setFile(webLog)
+	lp.poll()
+	assert.Equal(t, "needle", lp.sb.search.query, "the query carries over to the next service")
+	assert.Equal(t, []int{0, 4}, lp.sb.search.matches, "matches are web.log's, not api.log's line 1")
+
+	// And the jump lands on a line that really contains the query.
+	require.True(t, lp.sb.searchStep(1))
+	assert.Contains(t, lp.sb.lines[lp.sb.cursor], "needle")
+}
+
+// Same length, different contents: the case a length check can never catch.
+func TestLogsPanel_SwitchingToSameLengthFileRematches(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a.log"), filepath.Join(dir, "b.log")
+	appendToFile(t, a, "needle\nhay\n")
+	appendToFile(t, b, "hay\nneedle\n")
+
+	lp := newLogsPanel()
+	lp.sb.resize(40, 10)
+	lp.setFile(a)
+	lp.poll()
+	lp.sb.setQuery("needle")
+	require.Equal(t, []int{0}, lp.sb.search.matches)
+
+	lp.setFile(b)
+	lp.poll()
+	assert.Equal(t, []int{1}, lp.sb.search.matches)
+}

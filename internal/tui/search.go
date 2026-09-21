@@ -12,9 +12,12 @@ import (
 // against the line with its ANSI codes stripped, so colour codes inside a word
 // cannot hide a match.
 //
-// The log only ever grows (or is reset when another service is selected), and
-// View runs ten times a second, so matches are maintained incrementally:
-// refresh scans just the lines added since the last call.
+// The log only ever grows, and View runs ten times a second, so matches are
+// maintained incrementally: refresh scans just the lines added since the last
+// call. That is only valid while the buffer is the same one, appended to. When
+// the lines are replaced — another service's log — the owner must call
+// invalidate(); the match indices are line numbers in the old buffer, and
+// nothing about the new buffer's length can reveal that they are stale.
 type logSearch struct {
 	query   string
 	matches []int // ascending line indices
@@ -24,8 +27,15 @@ type logSearch struct {
 
 func (ls *logSearch) active() bool { return ls.query != "" }
 
-// refresh brings matches up to date with lines. A changed query, or a buffer
-// that shrank (a different log file), forces a full rescan.
+// invalidate drops the cached matches, keeping the query, so the next refresh
+// rescans from the first line.
+func (ls *logSearch) invalidate() {
+	ls.matches, ls.scanned = nil, 0
+}
+
+// refresh brings matches up to date with lines. A changed query forces a full
+// rescan; so does a buffer shorter than what was scanned, as a last line of
+// defence — replaced lines are the owner's to report via invalidate().
 func (ls *logSearch) refresh(lines []string) {
 	if ls.query != ls.forQ || ls.scanned > len(lines) {
 		ls.matches, ls.scanned, ls.forQ = nil, 0, ls.query

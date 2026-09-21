@@ -37,6 +37,24 @@ type scrollBuffer struct {
 	noWrap bool
 }
 
+// reset empties the buffer for a different log. Everything that refers to
+// lines by index goes with them — cursor, scroll offset, selection, the unseen
+// count and the search's cached matches. The search query itself is kept, so a
+// search carries over to the next service and is simply re-run against its log.
+//
+// Every place that replaces sb.lines must come through here: a position or a
+// cache left over from the old lines silently points at the wrong ones.
+func (sb *scrollBuffer) reset() {
+	sb.lines = nil
+	sb.cursor = 0
+	sb.yOffset = 0
+	sb.exitVisual()
+	sb.mouseDown = false
+	sb.unseen = 0
+	sb.followMode = true
+	sb.search.invalidate()
+}
+
 func (sb *scrollBuffer) resize(w, h int) {
 	sb.width = w
 	sb.height = h

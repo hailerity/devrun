@@ -27,12 +27,7 @@ func newLogsPanel() logsPanel {
 func (lp *logsPanel) setFile(path string) {
 	lp.filePath = path
 	lp.fileOffset = 0
-	lp.sb.lines = nil
-	lp.sb.cursor = 0
-	lp.sb.yOffset = 0
-	lp.sb.visualMode = false
-	lp.sb.unseen = 0
-	lp.sb.followMode = true
+	lp.sb.reset()
 	lp.noLogMsg = ""
 }
 
@@ -49,8 +44,11 @@ func (lp *logsPanel) poll() bool {
 	defer f.Close()
 
 	if _, err := f.Seek(lp.fileOffset, io.SeekStart); err != nil {
+		// Re-reading from the start replaces the buffer, so reset it as a
+		// whole — not just the lines — or the cursor, selection and search
+		// matches would still index into the old contents.
 		lp.fileOffset = 0
-		lp.sb.lines = nil
+		lp.sb.reset()
 		f.Seek(0, io.SeekStart) //nolint:errcheck
 	}
 	scanner := bufio.NewScanner(f)
