@@ -115,7 +115,7 @@ func TestTruncateName_TinyWidths(t *testing.T) {
 
 func TestSidebar_LoadingBeforeFirstPoll(t *testing.T) {
 	sb := &sidebar{}
-	out := plain(sb.render(28, 24, false))
+	out := plain(sb.render(28, 24))
 	assert.Contains(t, out, "Loading services…")
 	assert.NotContains(t, out, "devrun add")
 }
@@ -123,7 +123,7 @@ func TestSidebar_LoadingBeforeFirstPoll(t *testing.T) {
 func TestSidebar_EmptyStateAfterFirstPoll(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(nil, nil) // first poll returned zero services
-	out := plain(sb.render(28, 24, false))
+	out := plain(sb.render(28, 24))
 	assert.Contains(t, out, "No services — run devrun add <name>")
 	assert.NotContains(t, out, "Loading")
 }
@@ -204,7 +204,7 @@ func TestCPUColor_OnlyBusyIsColoured(t *testing.T) {
 func TestSidebar_NoInfoBlockOrDuplicateHints(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web"}}, nil)
-	out := plain(sb.render(30, 20, false))
+	out := plain(sb.render(30, 20))
 	assert.NotContains(t, out, "PID")
 	assert.NotContains(t, out, "start", "s/x hints live in the footer only")
 }

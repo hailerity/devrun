@@ -201,9 +201,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.activeTab == tabLogs {
-			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
-			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, 4, m.sidebarWidth()+1)
+			// topOffset: header(1) + the main pane's top border(1) rows sit above
+			// the log content. leftOffset: sidebar + the main pane's left border
+			// and padding; reserved for future character-level selection.
+			_ = m.logsC.sb.handleMouse(msg, headerRows+1, m.sidebarWidth()+1+mainPadLeft)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -882,17 +883,22 @@ func (m *model) updateLogFile() {
 }
 
 const (
-	sidebarMinW = 28
-	sidebarMaxW = 44
+	sidebarMinW = 31
+	sidebarMaxW = 47
+
+	headerRows  = 1
+	footerRows  = 1
+	mainPadLeft = 1 // blank column between the main pane's border and its content
 )
 
-// sidebarWidth is the sidebar column count: wide enough for the longest service
-// name plus the row's glyph, state and CPU columns, clamped to
-// [sidebarMinW, sidebarMaxW] and never more than two fifths of the terminal.
+// sidebarWidth is the sidebar pane's outer column count: wide enough for the
+// longest service name plus the row's margin, glyph, state and CPU columns and
+// the pane border, clamped to [sidebarMinW, sidebarMaxW] and never more than
+// two fifths of the terminal.
 func (m model) sidebarWidth() int {
 	w := sidebarMinW
 	for _, svc := range m.sidebarC.allServices {
-		if n := lipgloss.Width(svc.Name) + 2 + 1 + rowStateW + 1 + rowCPUW; n > w {
+		if n := lipgloss.Width(svc.Name) + 3 + 1 + rowStateW + 1 + rowCPUW + paneChrome; n > w {
 			w = n
 		}
 	}
@@ -903,15 +909,22 @@ func (m model) sidebarWidth() int {
 	return max(w, sidebarMinW/2)
 }
 
+// bodyHeight is the row count left for the panes between header and footer.
+func (m model) bodyHeight() int { return max(0, m.height-headerRows-footerRows) }
+
+// mainFrame is the main pane's border, minus the labels renderMain sets.
+func (m model) mainFrame() paneFrame {
+	return paneFrame{focused: m.focus == focusMain, padLeft: mainPadLeft}
+}
+
 // relayout recomputes derived geometry after a resize or a sidebar-width change
-// and re-flows the log panel to the new main-area width.
+// and re-flows the log panel to the main pane's content area.
 func (m *model) relayout() {
 	if m.width == 0 {
 		return
 	}
-	mainW := m.width - m.sidebarWidth() - 1
-	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
-	m.logsC.sb.resize(mainW, bodyH-2)
+	w, h := m.mainFrame().innerSize(m.width-m.sidebarWidth(), m.bodyHeight())
+	m.logsC.sb.resize(w, h)
 }
 
 func (m model) pollDaemon() tea.Cmd {
@@ -1166,37 +1179,28 @@ func (m model) View() string {
 	}
 
 	sidebarW := m.sidebarWidth()
-	mainW := m.width - sidebarW - 1
-	bodyH := m.height - 4 // header(2) + footer(2) = 4 reserved rows
+	mainW := m.width - sidebarW
+	bodyH := m.bodyHeight()
 
 	// Header — counts reflect the whole scoped project, not the target filter.
 	total := len(m.sidebarC.allServices)
-	running := 0
+	running, crashed := 0, 0
 	for _, s := range m.sidebarC.allServices {
-		if s.State == "running" {
+		switch s.State {
+		case "running":
 			running++
+		case "crashed":
+			crashed++
 		}
 	}
-	header := m.headerC.render(total, running, m.spinFrame, m.spinning, m.width)
+	header := m.headerC.render(m.sourceLabel(), total, running, crashed, m.spinFrame, m.spinning, m.width)
 
-	sb := m.sidebarC.render(sidebarW, bodyH, m.focus == focusSidebar)
-
-	// Main panel (tabs + content)
-	main := m.renderMain(mainW, bodyH)
-
-	// Body: sidebar | divider | main
-	divider := lipgloss.NewStyle().
-		Width(1).
-		Height(bodyH).
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorBorder).
-		Render("")
-
+	// Body: two bordered panes side by side; the focused one takes the accent.
+	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
+	sideW, sideH := sideFrame.innerSize(sidebarW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		lipgloss.NewStyle().Width(sidebarW).Height(bodyH).Render(sb),
-		divider,
-		lipgloss.NewStyle().Width(mainW).Height(bodyH).Render(main),
+		sideFrame.render(m.sidebarC.render(sideW, sideH), sidebarW, bodyH),
+		m.renderMain(mainW, bodyH),
 	)
 
 	// An open modal takes over the body area.
@@ -1219,6 +1223,18 @@ func (m model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
+// sourceLabel names the config in scope for the header: "<project dir> ·
+// devrun.yaml" for a project file, the global registry otherwise.
+func (m model) sourceLabel() string {
+	if m.registry == nil {
+		return ""
+	}
+	if m.source.IsLocal() {
+		return filepath.Base(m.source.Dir) + " · " + filepath.Base(m.source.Local)
+	}
+	return "global · services.yaml"
+}
+
 // Run starts the devrun TUI. Called from cli/root.go.
 // The daemon must be running at socketPath; a fresh connection is dialed per request.
 // src is the config the registry was resolved from — the file the service editor writes back to.
@@ -1233,48 +1249,62 @@ func Run(socketPath string, reg *config.Registry, src config.Source, logDir stri
 	return err
 }
 
+// renderMain draws the main pane at outer size w×h. Its top border names the
+// selected service — state, port, uptime — and shows both view labels with the
+// active one bracketed; for LOGS the bottom border carries the line count and
+// the follow / wrap state.
 func (m model) renderMain(w, h int) string {
-	// Tab bar: only the active view's label is shown. LOGS is accented only
-	// while the main panel holds focus; DETAILS is never accented — it is a
-	// read-only overlay, not a focus target.
-	var tabBar string
-	if m.activeTab == tabLogs {
-		if m.focus == focusMain {
-			tabBar = styleAccent.Underline(true).Render("LOGS")
-		} else {
-			tabBar = styleMuted.Render("LOGS")
-		}
-		if m.logsC.sb.followMode {
-			tabBar += styleMuted.Render("  ● follow")
-		}
-		if m.logsC.sb.noWrap {
-			tabBar += styleMuted.Render("  no-wrap")
-		}
-	} else {
-		tabBar = styleMuted.Render("DETAILS")
+	frame := m.mainFrame()
+	iw, ih := frame.innerSize(w, h)
+	svc := m.sidebarC.selectedService()
+
+	if svc == nil {
+		frame.title = styleMuted.Render("LOGS")
+		return frame.render(styleMuted.Render("No service selected"), w, h)
 	}
 
-	contentH := h - 2
+	title := styleText.Bold(true).Render(svc.Name) + "  " + renderStateLabel(svc.State)
+	if svc.State == "running" {
+		if svc.Port != nil && *svc.Port != 0 {
+			title += " " + styleAccent.Render(fmt.Sprintf(":%d", *svc.Port))
+		}
+		if svc.UptimeSec > 0 {
+			title += styleMuted.Render("  up " + formatUptime(svc.UptimeSec))
+		}
+	}
+	frame.title = title
 
-	var content string
-	if m.activeTab == tabLogs {
-		content = m.logsC.view()
-	} else {
-		svc := m.sidebarC.selectedService()
+	tab := func(kind tabKind, label string) string {
+		switch {
+		case m.activeTab != kind:
+			return styleMuted.Render(strings.ToLower(label))
+		case m.focus == focusMain:
+			return styleAccent.Bold(true).Render("[" + label + "]")
+		default:
+			return styleText.Render("[" + label + "]")
+		}
+	}
+	frame.titleRight = tab(tabLogs, "LOGS") + " " + tab(tabDetails, "DETAILS")
+
+	if m.activeTab == tabDetails {
 		var cfg *config.ServiceConfig
-		if svc != nil && m.registry != nil {
+		if m.registry != nil {
 			cfg = m.registry.Services[svc.Name]
 		}
-		content = m.detailsC.render(svc, cfg, w, contentH)
+		return frame.render(m.detailsC.render(svc, cfg, iw, ih), w, h)
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		lipgloss.NewStyle().
-			Width(w).
-			BorderBottom(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(colorBorder).
-			Render(tabBar),
-		content,
-	)
+	sb := &m.logsC.sb
+	if n := len(sb.lines); n > 0 {
+		frame.footLeft = styleMuted.Render(formatCount(n) + " lines")
+	}
+	status := styleMuted.Render("follow off")
+	if sb.followMode {
+		status = styleGreen.Render("⇣ follow")
+	}
+	if sb.noWrap {
+		status = styleMuted.Render("no-wrap · ") + status
+	}
+	frame.footRight = status
+	return frame.render(m.logsC.view(), w, h)
 }

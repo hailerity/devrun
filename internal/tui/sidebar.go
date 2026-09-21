@@ -202,54 +202,55 @@ func stateDot(state string) string {
 	return lipgloss.NewStyle().Foreground(fg).Render(glyph)
 }
 
-// sectionHeader renders a bordered sidebar column heading, accented while the
-// cursor is in that section.
-func sectionHeader(label string, width int, accented bool) string {
-	txt := styleMuted.Render(label)
-	if accented {
-		txt = styleAccent.Underline(true).Render(label)
+// frame is the sidebar's border: the title names the list and any target
+// filtering it — so the reason a service is missing is always on screen — and
+// the bottom edge counts how many of the listed services are up.
+func (s *sidebar) frame(focused bool) paneFrame {
+	title := styleMuted.Render("SERVICES")
+	if focused {
+		title = styleAccent.Bold(true).Render("SERVICES")
 	}
-	return lipgloss.NewStyle().
-		Width(width).
-		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorBorder).
-		Render(txt)
-}
-
-func (s *sidebar) render(width, height int, focused bool) string {
-	if len(s.allServices) == 0 {
-		if !s.loaded {
-			return styleMuted.Render("Loading services…")
-		}
-		return styleMuted.Render("No services — run devrun add <name>")
-	}
-
-	// The heading names the active target filter, so the reason a service is
-	// missing from the list is always on screen.
-	heading := "SERVICES"
 	if s.filterTarget != "" {
-		heading += " · " + truncateName(s.filterTarget, max(1, width-len(heading)-3))
+		title += styleMuted.Render(" · ") + styleAccent.Render(s.filterTarget)
 	}
-	top := []string{sectionHeader(heading, width, focused)}
-
-	if len(s.services) == 0 {
-		top = append(top, styleMuted.Render("  (no services in target)"))
+	f := paneFrame{title: title, focused: focused}
+	if len(s.services) > 0 {
+		up := 0
+		for _, svc := range s.services {
+			if svc.State == "running" {
+				up++
+			}
+		}
+		f.footLeft = styleMuted.Render(fmt.Sprintf("%d/%d up", up, len(s.services)))
 	}
-	for i, svc := range s.services {
-		top = append(top, serviceRow(width, svc, i == s.selected))
-	}
-	return strings.Join(top, "\n")
+	return f
 }
 
-// Column widths of a service row: "● name  :8080   2.1%".
+// render draws the list rows for a content area `width` columns wide.
+func (s *sidebar) render(width, height int) string {
+	switch {
+	case len(s.allServices) == 0 && !s.loaded:
+		return styleMuted.Render(" Loading services…")
+	case len(s.allServices) == 0:
+		return styleMuted.Render(" No services — run devrun add <name>")
+	case len(s.services) == 0:
+		return styleMuted.Render(" (no services in target)")
+	}
+	rows := make([]string, len(s.services))
+	for i, svc := range s.services {
+		rows[i] = serviceRow(width, svc, i == s.selected)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// Column widths of a service row: " ● name  :8080   2.1%".
 const (
 	rowStateW = 9 // "detecting" / "stopping" — the longest state token
 	rowCPUW   = 6 // "100.0%"
 	// Below these row widths the CPU column, then the state column, is dropped
 	// so the name keeps a usable share of a narrow sidebar.
-	rowMinWForCPU   = 26
-	rowMinWForState = 18
+	rowMinWForCPU   = 27
+	rowMinWForState = 19
 )
 
 // serviceRow renders one table row of the service list — glyph, name, port or
@@ -264,7 +265,7 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
 	showState := width >= rowMinWForState
 	showCPU := width >= rowMinWForCPU
 
-	nameW := width - 2 // glyph + space
+	nameW := width - 3 // margin + glyph + space
 	if showState {
 		nameW -= 1 + rowStateW
 	}
@@ -274,7 +275,7 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
 	nameW = max(1, nameW)
 
 	glyph, glyphFg := stateGlyph(svc.State)
-	row := base.Foreground(glyphFg).Render(glyph) +
+	row := base.Foreground(glyphFg).Render(" "+glyph) +
 		base.Foreground(colorText).Render(" "+fmt.Sprintf("%-*s", nameW, truncateName(svc.Name, nameW)))
 
 	if showState {

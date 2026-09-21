@@ -45,7 +45,7 @@ func TestSidebar_TargetsAreNotRows(t *testing.T) {
 	sb.moveDown()
 	assert.Equal(t, 0, sb.selected, "wraps back to first")
 
-	out := plain(sb.render(28, 24, true))
+	out := plain(sb.render(28, 24))
 	assert.NotContains(t, out, "TARGETS")
 	assert.NotContains(t, out, "t1")
 }
@@ -87,13 +87,13 @@ func TestSidebar_SetFilterKeepsSelectedService(t *testing.T) {
 	assert.Equal(t, "db", sb.services[sb.selected].Name)
 }
 
-func TestSidebar_FilterShownInHeading(t *testing.T) {
+func TestSidebar_FilterShownInPaneTitle(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-	assert.NotContains(t, plain(sb.render(30, 24, true)), "·")
+	assert.NotContains(t, plain(sb.frame(true).title), "·")
 
 	sb.setFilter("t1")
-	assert.Contains(t, plain(sb.render(30, 24, true)), "SERVICES · t1")
+	assert.Contains(t, plain(sb.frame(true).title), "SERVICES · t1")
 }
 
 func TestSidebar_FilterPreservedAcrossUpdate(t *testing.T) {
@@ -244,7 +244,7 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 	sb.setFilter("t2")
 	require.Empty(t, sb.services)
 
-	out := plain(sb.render(30, 24, true))
+	out := plain(sb.render(30, 24))
 	assert.Contains(t, out, "no services in target")
 }
 

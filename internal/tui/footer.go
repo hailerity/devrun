@@ -43,11 +43,9 @@ func (f *footerBar) tick(dt time.Duration) {
 }
 
 func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, onServiceRow, editing, confirming, picking bool, width int) string {
-	base := lipgloss.NewStyle().
-		Width(width).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorBorder)
+	// One row, no rule: the pane borders above already separate the footer.
+	base := lipgloss.NewStyle().Width(width).PaddingLeft(1)
+	width = max(0, width-1)
 
 	if f.toast != "" {
 		return base.Foreground(colorAccent).Render(ansi.Truncate(f.toast, width, ""))

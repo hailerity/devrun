@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,7 +54,7 @@ func TestModel_DaemonErrorEndsLoadingState(t *testing.T) {
 	m = m2.(model)
 	assert.True(t, m.sidebarC.loaded, "a first-poll error ends the loading state")
 
-	out := plain(m.sidebarC.render(28, 24, false))
+	out := plain(m.sidebarC.render(28, 24))
 	assert.Contains(t, out, "devrun add", "sidebar shows the empty state, not a spinner, after the error")
 }
 
@@ -75,9 +78,9 @@ func TestModel_SidebarWidth_Adaptive(t *testing.T) {
 	// Short names → floor.
 	assert.Equal(t, sidebarMinW, mk("web", "api", "db").sidebarWidth())
 
-	// A long name grows the sidebar: glyph + space + name, then the state and
-	// CPU columns with a space before each.
-	assert.Equal(t, 2+len("my-really-long-service")+1+rowStateW+1+rowCPUW, mk("api", "my-really-long-service").sidebarWidth())
+	// A long name grows the sidebar: margin + glyph + space + name, the state
+	// and CPU columns with a space before each, and the pane border.
+	assert.Equal(t, 3+len("my-really-long-service")+1+rowStateW+1+rowCPUW+paneChrome, mk("api", "my-really-long-service").sidebarWidth())
 
 	// Pathologically long name → capped at the ceiling.
 	assert.Equal(t, sidebarMaxW, mk("this-name-is-absurdly-long-and-keeps-going-forever").sidebarWidth())
@@ -94,45 +97,97 @@ func TestModel_QuitKeyReturnsQuitCmd(t *testing.T) {
 	assert.NotNil(t, cmd)
 }
 
-// setupLogModel returns a model sized to 100x30 with the log tab active and
-// 20 log lines pre-loaded, ready for mouse/keyboard testing.
+// setupLogModel returns a model sized to 100x30 with one service selected, the
+// log tab active and 20 distinct log lines pre-loaded, ready for mouse/keyboard
+// testing.
 func setupLogModel() model {
 	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m2.(model)
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "api", State: "running"}}, nil)
+	m.relayout()
 	m.activeTab = tabLogs
 	for i := 0; i < 20; i++ {
-		m.logsC.sb.lines = append(m.logsC.sb.lines, "line")
+		m.logsC.sb.lines = append(m.logsC.sb.lines, fmt.Sprintf("line-%02d", i))
 	}
 	m.logsC.sb.followMode = false
 	m.logsC.noLogMsg = ""
 	return m
 }
 
-// TestModel_MouseClick_SetsCorrectCursor verifies topOffset=4 (header 2 rows +
-// tab-bar label+border 2 rows = 4 rows above log content; no bubbletea clipping
-// since total render equals terminal height exactly).
+// screenRow returns the 0-based terminal row of View() that contains text, or
+// -1. Mouse tests click where a line is actually drawn rather than at a
+// hard-coded offset, so they fail if the layout and handleMouse's topOffset
+// ever disagree.
+func screenRow(m model, text string) int {
+	for i, row := range strings.Split(plain(m.View()), "\n") {
+		if strings.Contains(row, text) {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestModel_MouseClick_SetsCorrectCursor verifies a click lands on the log line
+// drawn under it: the rows above the log content are the header and the main
+// pane's top border.
 func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	m := setupLogModel()
 	m.focus = focusMain
 
-	// Click on the first visible log line (terminal row 4).
-	m2, _ := m.Update(tea.MouseMsg{
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-		Y:      4, // first log line: topOffset(4) + lineIdx(0)
-	})
-	mm := m2.(model)
-	assert.Equal(t, 0, mm.logsC.sb.cursor, "clicking terminal row 4 should select log line index 0")
+	first := screenRow(m, "line-00")
+	require.Equal(t, headerRows+1, first, "log content starts under the header and the pane's top border")
 
-	// Click on the fifth visible log line (terminal row 8 = topOffset 4 + index 4).
-	m3, _ := m.Update(tea.MouseMsg{
-		Action: tea.MouseActionPress,
-		Button: tea.MouseButtonLeft,
-		Y:      8, // topOffset(4) + lineIdx(4)
-	})
-	mm3 := m3.(model)
-	assert.Equal(t, 4, mm3.logsC.sb.cursor, "clicking terminal row 8 should select log line index 4")
+	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: first})
+	assert.Equal(t, 0, m2.(model).logsC.sb.cursor, "clicking the first drawn log row selects line 0")
+
+	fifth := screenRow(m, "line-04")
+	m3, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: fifth})
+	assert.Equal(t, 4, m3.(model).logsC.sb.cursor, "clicking the row that draws line-04 selects line 4")
+}
+
+// TestModel_ViewFillsTerminalExactly guards the layout arithmetic: the header,
+// the two bordered panes and the footer must add up to exactly the terminal
+// size. One row too many scrolls the header off a real terminal; one column too
+// many wraps every row.
+func TestModel_ViewFillsTerminalExactly(t *testing.T) {
+	for _, size := range [][2]int{{100, 30}, {80, 24}, {140, 50}, {61, 12}} {
+		m := newModel("", nil, config.Source{}, "", clipboard{})
+		m2, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m = m2.(model)
+		m.sidebarC.update([]ipc.ServiceInfo{
+			{Name: "api", State: "running", Port: intp(8080), UptimeSec: 8040},
+			{Name: "a-service-with-quite-a-long-name", State: "crashed"},
+		}, nil)
+		m.relayout()
+		for i := 0; i < 200; i++ {
+			m.logsC.sb.lines = append(m.logsC.sb.lines, strings.Repeat("wide log text ", 20))
+		}
+		m.logsC.sb.gotoBottom()
+
+		rows := strings.Split(m.View(), "\n")
+		assert.Len(t, rows, size[1], "%dx%d: row count", size[0], size[1])
+		for i, row := range rows {
+			assert.LessOrEqual(t, lipgloss.Width(row), size[0], "%dx%d: row %d width", size[0], size[1], i)
+		}
+	}
+}
+
+// TestModel_ViewNamesServiceInMainPaneTitle verifies the log pane always says
+// whose logs it shows, with both view labels and the follow state on its border.
+func TestModel_ViewNamesServiceInMainPaneTitle(t *testing.T) {
+	m := setupLogModel()
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "api", State: "running", Port: intp(8080), UptimeSec: 8040}}, nil)
+	m.logsC.sb.followMode = true
+
+	out := plain(m.View())
+	assert.Contains(t, out, "api  ● running :8080  up 2h 14m")
+	assert.Contains(t, out, "[LOGS] details")
+	assert.Contains(t, out, "20 lines")
+	assert.Contains(t, out, "⇣ follow")
+
+	m.activeTab = tabDetails
+	assert.Contains(t, plain(m.View()), "logs [DETAILS]")
 }
 
 // TestModel_CtrlC_CopiesWhenVisualModeActive verifies that ctrl+c (Cmd+C on

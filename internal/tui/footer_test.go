@@ -50,31 +50,31 @@ func TestFooter_HintLineNeverWrapsAtNarrowWidth(t *testing.T) {
 	// Every hint group at once: log-pane shortcuts, visual-mode cancel, edit,
 	// remove — the longest the hint line ever gets.
 	out := f.render(tabLogs, focusMain, true, true, false, false, false, 20)
-	assert.Equal(t, 2, lipgloss.Height(out),
-		"footer must stay border(1)+content(1) rows even when hints overflow a narrow width")
+	assert.Equal(t, 1, lipgloss.Height(out),
+		"footer must stay one row even when hints overflow a narrow width")
 }
 
 func TestFooter_LongToastNeverWrapsAtNarrowWidth(t *testing.T) {
 	f := &footerBar{}
 	f.showToastLong("error: " + strings.Repeat("x", 200))
 	out := f.render(tabLogs, focusSidebar, false, false, false, false, false, 20)
-	assert.Equal(t, 2, lipgloss.Height(out))
+	assert.Equal(t, 1, lipgloss.Height(out))
 }
 
 func TestFooter_EditingHintNeverWrapsAtNarrowWidth(t *testing.T) {
 	f := &footerBar{}
 	out := f.render(tabLogs, focusMain, false, false, true, false, false, 5)
-	assert.Equal(t, 2, lipgloss.Height(out))
+	assert.Equal(t, 1, lipgloss.Height(out))
 }
 
 func TestFooter_ConfirmingHintNeverWrapsAtNarrowWidth(t *testing.T) {
 	f := &footerBar{}
 	out := f.render(tabLogs, focusMain, false, false, false, true, false, 5)
-	assert.Equal(t, 2, lipgloss.Height(out))
+	assert.Equal(t, 1, lipgloss.Height(out))
 }
 
 func TestFooter_PickingHintNeverWrapsAtNarrowWidth(t *testing.T) {
 	f := &footerBar{}
 	out := f.render(tabLogs, focusSidebar, false, false, false, false, true, 5)
-	assert.Equal(t, 2, lipgloss.Height(out))
+	assert.Equal(t, 1, lipgloss.Height(out))
 }

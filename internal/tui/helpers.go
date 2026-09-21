@@ -1,6 +1,9 @@
 package tui
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // formatBytes returns a human-readable byte count (e.g. "1.2 MB").
 // Used by sidebar mini-stats and details panel (Task 7).
@@ -39,4 +42,13 @@ func formatUptime(sec int64) string {
 	default:
 		return fmt.Sprintf("%ds", s)
 	}
+}
+
+// formatCount renders n with thousands separators (e.g. "1,204").
+func formatCount(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
