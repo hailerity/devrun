@@ -55,6 +55,7 @@ type footerCtx struct {
 	searching    bool   // the search input has the keyboard
 	hasQuery     bool   // a search is active in the log pane
 	searchInput  string // the rendered search input, shown while searching
+	narrow       bool   // one pane on screen at a time: switching panes is the key to show
 }
 
 // hint is one key/label pair in the footer. pri ranks it for narrow terminals:
@@ -95,8 +96,26 @@ func fitHints(hints []hint, width int) string {
 	}
 }
 
-// hints returns the context's key hints in display order.
+// hints returns the context's key hints in display order. In the narrow layout
+// the way back to the other pane is promoted to top priority: with one pane on
+// screen it is the hint that must never be dropped.
 func (c footerCtx) hints() []hint {
+	out := c.baseHints()
+	if !c.narrow {
+		return out
+	}
+	for i := range out {
+		if out[i].key == "Tab" || (out[i].key == "↵" && out[i].label == "open") {
+			// Strictly above everything else, not merely tied with the best:
+			// among equal priorities fitHints drops the rightmost first, and a
+			// tie with `s start` is exactly how this hint used to get dropped.
+			out[i].pri = -1
+		}
+	}
+	return out
+}
+
+func (c footerCtx) baseHints() []hint {
 	// The modals are keyboard traps: only their own keys apply.
 	switch {
 	case c.confirming:
@@ -130,9 +149,18 @@ func (c footerCtx) hints() []hint {
 		)
 	}
 
+	if c.focus == focusMain && c.tab == tabDetails {
+		return []hint{{"Tab", "services", 1}, {"j/k", "move", 3}, {"y", "copy value", 0}, {"↵", "logs", 2}}
+	}
+
 	enter := "details"
 	if c.tab == tabDetails {
 		enter = "logs"
+	}
+	if c.narrow {
+		// The other pane is off screen, so Enter opens the service rather than
+		// toggling a view nobody can see.
+		enter = "open"
 	}
 	out := []hint{
 		{"s", "start", 0},
@@ -187,7 +215,7 @@ func (f *footerBar) render(c footerCtx, width int) string {
 
 func renderHint(k, label string) string {
 	key := lipgloss.NewStyle().
-		Background(colorBorder).
+		Background(colorChip).
 		Foreground(colorText).
 		Padding(0, 1).
 		Render(k)

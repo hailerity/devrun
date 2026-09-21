@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -185,6 +186,119 @@ func TestModel_ViewFillsTerminalExactly(t *testing.T) {
 	}
 }
 
+// fileClipboard is a clipboard whose "system clipboard" is a temp file: the
+// backend is just a command fed the text on stdin, so pointing it at `cat >
+// file` captures exactly what would have been copied without ever touching the
+// real clipboard of whoever runs the tests. last() returns what was copied.
+func fileClipboard(t *testing.T) (clipboard, func() string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "clipboard")
+	cb := clipboard{backend: &clipboardBackend{cmd: "sh", args: []string{"-c", "cat > \"$0\"", path}}}
+	return cb, func() string {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "" // nothing copied yet
+		}
+		return string(b)
+	}
+}
+
+// detailsModel is a 100x30 model with two configured services, api running.
+// The returned func reads back what was last copied.
+func detailsModel(t *testing.T) (model, func() string) {
+	t.Helper()
+	cb, copied := fileClipboard(t)
+	reg := &config.Registry{Services: map[string]*config.ServiceConfig{
+		"api": {Name: "api", Command: "go run ./cmd/api", CWD: "/w/api", Env: map[string]string{"PORT": "8080"}},
+		"web": {Name: "web", Command: "pnpm dev"},
+	}}
+	m := newModel("", reg, config.Source{}, "", cb)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m2, _ = m2.(model).Update(daemonRespMsg{payload: ipc.ListResponsePayload{Services: []ipc.ServiceInfo{
+		{Name: "api", State: "running", Port: intp(8080), PID: intp(4821)},
+		{Name: "web", State: "stopped"},
+	}}})
+	return m2.(model), copied
+}
+
+// TestModel_DetailsTakesFocusAndCopiesTheValue drives DETAILS end to end: Tab
+// moves focus into it without collapsing to LOGS, j/k walk the values, and y
+// copies the raw value under the cursor.
+func TestModel_DetailsTakesFocusAndCopiesTheValue(t *testing.T) {
+	m, copied := detailsModel(t)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.Equal(t, tabDetails, m.activeTab)
+	assert.Equal(t, focusSidebar, m.focus, "Enter switches the view, not the focus")
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = m2.(model)
+	assert.Equal(t, focusMain, m.focus)
+	assert.Equal(t, tabDetails, m.activeTab, "Tab into the main pane keeps DETAILS open")
+	assert.Contains(t, plain(m.View()), "copy value", "the footer offers the DETAILS keys")
+
+	m = pressKey(m, 'y')
+	assert.Equal(t, "running", copied(), "the first value is the state")
+	assert.Equal(t, "Copied state", m.footerC.toast)
+
+	m = pressKey(pressKey(m, 'j'), 'j') // state → pid → port
+	m = pressKey(m, 'y')
+	assert.Equal(t, "8080", copied())
+
+	m = pressKey(m, 'G')
+	m = pressKey(m, 'y')
+	assert.Equal(t, "8080", copied(), "G lands on the last value: the PORT env var")
+	assert.Equal(t, "Copied PORT", m.footerC.toast)
+
+	m = pressKey(m, 'g')
+	assert.Equal(t, 0, m.detailsC.cursor)
+}
+
+// From the sidebar, j/k must keep walking services while DETAILS is showing —
+// and landing on another service returns DETAILS to its top.
+func TestModel_DetailsFollowsTheSidebarAndResetsPerService(t *testing.T) {
+	m, copied := detailsModel(t)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, _ = m2.(model).Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = pressKey(pressKey(m2.(model), 'j'), 'j')
+	require.Equal(t, 2, m.detailsC.cursor)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab}) // back to the sidebar
+	m = pressKey(m2.(model), 'j')                  // api → web
+	require.Equal(t, "web", m.sidebarC.selectedService().Name)
+	assert.Equal(t, 0, m.detailsC.cursor, "a different service starts DETAILS at the top")
+	assert.Contains(t, plain(m.View()), "pnpm dev")
+
+	// web is stopped: it has no pid to copy, and y says so rather than copying "—".
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = pressKey(pressKey(m2.(model), 'j'), 'y')
+	assert.Equal(t, "nothing to copy for pid", m.footerC.toast)
+	assert.Empty(t, copied())
+}
+
+// y from the sidebar must not copy a DETAILS value the cursor is not showing.
+func TestModel_DetailsCopyNeedsFocus(t *testing.T) {
+	m, copied := detailsModel(t)
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = pressKey(m2.(model), 'y')
+	assert.Empty(t, copied())
+	assert.Empty(t, m.footerC.toast)
+}
+
+func TestModel_DetailsScrollsInAShortTerminal(t *testing.T) {
+	m, _ := detailsModel(t)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 9})
+	m2, _ = m2.(model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m2, _ = m2.(model).Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = pressKey(m2.(model), 'G')
+
+	assertViewFits(t, m, 100, 9)
+	out := plain(m.View())
+	assert.Contains(t, out, "PORT", "the last row scrolled into view")
+	assert.Contains(t, out, " of ", "the border says the list is windowed")
+}
+
 // TestModel_RestartDispatchesStopThenStart verifies r reaches the daemon path
 // for the selected service, and stays quiet when there is nothing it could do.
 func TestModel_RestartDispatchesStopThenStart(t *testing.T) {
@@ -267,6 +381,37 @@ func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
 		require.True(t, found, "%s is selected but not drawn in the sidebar", name)
 		m = pressKey(m, 'j')
 	}
+}
+
+// TestModel_HeaderAndFooterAreBars verifies the header and footer sit directly
+// on the panes — no blank rows — and are separated by a full-width background
+// band that survives the resets inside their styled segments.
+func TestModel_HeaderAndFooterAreBars(t *testing.T) {
+	m := resized(setupLogModel(), 100, 30)
+	raw := strings.Split(m.View(), "\n")
+	rows := strings.Split(plain(m.View()), "\n")
+	require.Len(t, rows, 30)
+	assert.Contains(t, rows[0], "devrun")
+	assert.True(t, strings.HasPrefix(rows[1], "╭"), "the panes start right under the header")
+	assert.True(t, strings.HasPrefix(rows[28], "╰"))
+	assert.Contains(t, rows[29], "quit")
+
+	for _, i := range []int{0, 29} {
+		assert.Equal(t, 100, lipgloss.Width(raw[i]), "row %d: the band spans the full width", i)
+		// Every reset inside the row is followed by the band being switched
+		// back on; only the final one is left to end it.
+		on := raw[i][:strings.Index(raw[i], "m")+1]
+		body := strings.TrimSuffix(raw[i], "\x1b[0m")
+		assert.Equal(t, strings.Count(body, "\x1b[0m"), strings.Count(body, "\x1b[0m"+on), "row %d: a reset left a hole in the band", i)
+	}
+	assert.NotContains(t, raw[5], raw[0][:strings.Index(raw[0], "m")+1], "the panes are not painted")
+}
+
+func TestBarBackground_PadsAndKeepsText(t *testing.T) {
+	out := barBackground(styleAccent.Render("hi")+" there", 20)
+	assert.Equal(t, 20, lipgloss.Width(out))
+	assert.Equal(t, "hi there", strings.TrimRight(plain(out), " "))
+	assert.Equal(t, 30, lipgloss.Width(barBackground(strings.Repeat("x", 30), 20)), "never truncates: the caller already fitted the row")
 }
 
 // TestModel_ViewNamesServiceInMainPaneTitle verifies the log pane always says

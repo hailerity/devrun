@@ -239,6 +239,9 @@ highlighted target.
 | `↵` | Toggle DETAILS / LOGS for the selected service |
 | `Esc` | Back out of DETAILS to LOGS |
 
+On a terminal narrower than 70 columns only the focused pane is shown, at full
+width: `Tab` swaps panes, and `↵` on a service opens it.
+
 **Service / target control:**
 
 | Key | Action |
@@ -285,6 +288,14 @@ the active config — the same file `e` writes to, the same effect as
 The log pane's bottom border shows the line count, the match position while a
 search is active (`2/17 matches`), and the follow state. With follow off it
 counts lines that arrived out of view (`↓ 37 new`); `G` jumps to them.
+
+**Details panel (main panel focused, Details tab):**
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Move over the values; the list scrolls |
+| `g` / `G` | First / last value |
+| `y` | Copy the value under the cursor — the full value, even if the pane truncated it |
 
 **Global:**
 
