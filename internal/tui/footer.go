@@ -130,6 +130,10 @@ func (c footerCtx) hints() []hint {
 		)
 	}
 
+	if c.focus == focusMain && c.tab == tabDetails {
+		return []hint{{"Tab", "services", 1}, {"j/k", "move", 3}, {"y", "copy value", 0}, {"↵", "logs", 2}}
+	}
+
 	enter := "details"
 	if c.tab == tabDetails {
 		enter = "logs"

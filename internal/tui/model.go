@@ -153,12 +153,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
-		if svc := m.sidebarC.selectedService(); svc != nil {
-			path := filepath.Join(m.logDir, "logs", svc.Name+".log")
-			if path != m.logsC.filePath {
-				m.logsC.setFile(path)
-			}
-		}
+		m.updateLogFile()
+		// A poll can add or remove rows (a port appears, the config changes);
+		// keep the DETAILS cursor and window inside the new list.
+		m.detailsC.scrollToCursor(m.detailLines())
 		return m, tickDaemon()
 
 	case serviceRemovedMsg:
@@ -288,29 +286,27 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Right):
 		m.focus = focusMain
-		m.activeTab = tabLogs
 
 	// Tab toggles focus between the sidebar and the main panel. The main panel
 	// is always LOGS — DETAILS is not focusable — so Tabbing in collapses it.
 	case key.Matches(msg, keys.Tab):
 		if m.focus == focusSidebar {
 			m.focus = focusMain
-			m.activeTab = tabLogs
 		} else {
 			m.focus = focusSidebar
 		}
 
 	// Enter toggles LOGS <-> DETAILS for the selected service — the same on
-	// every row. DETAILS is a read-only overlay, not a focus target: focus stays
-	// on the sidebar so j/k keeps walking services and the panel updates live.
-	// Ignored mid-selection.
+	// every row, and without moving focus: from the sidebar j/k keeps walking
+	// services while the view updates live; from the main pane the new view is
+	// the one being driven. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
-			m.focus = focusSidebar
 			m.activeTab = tabDetails
+			m.detailsC.scrollToCursor(m.detailLines())
 		}
 
 	case key.Matches(msg, keys.Up):
@@ -319,6 +315,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateLogFile()
 		} else if m.activeTab == tabLogs {
 			m.logsC.sb.moveUp()
+		} else {
+			m.detailsC.move(-1, m.detailLines())
 		}
 
 	case key.Matches(msg, keys.Down):
@@ -327,16 +325,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.updateLogFile()
 		} else if m.activeTab == tabLogs {
 			m.logsC.sb.moveDown()
+		} else {
+			m.detailsC.move(1, m.detailLines())
 		}
 
 	case key.Matches(msg, keys.Top):
 		if m.activeTab == tabLogs {
 			m.logsC.sb.gotoTop()
+		} else if m.focus == focusMain {
+			m.detailsC.move(-len(m.detailLines()), m.detailLines())
 		}
 
 	case key.Matches(msg, keys.Bottom):
 		if m.activeTab == tabLogs {
 			m.logsC.sb.gotoBottom()
+		} else if m.focus == focusMain {
+			m.detailsC.move(len(m.detailLines()), m.detailLines())
 		}
 
 	case key.Matches(msg, keys.Follow):
@@ -407,6 +411,23 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.footerC.showToastLong("Copy failed")
 			} else {
 				m.footerC.showToast("Copied!")
+			}
+		} else if m.focus == focusMain && m.activeTab == tabDetails {
+			// In DETAILS y copies the raw value under the cursor — the full
+			// command or path even when the pane had to truncate it.
+			row := m.detailsC.selected(m.detailLines())
+			switch {
+			case row == nil:
+			case row.copy == "":
+				m.footerC.showToast("nothing to copy for " + row.label)
+			case !m.cb.Available():
+				m.footerC.showToast("No clipboard available")
+			default:
+				if err := m.cb.Copy(row.copy); err != nil {
+					m.footerC.showToastLong("Copy failed")
+				} else {
+					m.footerC.showToast("Copied " + row.label)
+				}
 			}
 		}
 
@@ -982,13 +1003,30 @@ func (m model) buildTargets() []sidebarTarget {
 	return rows
 }
 
+// updateLogFile points the log pane at the selected service's file. A changed
+// path means a different service is selected, so DETAILS returns to its top too
+// — a cursor parked on row 12 of one service means nothing on the next.
 func (m *model) updateLogFile() {
 	if svc := m.sidebarC.selectedService(); svc != nil {
 		path := filepath.Join(m.logDir, "logs", svc.Name+".log")
 		if path != m.logsC.filePath {
 			m.logsC.setFile(path)
+			m.detailsC.reset()
 		}
 	}
+}
+
+// detailLines builds the DETAILS rows for the selected service.
+func (m model) detailLines() []detailLine {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return nil
+	}
+	var cfg *config.ServiceConfig
+	if m.registry != nil {
+		cfg = m.registry.Services[svc.Name]
+	}
+	return detailLines(svc, cfg)
 }
 
 const (
@@ -1036,6 +1074,8 @@ func (m *model) relayout() {
 	m.logsC.sb.resize(w, h)
 	_, sideRows := paneFrame{}.innerSize(m.sidebarWidth(), m.bodyHeight())
 	m.sidebarC.setRows(sideRows)
+	m.detailsC.setRows(h)
+	m.detailsC.scrollToCursor(m.detailLines())
 }
 
 func (m model) pollDaemon() tea.Cmd {
@@ -1381,7 +1421,7 @@ func Run(socketPath string, reg *config.Registry, src config.Source, logDir stri
 // the follow / wrap state.
 func (m model) renderMain(w, h int) string {
 	frame := m.mainFrame()
-	iw, ih := frame.innerSize(w, h)
+	iw, _ := frame.innerSize(w, h)
 	svc := m.sidebarC.selectedService()
 
 	if svc == nil {
@@ -1413,11 +1453,14 @@ func (m model) renderMain(w, h int) string {
 	frame.titleRight = tab(tabLogs, "LOGS") + " " + tab(tabDetails, "DETAILS")
 
 	if m.activeTab == tabDetails {
-		var cfg *config.ServiceConfig
-		if m.registry != nil {
-			cfg = m.registry.Services[svc.Name]
+		lines := m.detailLines()
+		if first, last := m.detailsC.window(lines); last-first < len(lines) {
+			frame.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(lines)))
 		}
-		return frame.render(m.detailsC.render(svc, cfg, iw, ih), w, h)
+		// The details list draws its own one-column gutter (the cursor bar),
+		// so it takes the pane's padding column rather than adding to it.
+		frame.padLeft = 0
+		return frame.render(m.detailsC.render(lines, iw+mainPadLeft, m.focus == focusMain), w, h)
 	}
 
 	sb := &m.logsC.sb
