@@ -23,11 +23,36 @@ type scrollBuffer struct {
 	followMode bool
 	mouseDown  bool // true while left mouse button is held
 
+	// unseen counts lines appended while follow was off and the end of the log
+	// was out of view — the "↓ N new" the pane border shows. Reaching the end
+	// by any route clears it.
+	unseen int
+
+	search logSearch
+
 	// noWrap disables line wrapping (see fitLine): a long line is truncated
 	// to one row instead of spread across continuation rows. false (wrap) is
 	// the zero value so every scrollBuffer{...} literal that doesn't set it —
 	// tests included — keeps wrapping, the current default.
 	noWrap bool
+}
+
+// reset empties the buffer for a different log. Everything that refers to
+// lines by index goes with them — cursor, scroll offset, selection, the unseen
+// count and the search's cached matches. The search query itself is kept, so a
+// search carries over to the next service and is simply re-run against its log.
+//
+// Every place that replaces sb.lines must come through here: a position or a
+// cache left over from the old lines silently points at the wrong ones.
+func (sb *scrollBuffer) reset() {
+	sb.lines = nil
+	sb.cursor = 0
+	sb.yOffset = 0
+	sb.exitVisual()
+	sb.mouseDown = false
+	sb.unseen = 0
+	sb.followMode = true
+	sb.search.invalidate()
 }
 
 func (sb *scrollBuffer) resize(w, h int) {
@@ -48,6 +73,38 @@ func (sb *scrollBuffer) scrollUp(n int) {
 
 func (sb *scrollBuffer) scrollDown(n int) {
 	sb.yOffset = min(sb.maxYOffset(), sb.yOffset+n)
+	if sb.yOffset == sb.maxYOffset() {
+		sb.unseen = 0 // scrolled to the end: nothing below is unseen any more
+	}
+}
+
+// appended records n lines just added to sb.lines: with follow on the view
+// jumps to them, otherwise they are counted as unseen.
+func (sb *scrollBuffer) appended(n int) {
+	if n <= 0 {
+		return
+	}
+	if sb.followMode {
+		sb.gotoBottom()
+		return
+	}
+	// With follow off the new lines may still land on screen — a log shorter
+	// than the pane, or a view parked at the end. Those are not unseen.
+	if sb.lineVisible(len(sb.lines) - 1) {
+		sb.unseen = 0
+		return
+	}
+	sb.unseen += n
+}
+
+// setFollow turns follow on or off. Turning it on jumps to the end at once —
+// waiting for the next appended line would leave the view stale on a quiet log.
+func (sb *scrollBuffer) setFollow(on bool) {
+	sb.followMode = on
+	if on {
+		sb.gotoBottom()
+		sb.unseen = 0 // also when the buffer is empty and gotoBottom is a no-op
+	}
 }
 
 // rowsForLine returns how many physical rows `idx` takes once wrapped to the
@@ -157,6 +214,7 @@ func (sb *scrollBuffer) gotoBottom() {
 	sb.cursor = len(sb.lines) - 1
 	sb.yOffset = sb.maxYOffset()
 	sb.followMode = true
+	sb.unseen = 0
 }
 
 func (sb *scrollBuffer) moveUp() {
@@ -181,6 +239,9 @@ func (sb *scrollBuffer) moveDown() {
 		}
 		if !sb.lineVisible(sb.cursor) {
 			sb.yOffset = sb.topForBottom(sb.cursor)
+		}
+		if sb.cursor == len(sb.lines)-1 {
+			sb.unseen = 0 // walked down to the last line
 		}
 	}
 }
@@ -226,6 +287,52 @@ func stripUnsafe(s string) string {
 	// what actually gets printed, regardless of which helper measures it.
 	s = strings.ReplaceAll(s, "\t", "    ")
 	return unsafeSeqRe.ReplaceAllString(s, "")
+}
+
+// setQuery changes the search query and re-matches. It does not move the
+// cursor: typing a query previews the match count without losing your place.
+func (sb *scrollBuffer) setQuery(q string) {
+	sb.search.query = q
+	sb.search.refresh(sb.lines)
+}
+
+// jumpTo puts the cursor on line idx and scrolls it into view. Follow goes off:
+// the next appended line must not yank the view away from what was just found.
+func (sb *scrollBuffer) jumpTo(idx int) {
+	sb.cursor = sb.clampLine(idx)
+	sb.followMode = false
+	if sb.visualMode {
+		sb.selEnd = sb.cursor
+	}
+	if sb.cursor < sb.yOffset {
+		sb.yOffset = sb.cursor
+	} else if !sb.lineVisible(sb.cursor) {
+		sb.yOffset = sb.topForBottom(sb.cursor)
+	}
+	if sb.cursor == len(sb.lines)-1 {
+		sb.unseen = 0
+	}
+}
+
+// searchStep moves to the next (dir > 0) or previous match, wrapping. It
+// reports whether there was a match to move to.
+func (sb *scrollBuffer) searchStep(dir int) bool {
+	sb.search.refresh(sb.lines)
+	idx, ok := sb.search.next(sb.cursor, dir)
+	if ok {
+		sb.jumpTo(idx)
+	}
+	return ok
+}
+
+// searchConfirm lands on the match nearest the cursor looking upward.
+func (sb *scrollBuffer) searchConfirm() bool {
+	sb.search.refresh(sb.lines)
+	idx, ok := sb.search.nearestAtOrBefore(sb.cursor)
+	if ok {
+		sb.jumpTo(idx)
+	}
+	return ok
 }
 
 func (sb *scrollBuffer) enterVisual() {
@@ -305,6 +412,13 @@ func (sb *scrollBuffer) renderLine(idx int, line string) string {
 	// rendering. These would corrupt TUI layout or bleed into adjacent widgets.
 	safe := stripUnsafe(line)
 	colored := colorizeLog(safe)
+	// A line that matches the search is drawn from its plain text with the
+	// matches marked. It loses its own colours while the search is active —
+	// splicing highlight codes into a line that already carries SGR sequences
+	// is how colours bleed — and the visible text, so the wrap, is unchanged.
+	if sb.search.active() && sb.search.position(idx) > 0 {
+		colored = highlight(stripANSI(safe), sb.search.query)
+	}
 	lo := min(sb.selStart, sb.selEnd)
 	hi := max(sb.selStart, sb.selEnd)
 	// Both highlighted styles carry a BorderLeft(true) gutter bar (+1 column),

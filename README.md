@@ -213,7 +213,7 @@ Managed automatically by `devrun add/remove`. You can also edit it directly.
 │ ● api       :8080      2.1% ││ → POST /api/auth     201  45ms                     │
 │ ● web       :5173     64.0% ││ → GET  /api/profile  200   8ms                     │
 ╰─ 2/3 up ────────────────────╯╰─ 1,204 lines ─────────────────────────── ⇣ follow ─╯
- Tab switch  ↵ details  s start  x stop  S/X all  t target  q quit
+ s start  x stop  r restart  ↵ details  t target  / search        ? help  q quit
 ```
 
 Each service row shows a state glyph (`●` running, `◐` starting / stopping,
@@ -244,6 +244,7 @@ highlighted target.
 | Key | Action |
 |---|---|
 | `s` / `x` | Start / stop the selected service |
+| `r` | Restart the selected service (starts it if it is not running) |
 | `S` / `X` | Start / stop everything listed — the filtering target, or every service when there is no filter |
 | `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
 | `e` | Edit the selected service (sidebar focused) |
@@ -268,21 +269,32 @@ Pressing `d` on a service asks to confirm, then deletes that service from
 the active config — the same file `e` writes to, the same effect as
 `devrun remove`. A running service must be stopped first.
 
-**Log panel (main panel focused, Logs tab):**
+**Log panel:**
 
 | Key | Action |
 |---|---|
+| `/` | Search the log — matches highlight as you type, `↵` jumps to the nearest match above the cursor, `Esc` cancels |
+| `n` / `N` | Next match down / previous match up (wraps) |
 | `f` | Toggle follow mode |
-| `g` / `G` | Jump to top / bottom |
+| `g` / `G` | Jump to top / jump to the end and follow |
+| `w` | Toggle line wrap |
 | `v` | Enter visual selection mode |
 | `y` / `Ctrl+C` | Copy selection (or current line) |
-| `Esc` | Exit visual mode |
+| `Esc` | Exit visual mode, then clear the search |
+
+The log pane's bottom border shows the line count, the match position while a
+search is active (`2/17 matches`), and the follow state. With follow off it
+counts lines that arrived out of view (`↓ 37 new`); `G` jumps to them.
 
 **Global:**
 
 | Key | Action |
 |---|---|
+| `?` | Show every key, grouped |
 | `q` / `Ctrl+C` | Quit |
+
+The footer shows the keys for the focused pane. On a narrow terminal it drops
+whole hints, least useful first; `? help` and `q quit` always stay.
 
 ---
 

@@ -27,11 +27,7 @@ func newLogsPanel() logsPanel {
 func (lp *logsPanel) setFile(path string) {
 	lp.filePath = path
 	lp.fileOffset = 0
-	lp.sb.lines = nil
-	lp.sb.cursor = 0
-	lp.sb.yOffset = 0
-	lp.sb.visualMode = false
-	lp.sb.followMode = true
+	lp.sb.reset()
 	lp.noLogMsg = ""
 }
 
@@ -48,23 +44,27 @@ func (lp *logsPanel) poll() bool {
 	defer f.Close()
 
 	if _, err := f.Seek(lp.fileOffset, io.SeekStart); err != nil {
+		// Re-reading from the start replaces the buffer, so reset it as a
+		// whole — not just the lines — or the cursor, selection and search
+		// matches would still index into the old contents.
 		lp.fileOffset = 0
-		lp.sb.lines = nil
+		lp.sb.reset()
 		f.Seek(0, io.SeekStart) //nolint:errcheck
 	}
 	scanner := bufio.NewScanner(f)
-	var added bool
+	added := 0
 	for scanner.Scan() {
 		lp.sb.lines = append(lp.sb.lines, scanner.Text()) // raw, ANSI preserved
-		added = true
+		added++
 	}
 	lp.fileOffset, _ = f.Seek(0, io.SeekCurrent)
 	lp.noLogMsg = ""
 
-	if added && lp.sb.followMode {
-		lp.sb.gotoBottom()
-	}
-	return added
+	// Match the new lines here, on the real model: View() runs on a copy, so a
+	// refresh there would be thrown away and redone every frame.
+	lp.sb.search.refresh(lp.sb.lines)
+	lp.sb.appended(added)
+	return added > 0
 }
 
 // view renders the panel: shows noLogMsg if no file, otherwise delegates to scrollBuffer.

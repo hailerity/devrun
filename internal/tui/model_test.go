@@ -147,6 +147,17 @@ func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	assert.Equal(t, 4, m3.(model).logsC.sb.cursor, "clicking the row that draws line-04 selects line 4")
 }
 
+// assertViewFits checks View() is exactly h rows and no row is wider than w —
+// the invariant every screen, modal or not, has to keep.
+func assertViewFits(t *testing.T, m model, w, h int) {
+	t.Helper()
+	rows := strings.Split(m.View(), "\n")
+	assert.Len(t, rows, h, "%dx%d: row count", w, h)
+	for i, row := range rows {
+		assert.LessOrEqual(t, lipgloss.Width(row), w, "%dx%d: row %d width", w, h, i)
+	}
+}
+
 // TestModel_ViewFillsTerminalExactly guards the layout arithmetic: the header,
 // the two bordered panes and the footer must add up to exactly the terminal
 // size. One row too many scrolls the header off a real terminal; one column too
@@ -172,6 +183,63 @@ func TestModel_ViewFillsTerminalExactly(t *testing.T) {
 			assert.LessOrEqual(t, lipgloss.Width(row), size[0], "%dx%d: row %d width", size[0], size[1], i)
 		}
 	}
+}
+
+// TestModel_RestartDispatchesStopThenStart verifies r reaches the daemon path
+// for the selected service, and stays quiet when there is nothing it could do.
+func TestModel_RestartDispatchesStopThenStart(t *testing.T) {
+	m := targetFilterModel(t)
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+	name := m.sidebarC.selectedService().Name
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	require.NotNil(t, cmd)
+	assert.Equal(t, "restarting "+name, m2.(model).footerC.toast)
+	_, isErr := cmd().(daemonErrMsg)
+	assert.True(t, isErr, "with the daemon unreachable the start half reports it")
+
+	// No socket: nothing is dispatched, so nothing is announced.
+	m.socketPath = ""
+	m2, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.Nil(t, cmd)
+	assert.Empty(t, m2.(model).footerC.toast)
+
+	// No service selected: must not panic on the nil selection.
+	empty := newModel("/tmp/x.sock", nil, config.Source{}, "", clipboard{})
+	_, cmd = empty.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	assert.Nil(t, cmd)
+}
+
+// TestModel_LogBorderReportsNewLines checks the border text end to end: follow,
+// then "N new" once lines arrive behind a parked view, then back to follow on G.
+func TestModel_LogBorderReportsNewLines(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	for i := 0; i < 80; i++ { // enough to overflow the 100x30 pane
+		m.logsC.sb.lines = append(m.logsC.sb.lines, fmt.Sprintf("more-%02d", i))
+	}
+	m.logsC.sb.gotoBottom()
+	assert.Contains(t, plain(m.View()), "⇣ follow")
+
+	m = pressKey(m, 'g') // park at the top, follow off
+	assert.Contains(t, plain(m.View()), "follow off")
+
+	m.logsC.sb.lines = append(m.logsC.sb.lines, "late-1", "late-2")
+	m.logsC.sb.appended(2)
+	out := plain(m.View())
+	assert.Contains(t, out, "↓ 2 new")
+	assert.NotContains(t, out, "follow off")
+
+	m = pressKey(m, 'G')
+	out = plain(m.View())
+	assert.Contains(t, out, "⇣ follow")
+	assert.NotContains(t, out, "new")
+
+	// f turns follow back on from a parked view and jumps to the end at once.
+	m = pressKey(m, 'g')
+	m = pressKey(m, 'f')
+	assert.True(t, m.logsC.sb.followMode)
+	assert.Equal(t, len(m.logsC.sb.lines)-1, m.logsC.sb.cursor)
 }
 
 // TestModel_SelectedServiceStaysOnScreenInLongList is the end-to-end check for
