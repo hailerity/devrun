@@ -210,11 +210,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modalOpen() {
 			return m, nil
 		}
+		// In the narrow layout the sidebar may be the pane on screen; the log
+		// pane is not drawn, so there is nothing under the pointer to select.
+		if m.narrow() && m.focus == focusSidebar {
+			return m, nil
+		}
 		if m.activeTab == tabLogs {
 			// topOffset: header(1) + the main pane's top border(1) rows sit above
 			// the log content. leftOffset: sidebar + the main pane's left border
 			// and padding; reserved for future character-level selection.
-			_ = m.logsC.sb.handleMouse(msg, headerRows+1, m.sidebarWidth()+1+mainPadLeft)
+			_, mainW := m.paneWidths()
+			_ = m.logsC.sb.handleMouse(msg, headerRows+1, m.width-mainW+1+mainPadLeft)
 			// A left-click in the log area auto-focuses the main panel so that
 			// keyboard shortcuts (y to copy, v to select, f to follow) work immediately.
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
@@ -302,6 +308,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// the one being driven. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
+		case m.narrow() && m.focus == focusSidebar:
+			// One pane at a time: the view Enter would toggle is not on
+			// screen, so Enter opens the selected service instead.
+			m.focus = focusMain
 		case m.activeTab == tabDetails:
 			m.activeTab = tabLogs
 		case m.activeTab == tabLogs && !m.logsC.sb.visualMode:
@@ -1056,6 +1066,24 @@ func (m model) sidebarWidth() int {
 	return max(w, sidebarMinW/2)
 }
 
+// narrowBelow is the terminal width under which the two panes no longer fit
+// side by side with a usable log column; below it only the focused pane is
+// drawn, at full width, and Tab swaps which one that is.
+const narrowBelow = 70
+
+func (m model) narrow() bool { return m.width > 0 && m.width < narrowBelow }
+
+// paneWidths returns the outer widths of the sidebar and the main pane. Side by
+// side they split the terminal; in the narrow layout each gets all of it, since
+// only one is on screen at a time.
+func (m model) paneWidths() (side, main int) {
+	if m.narrow() {
+		return m.width, m.width
+	}
+	side = m.sidebarWidth()
+	return side, m.width - side
+}
+
 // bodyHeight is the row count left for the panes between header and footer.
 func (m model) bodyHeight() int { return max(0, m.height-headerRows-footerRows) }
 
@@ -1070,9 +1098,10 @@ func (m *model) relayout() {
 	if m.width == 0 {
 		return
 	}
-	w, h := m.mainFrame().innerSize(m.width-m.sidebarWidth(), m.bodyHeight())
+	sideW, mainW := m.paneWidths()
+	w, h := m.mainFrame().innerSize(mainW, m.bodyHeight())
 	m.logsC.sb.resize(w, h)
-	_, sideRows := paneFrame{}.innerSize(m.sidebarWidth(), m.bodyHeight())
+	_, sideRows := paneFrame{}.innerSize(sideW, m.bodyHeight())
 	m.sidebarC.setRows(sideRows)
 	m.detailsC.setRows(h)
 	m.detailsC.scrollToCursor(m.detailLines())
@@ -1329,8 +1358,7 @@ func (m model) View() string {
 		return ""
 	}
 
-	sidebarW := m.sidebarWidth()
-	mainW := m.width - sidebarW
+	sidebarW, mainW := m.paneWidths()
 	bodyH := m.bodyHeight()
 
 	// Header — counts reflect the whole scoped project, not the target filter.
@@ -1349,10 +1377,18 @@ func (m model) View() string {
 	// Body: two bordered panes side by side; the focused one takes the accent.
 	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
 	sideW, _ := sideFrame.innerSize(sidebarW, bodyH)
-	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		sideFrame.render(m.sidebarC.render(sideW), sidebarW, bodyH),
-		m.renderMain(mainW, bodyH),
-	)
+	var body string
+	switch {
+	case !m.narrow():
+		body = lipgloss.JoinHorizontal(lipgloss.Top,
+			sideFrame.render(m.sidebarC.render(sideW), sidebarW, bodyH),
+			m.renderMain(mainW, bodyH),
+		)
+	case m.focus == focusSidebar:
+		body = sideFrame.render(m.sidebarC.render(sideW), sidebarW, bodyH)
+	default:
+		body = m.renderMain(mainW, bodyH)
+	}
 
 	// An open modal floats over the dimmed panes rather than replacing them.
 	var modal string
@@ -1384,6 +1420,7 @@ func (m model) View() string {
 		searching:    m.searching,
 		hasQuery:     m.logsC.sb.search.active(),
 		searchInput:  m.searchC.View(),
+		narrow:       m.narrow(),
 	}, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
