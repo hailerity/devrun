@@ -327,7 +327,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Follow):
 		if m.focus == focusMain && m.activeTab == tabLogs {
-			m.logsC.sb.followMode = !m.logsC.sb.followMode
+			m.logsC.sb.setFollow(!m.logsC.sb.followMode)
 		}
 
 	case key.Matches(msg, keys.Wrap):
@@ -1328,9 +1328,14 @@ func (m model) renderMain(w, h int) string {
 	if n := len(sb.lines); n > 0 {
 		frame.footLeft = styleMuted.Render(formatCount(n) + " lines")
 	}
+	// Follow off is only interesting if something arrived meanwhile: say how
+	// much, in the warning colour, so it is clear the view is behind.
 	status := styleMuted.Render("follow off")
-	if sb.followMode {
+	switch {
+	case sb.followMode:
 		status = styleGreen.Render("⇣ follow")
+	case sb.unseen > 0:
+		status = styleYellow.Render("↓ " + formatCount(sb.unseen) + " new")
 	}
 	if sb.noWrap {
 		status = styleMuted.Render("no-wrap · ") + status

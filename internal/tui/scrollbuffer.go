@@ -23,6 +23,11 @@ type scrollBuffer struct {
 	followMode bool
 	mouseDown  bool // true while left mouse button is held
 
+	// unseen counts lines appended while follow was off and the end of the log
+	// was out of view — the "↓ N new" the pane border shows. Reaching the end
+	// by any route clears it.
+	unseen int
+
 	// noWrap disables line wrapping (see fitLine): a long line is truncated
 	// to one row instead of spread across continuation rows. false (wrap) is
 	// the zero value so every scrollBuffer{...} literal that doesn't set it —
@@ -48,6 +53,38 @@ func (sb *scrollBuffer) scrollUp(n int) {
 
 func (sb *scrollBuffer) scrollDown(n int) {
 	sb.yOffset = min(sb.maxYOffset(), sb.yOffset+n)
+	if sb.yOffset == sb.maxYOffset() {
+		sb.unseen = 0 // scrolled to the end: nothing below is unseen any more
+	}
+}
+
+// appended records n lines just added to sb.lines: with follow on the view
+// jumps to them, otherwise they are counted as unseen.
+func (sb *scrollBuffer) appended(n int) {
+	if n <= 0 {
+		return
+	}
+	if sb.followMode {
+		sb.gotoBottom()
+		return
+	}
+	// With follow off the new lines may still land on screen — a log shorter
+	// than the pane, or a view parked at the end. Those are not unseen.
+	if sb.lineVisible(len(sb.lines) - 1) {
+		sb.unseen = 0
+		return
+	}
+	sb.unseen += n
+}
+
+// setFollow turns follow on or off. Turning it on jumps to the end at once —
+// waiting for the next appended line would leave the view stale on a quiet log.
+func (sb *scrollBuffer) setFollow(on bool) {
+	sb.followMode = on
+	if on {
+		sb.gotoBottom()
+		sb.unseen = 0 // also when the buffer is empty and gotoBottom is a no-op
+	}
 }
 
 // rowsForLine returns how many physical rows `idx` takes once wrapped to the
@@ -157,6 +194,7 @@ func (sb *scrollBuffer) gotoBottom() {
 	sb.cursor = len(sb.lines) - 1
 	sb.yOffset = sb.maxYOffset()
 	sb.followMode = true
+	sb.unseen = 0
 }
 
 func (sb *scrollBuffer) moveUp() {
@@ -181,6 +219,9 @@ func (sb *scrollBuffer) moveDown() {
 		}
 		if !sb.lineVisible(sb.cursor) {
 			sb.yOffset = sb.topForBottom(sb.cursor)
+		}
+		if sb.cursor == len(sb.lines)-1 {
+			sb.unseen = 0 // walked down to the last line
 		}
 	}
 }

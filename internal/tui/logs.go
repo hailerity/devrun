@@ -31,6 +31,7 @@ func (lp *logsPanel) setFile(path string) {
 	lp.sb.cursor = 0
 	lp.sb.yOffset = 0
 	lp.sb.visualMode = false
+	lp.sb.unseen = 0
 	lp.sb.followMode = true
 	lp.noLogMsg = ""
 }
@@ -53,18 +54,16 @@ func (lp *logsPanel) poll() bool {
 		f.Seek(0, io.SeekStart) //nolint:errcheck
 	}
 	scanner := bufio.NewScanner(f)
-	var added bool
+	added := 0
 	for scanner.Scan() {
 		lp.sb.lines = append(lp.sb.lines, scanner.Text()) // raw, ANSI preserved
-		added = true
+		added++
 	}
 	lp.fileOffset, _ = f.Seek(0, io.SeekCurrent)
 	lp.noLogMsg = ""
 
-	if added && lp.sb.followMode {
-		lp.sb.gotoBottom()
-	}
-	return added
+	lp.sb.appended(added)
+	return added > 0
 }
 
 // view renders the panel: shows noLogMsg if no file, otherwise delegates to scrollBuffer.

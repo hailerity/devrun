@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScrollBuffer_ResizeSetsWidthHeight(t *testing.T) {
@@ -527,4 +529,87 @@ func TestRenderLine_NonSgrSequencesStripped(t *testing.T) {
 	assert.NotContains(t, out, "\r")
 	assert.Contains(t, out, "foo")
 	assert.Contains(t, out, "bar")
+}
+
+func linesN(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("line-%03d", i)
+	}
+	return out
+}
+
+// appendLines mimics logsPanel.poll: grow the buffer, then report the growth.
+func appendLines(sb *scrollBuffer, n int) {
+	sb.lines = append(sb.lines, linesN(n)...)
+	sb.appended(n)
+}
+
+func TestScrollBuffer_UnseenCountsLinesArrivingWhileScrolledAway(t *testing.T) {
+	sb := &scrollBuffer{width: 40, height: 10, followMode: true}
+	appendLines(sb, 50)
+	assert.Equal(t, 0, sb.unseen, "following: everything new is on screen")
+
+	sb.gotoTop() // follow off, end out of view
+	appendLines(sb, 7)
+	appendLines(sb, 5)
+	assert.Equal(t, 12, sb.unseen)
+	assert.Equal(t, 0, sb.cursor, "new lines must not move a parked cursor")
+}
+
+func TestScrollBuffer_UnseenClearsOnReachingTheEndByAnyRoute(t *testing.T) {
+	setup := func() *scrollBuffer {
+		sb := &scrollBuffer{width: 40, height: 10, followMode: true}
+		appendLines(sb, 50)
+		sb.gotoTop()
+		appendLines(sb, 5)
+		require.Equal(t, 5, sb.unseen)
+		return sb
+	}
+
+	sb := setup()
+	sb.gotoBottom()
+	assert.Equal(t, 0, sb.unseen, "G")
+	assert.True(t, sb.followMode)
+
+	sb = setup()
+	sb.setFollow(true)
+	assert.Equal(t, 0, sb.unseen, "f on")
+	assert.Equal(t, len(sb.lines)-1, sb.cursor, "turning follow on jumps to the end at once")
+
+	sb = setup()
+	for i := 0; i < len(sb.lines); i++ {
+		sb.moveDown()
+	}
+	assert.Equal(t, 0, sb.unseen, "walking the cursor to the last line")
+
+	sb = setup()
+	sb.scrollDown(1000)
+	assert.Equal(t, 0, sb.unseen, "wheel-scrolling to the end")
+
+	sb = setup()
+	sb.scrollDown(3)
+	assert.Equal(t, 5, sb.unseen, "a partial scroll leaves them unseen")
+}
+
+// Follow off does not mean the new lines are hidden: if they land on screen
+// they are not "new" and the border must not claim otherwise.
+func TestScrollBuffer_LinesLandingOnScreenAreNotUnseen(t *testing.T) {
+	sb := &scrollBuffer{width: 40, height: 10}
+	appendLines(sb, 3) // shorter than the pane, follow off
+	appendLines(sb, 2)
+	assert.Equal(t, 0, sb.unseen)
+
+	appendLines(sb, 20) // now it overflows the pane
+	assert.Equal(t, 20, sb.unseen)
+}
+
+func TestScrollBuffer_SetFollowOnEmptyBufferIsSafe(t *testing.T) {
+	sb := &scrollBuffer{width: 40, height: 10, unseen: 3}
+	sb.setFollow(true)
+	assert.True(t, sb.followMode)
+	assert.Equal(t, 0, sb.unseen)
+	sb.appended(0)
+	sb.appended(-1)
+	assert.Equal(t, 0, sb.unseen)
 }

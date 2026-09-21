@@ -185,6 +185,38 @@ func TestModel_ViewFillsTerminalExactly(t *testing.T) {
 	}
 }
 
+// TestModel_LogBorderReportsNewLines checks the border text end to end: follow,
+// then "N new" once lines arrive behind a parked view, then back to follow on G.
+func TestModel_LogBorderReportsNewLines(t *testing.T) {
+	m := setupLogModel()
+	m.focus = focusMain
+	for i := 0; i < 80; i++ { // enough to overflow the 100x30 pane
+		m.logsC.sb.lines = append(m.logsC.sb.lines, fmt.Sprintf("more-%02d", i))
+	}
+	m.logsC.sb.gotoBottom()
+	assert.Contains(t, plain(m.View()), "⇣ follow")
+
+	m = pressKey(m, 'g') // park at the top, follow off
+	assert.Contains(t, plain(m.View()), "follow off")
+
+	m.logsC.sb.lines = append(m.logsC.sb.lines, "late-1", "late-2")
+	m.logsC.sb.appended(2)
+	out := plain(m.View())
+	assert.Contains(t, out, "↓ 2 new")
+	assert.NotContains(t, out, "follow off")
+
+	m = pressKey(m, 'G')
+	out = plain(m.View())
+	assert.Contains(t, out, "⇣ follow")
+	assert.NotContains(t, out, "new")
+
+	// f turns follow back on from a parked view and jumps to the end at once.
+	m = pressKey(m, 'g')
+	m = pressKey(m, 'f')
+	assert.True(t, m.logsC.sb.followMode)
+	assert.Equal(t, len(m.logsC.sb.lines)-1, m.logsC.sb.cursor)
+}
+
 // TestModel_SelectedServiceStaysOnScreenInLongList is the end-to-end check for
 // the sidebar's scroll window: with far more services than rows, the service the
 // main pane is showing must always be drawn in the sidebar too.
