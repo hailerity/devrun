@@ -75,16 +75,17 @@ func TestModel_SidebarWidth_Adaptive(t *testing.T) {
 	// Short names → floor.
 	assert.Equal(t, sidebarMinW, mk("web", "api", "db").sidebarWidth())
 
-	// A long name grows the sidebar (longest name + dot + space + margin).
-	assert.Equal(t, len("my-really-long-service")+3, mk("api", "my-really-long-service").sidebarWidth())
+	// A long name grows the sidebar: glyph + space + name, then the state and
+	// CPU columns with a space before each.
+	assert.Equal(t, 2+len("my-really-long-service")+1+rowStateW+1+rowCPUW, mk("api", "my-really-long-service").sidebarWidth())
 
 	// Pathologically long name → capped at the ceiling.
 	assert.Equal(t, sidebarMaxW, mk("this-name-is-absurdly-long-and-keeps-going-forever").sidebarWidth())
 
-	// Never wider than a third of the terminal.
+	// Never wider than two fifths of the terminal.
 	narrow := mk("this-name-is-absurdly-long-and-keeps-going-forever")
 	narrow.width = 60
-	assert.Equal(t, 20, narrow.sidebarWidth())
+	assert.Equal(t, 24, narrow.sidebarWidth())
 }
 
 func TestModel_QuitKeyReturnsQuitCmd(t *testing.T) {

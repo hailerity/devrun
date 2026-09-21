@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
 )
@@ -127,41 +128,85 @@ func TestSidebar_EmptyStateAfterFirstPoll(t *testing.T) {
 	assert.NotContains(t, out, "Loading")
 }
 
-func TestSidebar_InfoBlockPinnedToBottom(t *testing.T) {
+func intp(n int) *int { return &n }
+
+func TestSidebar_CrashedSortsFirst(t *testing.T) {
 	sb := &sidebar{}
-	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "web"}}, nil)
-	sb.selected = 0
-
-	const h = 20
-	lines := strings.Split(sb.render(26, h, false), "\n")
-
-	assert.Len(t, lines, h, "sidebar fills the given height")
-	assert.Contains(t, lines[h-1], "stop", "x stop is the last line")
-	assert.Contains(t, lines[h-2], "start", "s start sits just above it")
-
-	sepIdx := -1
-	blankBeforeSep := false
-	for i, l := range lines {
-		if strings.Contains(l, "── api ──") {
-			sepIdx = i
-			blankBeforeSep = lines[i-1] == ""
-		}
-	}
-	assert.Greater(t, sepIdx, 4, "info block is pushed down, not directly under the 2-row list")
-	assert.True(t, blankBeforeSep, "a gap separates the list from the info block")
+	sb.update([]ipc.ServiceInfo{
+		{Name: "api", State: "running"},
+		{Name: "web", State: "crashed"},
+		{Name: "chat", State: "crashed"},
+		{Name: "db", State: "stopped"},
+	}, nil)
+	assert.Equal(t, []string{"chat", "web", "api", "db"}, svcNames(sb),
+		"crashed services lead, alphabetical within each group")
 }
 
-func TestSidebar_LongListStillRenders(t *testing.T) {
+// A service that crashes jumps to the top of the list; the highlight must go
+// with it rather than stay on whatever row now holds its old index.
+func TestSidebar_CursorFollowsServiceThatCrashes(t *testing.T) {
 	sb := &sidebar{}
-	var svcs []ipc.ServiceInfo
-	for i := 0; i < 40; i++ {
-		svcs = append(svcs, ipc.ServiceInfo{Name: "service-" + string(rune('a'+i%26))})
-	}
-	sb.update(svcs, nil)
+	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "running"}}, nil)
+	sb.selected = 1 // "web"
 
-	// height smaller than the list — gap must clamp, not go negative or panic.
-	lines := strings.Split(sb.render(26, 12, false), "\n")
-	assert.Contains(t, lines[len(lines)-1], "stop", "hints still render below an overflowing list")
+	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "crashed"}}, nil)
+	assert.Equal(t, "web", sb.selectedService().Name)
+	assert.Equal(t, 0, sb.selected)
+}
+
+func TestServiceRow_ShowsPortStateAndCPU(t *testing.T) {
+	running := plain(serviceRow(30, ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080), CPUPct: 2.14}, false))
+	assert.Contains(t, running, "● api")
+	assert.Contains(t, running, ":8080")
+	assert.Contains(t, running, "2.1%")
+
+	crashed := plain(serviceRow(30, ipc.ServiceInfo{Name: "chat", State: "crashed", CPUPct: 9}, false))
+	assert.Contains(t, crashed, "✖ chat")
+	assert.Contains(t, crashed, "crashed")
+	assert.NotContains(t, crashed, "%", "a service that is not running has no CPU figure")
+}
+
+// Every row — selected or not, any state — must be exactly the pane width, or
+// the selection background stops short and the bordered pane's edge drifts.
+func TestServiceRow_AlwaysExactlyWidth(t *testing.T) {
+	svcs := []ipc.ServiceInfo{
+		{Name: "api", State: "running", Port: intp(8080), CPUPct: 100},
+		{Name: "a-service-with-a-very-long-name-indeed", State: "stopping"},
+		{Name: "x"},
+	}
+	for _, w := range []int{8, 17, 18, 25, 26, 30, 44} {
+		for _, svc := range svcs {
+			for _, sel := range []bool{false, true} {
+				assert.Equal(t, w, lipgloss.Width(serviceRow(w, svc, sel)), "width %d, %s, selected=%v", w, svc.Name, sel)
+			}
+		}
+	}
+}
+
+func TestServiceRow_NarrowDropsCPUThenState(t *testing.T) {
+	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080), CPUPct: 12.5}
+	assert.Contains(t, plain(serviceRow(rowMinWForCPU, svc, false)), "12.5%")
+
+	noCPU := plain(serviceRow(rowMinWForCPU-1, svc, false))
+	assert.NotContains(t, noCPU, "12.5%")
+	assert.Contains(t, noCPU, ":8080")
+
+	assert.NotContains(t, plain(serviceRow(rowMinWForState-1, svc, false)), ":8080")
+}
+
+func TestCPUColor_OnlyBusyIsColoured(t *testing.T) {
+	assert.Equal(t, colorMuted, cpuColor(0))
+	assert.Equal(t, colorMuted, cpuColor(50))
+	assert.Equal(t, colorYellow, cpuColor(50.1))
+	assert.Equal(t, colorRed, cpuColor(80.1))
+}
+
+func TestSidebar_NoInfoBlockOrDuplicateHints(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web"}}, nil)
+	out := plain(sb.render(30, 20, false))
+	assert.NotContains(t, out, "PID")
+	assert.NotContains(t, out, "start", "s/x hints live in the footer only")
 }
 
 // State must be readable from the glyph's shape alone — with --no-color, or for

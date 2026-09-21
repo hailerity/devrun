@@ -21,7 +21,7 @@ type sidebarTarget struct {
 const allServicesLabel = "All services"
 
 type sidebar struct {
-	allServices []ipc.ServiceInfo // full scoped list, sorted by Name
+	allServices []ipc.ServiceInfo // full scoped list: crashed first, then by Name
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
 
@@ -39,8 +39,17 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 		curSvc = s.services[s.selected].Name
 	}
 
+	// Crashed services lead the list so a failure is never below the fold;
+	// everything else stays alphabetical. The cursor follows its service by
+	// name (below), so a row that jumps to the top takes the highlight with it.
 	sorted := append([]ipc.ServiceInfo(nil), svcs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ci, cj := sorted[i].State == "crashed", sorted[j].State == "crashed"
+		if ci != cj {
+			return ci
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 	s.allServices = sorted
 	s.targets = targets
 
@@ -151,19 +160,6 @@ func stateLabel(svc ipc.ServiceInfo) string {
 	return svc.State
 }
 
-// stateLine is the coloured status shown in the selected-service info block,
-// e.g. "running :8080", "detecting", "stopped", "crashed".
-func stateLine(svc ipc.ServiceInfo) string {
-	switch svc.State {
-	case "running":
-		return styleGreen.Render("running ") + styleMuted.Render(stateLabel(svc))
-	case "crashed":
-		return styleRed.Render("crashed")
-	default:
-		return styleMuted.Render(svc.State)
-	}
-}
-
 // truncateName shortens s to fit w display columns, keeping the head and the
 // tail and marking the cut with "…" in the middle — so a shared prefix and the
 // distinguishing suffix both stay visible.
@@ -241,70 +237,80 @@ func (s *sidebar) render(width, height int, focused bool) string {
 		top = append(top, styleMuted.Render("  (no services in target)"))
 	}
 	for i, svc := range s.services {
-		name := truncateName(svc.Name, width-3) // dot(1) + space(1) + margin(1)
-		if i == s.selected {
-			top = append(top, selectedServiceRow(width, svc.State, name))
-		} else {
-			top = append(top, stateDot(svc.State)+" "+name)
+		top = append(top, serviceRow(width, svc, i == s.selected))
+	}
+	return strings.Join(top, "\n")
+}
+
+// Column widths of a service row: "● name  :8080   2.1%".
+const (
+	rowStateW = 9 // "detecting" / "stopping" — the longest state token
+	rowCPUW   = 6 // "100.0%"
+	// Below these row widths the CPU column, then the state column, is dropped
+	// so the name keeps a usable share of a narrow sidebar.
+	rowMinWForCPU   = 26
+	rowMinWForState = 18
+)
+
+// serviceRow renders one table row of the service list — glyph, name, port or
+// state, CPU — exactly `width` columns wide. Every segment of a selected row
+// carries the selection background itself, so an SGR reset inside one styled
+// segment cannot punch a hole in the highlight.
+func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = base.Background(colorSelSidebar)
+	}
+	showState := width >= rowMinWForState
+	showCPU := width >= rowMinWForCPU
+
+	nameW := width - 2 // glyph + space
+	if showState {
+		nameW -= 1 + rowStateW
+	}
+	if showCPU {
+		nameW -= 1 + rowCPUW
+	}
+	nameW = max(1, nameW)
+
+	glyph, glyphFg := stateGlyph(svc.State)
+	row := base.Foreground(glyphFg).Render(glyph) +
+		base.Foreground(colorText).Render(" "+fmt.Sprintf("%-*s", nameW, truncateName(svc.Name, nameW)))
+
+	if showState {
+		// A running service shows where to reach it; any other state is named,
+		// in the state's own colour.
+		label, fg := stateLabel(svc), glyphFg
+		switch {
+		case svc.State == "running" && strings.HasPrefix(label, ":"):
+			fg = colorAccent
+		case svc.State == "running":
+			fg = colorMuted
 		}
+		row += base.Foreground(fg).Render(" " + fmt.Sprintf("%-*s", rowStateW, label))
 	}
-
-	// --- Bottom: info block for the selected service + action hints, pinned to
-	// the bottom edge so their position doesn't drift with the list length. ---
-
-	var bottom []string
-	if svc := s.selectedService(); svc != nil {
-		sep := "── " + truncateName(svc.Name, width-6) + " ──"
-		bottom = append(bottom,
-			styleMuted.Render(sep),
-			"  "+stateLine(*svc),
-			fmt.Sprintf("PID  %s", renderPID(svc.PID)),
-			fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)),
-			fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)),
-			fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)),
-		)
+	if showCPU {
+		cpu := ""
+		if svc.State == "running" {
+			cpu = fmt.Sprintf("%.1f%%", svc.CPUPct)
+		}
+		row += base.Foreground(cpuColor(svc.CPUPct)).Render(" " + fmt.Sprintf("%*s", rowCPUW, cpu))
 	}
-	bottom = append(bottom,
-		strings.Repeat("─", width),
-		renderHint("s", "start"),
-		renderHint("x", "stop"),
-	)
-
-	topStr := strings.Join(top, "\n")
-	bottomStr := strings.Join(bottom, "\n")
-
-	// Fill the space between the list and the bottom block. Clamped to one line
-	// so an over-long list still renders (it overflows past the bottom edge,
-	// the same as before — the sidebar has no scroll yet).
-	gap := height - lipgloss.Height(topStr) - lipgloss.Height(bottomStr)
-	if gap < 1 {
-		gap = 1
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += base.Render(strings.Repeat(" ", pad))
 	}
-	return topStr + strings.Repeat("\n", gap+1) + bottomStr
+	return row
 }
 
-// selectedServiceRow builds a full-width highlighted row for the selected
-// service. Each segment explicitly carries the selection background so that
-// internal SGR resets from sub-styles do not clear it mid-line.
-func selectedServiceRow(width int, state, name string) string {
-	sel := lipgloss.NewStyle().Background(colorSelSidebar)
-
-	glyph, dotFg := stateGlyph(state)
-	dot := sel.Foreground(dotFg).Render(glyph)
-	namePart := sel.Foreground(colorText).Render(" " + name)
-	content := dot + namePart
-
-	// Fill remaining columns with the selection background.
-	if pad := width - lipgloss.Width(content); pad > 0 {
-		content += sel.Render(strings.Repeat(" ", pad))
+// cpuColor keeps an idle CPU figure quiet: only a busy service is coloured, so
+// yellow and red mean something when they appear.
+func cpuColor(pct float64) lipgloss.TerminalColor {
+	switch {
+	case pct > 80:
+		return colorRed
+	case pct > 50:
+		return colorYellow
+	default:
+		return colorMuted
 	}
-	return content
-}
-
-func renderCPUPct(pct float64) string {
-	s := fmt.Sprintf("%.1f%%", pct)
-	if pct > 80 {
-		return styleRed.Render(s)
-	}
-	return styleYellow.Render(s)
 }

@@ -882,23 +882,23 @@ func (m *model) updateLogFile() {
 }
 
 const (
-	sidebarMinW = 24
-	sidebarMaxW = 40
+	sidebarMinW = 28
+	sidebarMaxW = 44
 )
 
 // sidebarWidth is the sidebar column count: wide enough for the longest service
-// name (plus the dot, a space, and a right margin), clamped to
-// [sidebarMinW, sidebarMaxW] and never more than a third of the terminal.
+// name plus the row's glyph, state and CPU columns, clamped to
+// [sidebarMinW, sidebarMaxW] and never more than two fifths of the terminal.
 func (m model) sidebarWidth() int {
 	w := sidebarMinW
 	for _, svc := range m.sidebarC.allServices {
-		if n := lipgloss.Width(svc.Name) + 3; n > w {
+		if n := lipgloss.Width(svc.Name) + 2 + 1 + rowStateW + 1 + rowCPUW; n > w {
 			w = n
 		}
 	}
 	w = min(w, sidebarMaxW)
 	if m.width > 0 {
-		w = min(w, m.width/3)
+		w = min(w, m.width*2/5)
 	}
 	return max(w, sidebarMinW/2)
 }
