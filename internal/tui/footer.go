@@ -51,6 +51,7 @@ type footerCtx struct {
 	editing      bool // a form modal (service or target editor) is open
 	confirming   bool // the remove confirm is open
 	picking      bool // the target picker is open
+	helping      bool // the help overlay is open
 }
 
 // hint is one key/label pair in the footer. pri ranks it for narrow terminals:
@@ -101,6 +102,8 @@ func (c footerCtx) hints() []hint {
 		return []hint{{"Tab", "field", 2}, {"↵", "save", 0}, {"Esc", "cancel", 1}}
 	case c.picking:
 		return []hint{{"↵", "filter", 0}, {"e", "edit", 2}, {"Esc", "close", 1}}
+	case c.helping:
+		return []hint{{"Esc", "close", 0}}
 	}
 
 	if c.focus == focusMain && c.tab == tabLogs {
@@ -151,7 +154,7 @@ func (f *footerBar) render(c footerCtx, width int) string {
 	if f.toast != "" {
 		return base.Foreground(colorAccent).Render(ansi.Truncate(f.toast, inner, ""))
 	}
-	if c.confirming || c.editing || c.picking {
+	if c.confirming || c.editing || c.picking || c.helping {
 		return base.Render(fitHints(c.hints(), inner))
 	}
 

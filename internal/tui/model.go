@@ -74,6 +74,7 @@ type model struct {
 	targetEditC targetEditPanel
 	removeC     removeConfirm
 	pickerC     targetPicker
+	helpC       helpPanel
 	headerC     headerBar
 	footerC     footerBar
 
@@ -234,6 +235,18 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pickerC.open {
 		return m.handlePickerKey(msg)
 	}
+	if m.helpC.open {
+		// Any of the keys a user would reach for closes it; nothing leaks to
+		// the panes behind.
+		switch {
+		case msg.Type == tea.KeyCtrlC:
+			return m, tea.Quit
+		case key.Matches(msg, keys.Escape), key.Matches(msg, keys.Help),
+			key.Matches(msg, keys.Enter), msg.String() == "q":
+			m.helpC.open = false
+		}
+		return m, nil
+	}
 
 	switch {
 	// ctrl+c with an active visual selection copies instead of quitting.
@@ -369,6 +382,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.StopAll):
 		return m.runAllListed("stop", m.doStopTarget, m.doStopAll)
 
+	case key.Matches(msg, keys.Help):
+		m.helpC.open = true
+
 	// t opens the target picker: choose which target filters the service list.
 	case key.Matches(msg, keys.Target):
 		if len(m.sidebarC.targets) == 0 {
@@ -422,10 +438,10 @@ func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll 
 	return m, cmd
 }
 
-// modalOpen reports whether a modal — an editor, the remove confirm, or the
-// target picker — currently owns the screen and all input.
+// modalOpen reports whether a modal — an editor, the remove confirm, the target
+// picker, or the help overlay — currently owns the screen and all input.
 func (m model) modalOpen() bool {
-	return m.editC.open || m.targetEditC.open || m.removeC.open || m.pickerC.open
+	return m.editC.open || m.targetEditC.open || m.removeC.open || m.pickerC.open || m.helpC.open
 }
 
 // handlePickerKey routes a key to the open target picker: j/k move, Enter
@@ -1216,6 +1232,8 @@ func (m model) View() string {
 		modal = m.removeC.view()
 	case m.pickerC.open:
 		modal = m.pickerC.view(m.sidebarC.targets, m.sidebarC.allServices, m.sidebarC.filterTarget)
+	case m.helpC.open:
+		modal = m.helpC.view()
 	}
 	if modal != "" {
 		body = overlay(body, modal, m.width, bodyH)
@@ -1229,6 +1247,7 @@ func (m model) View() string {
 		editing:      m.editC.open || m.targetEditC.open,
 		confirming:   m.removeC.open,
 		picking:      m.pickerC.open,
+		helping:      m.helpC.open,
 	}, m.width)
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)

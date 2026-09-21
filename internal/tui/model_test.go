@@ -147,6 +147,17 @@ func TestModel_MouseClick_SetsCorrectCursor(t *testing.T) {
 	assert.Equal(t, 4, m3.(model).logsC.sb.cursor, "clicking the row that draws line-04 selects line 4")
 }
 
+// assertViewFits checks View() is exactly h rows and no row is wider than w —
+// the invariant every screen, modal or not, has to keep.
+func assertViewFits(t *testing.T, m model, w, h int) {
+	t.Helper()
+	rows := strings.Split(m.View(), "\n")
+	assert.Len(t, rows, h, "%dx%d: row count", w, h)
+	for i, row := range rows {
+		assert.LessOrEqual(t, lipgloss.Width(row), w, "%dx%d: row %d width", w, h, i)
+	}
+}
+
 // TestModel_ViewFillsTerminalExactly guards the layout arithmetic: the header,
 // the two bordered panes and the footer must add up to exactly the terminal
 // size. One row too many scrolls the header off a real terminal; one column too

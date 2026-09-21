@@ -48,6 +48,7 @@ func allFooterContexts() map[string]footerCtx {
 		"editing":         {editing: true},
 		"confirming":      {confirming: true},
 		"picking":         {picking: true},
+		"helping":         {helping: true},
 	}
 }
 
