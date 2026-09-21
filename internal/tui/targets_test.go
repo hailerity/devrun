@@ -45,7 +45,7 @@ func TestSidebar_TargetsAreNotRows(t *testing.T) {
 	sb.moveDown()
 	assert.Equal(t, 0, sb.selected, "wraps back to first")
 
-	out := plain(sb.render(28, 24))
+	out := plain(sb.render(28))
 	assert.NotContains(t, out, "TARGETS")
 	assert.NotContains(t, out, "t1")
 }
@@ -244,7 +244,7 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 	sb.setFilter("t2")
 	require.Empty(t, sb.services)
 
-	out := plain(sb.render(30, 24))
+	out := plain(sb.render(30))
 	assert.Contains(t, out, "no services in target")
 }
 

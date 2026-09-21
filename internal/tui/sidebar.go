@@ -24,6 +24,8 @@ type sidebar struct {
 	allServices []ipc.ServiceInfo // full scoped list: crashed first, then by Name
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
+	top         int               // first visible services row — the scroll window's offset
+	rows        int               // visible row count, set by the model's layout; 0 = not laid out yet
 
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
@@ -69,9 +71,10 @@ func (s *sidebar) selectServiceByName(n string) {
 	for i, svc := range s.services {
 		if svc.Name == n {
 			s.selected = i
-			return
+			break
 		}
 	}
+	s.scrollToCursor()
 }
 
 // target returns the configured target called name, or nil.
@@ -125,6 +128,30 @@ func (s *sidebar) setFilter(name string) {
 	s.selectServiceByName(curSvc)
 }
 
+// setRows tells the sidebar how many rows its pane can show, and re-anchors the
+// scroll window on the cursor.
+func (s *sidebar) setRows(n int) {
+	s.rows = n
+	s.scrollToCursor()
+}
+
+// scrollToCursor moves the window the least it must to keep the cursor visible,
+// and never leaves blank rows below the list when there is more above. Called
+// after anything that moves the cursor or changes the list.
+func (s *sidebar) scrollToCursor() {
+	if s.rows <= 0 {
+		s.top = 0 // not laid out yet: render() shows everything
+		return
+	}
+	if s.selected < s.top {
+		s.top = s.selected
+	}
+	if s.selected >= s.top+s.rows {
+		s.top = s.selected - s.rows + 1
+	}
+	s.top = max(0, min(s.top, len(s.services)-s.rows))
+}
+
 // moveDown / moveUp walk the (filtered) service list, wrapping at the ends.
 
 func (s *sidebar) moveDown() {
@@ -132,6 +159,7 @@ func (s *sidebar) moveDown() {
 		return
 	}
 	s.selected = (s.selected + 1) % len(s.services)
+	s.scrollToCursor()
 }
 
 func (s *sidebar) moveUp() {
@@ -139,6 +167,7 @@ func (s *sidebar) moveUp() {
 		return
 	}
 	s.selected = (s.selected - 1 + len(s.services)) % len(s.services)
+	s.scrollToCursor()
 }
 
 func (s *sidebar) selectedService() *ipc.ServiceInfo {
@@ -167,17 +196,50 @@ func truncateName(s string, w int) string {
 	if w < 1 {
 		w = 1
 	}
-	if lipgloss.Width(s) <= w {
+	total := lipgloss.Width(s)
+	if total <= w {
 		return s
 	}
 	if w == 1 {
 		return "…"
 	}
-	r := []rune(s)
+	// Cut by display columns, not runes: a CJK or emoji name is two columns per
+	// rune, and a rune-count cut would hand back something wider than w. Both
+	// ends are measured rune by rune rather than left to a library's handling of
+	// a cut that lands inside a wide rune (ansi.TruncateLeft keeps the whole
+	// rune, which overshoots by a column) — so the result can come back a column
+	// under w, never over.
 	keep := w - 1 // room taken by the ellipsis
-	head := (keep + 1) / 2
-	tail := keep - head
-	return string(r[:head]) + "…" + string(r[len(r)-tail:])
+	headW := (keep + 1) / 2
+	tailW := keep - headW
+
+	r := []rune(s)
+	head, used := 0, 0
+	for head < len(r) {
+		rw := lipgloss.Width(string(r[head]))
+		if used+rw > headW {
+			break
+		}
+		used += rw
+		head++
+	}
+	tail, used := len(r), 0
+	for tail > head {
+		rw := lipgloss.Width(string(r[tail-1]))
+		if used+rw > tailW {
+			break
+		}
+		used += rw
+		tail--
+	}
+	return string(r[:head]) + "…" + string(r[tail:])
+}
+
+// padRight pads s with spaces to w display columns. fmt's %-*s counts runes,
+// which under-pads nothing but over-runs on wide characters — this counts what
+// the terminal will actually draw.
+func padRight(s string, w int) string {
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
 }
 
 // stateGlyph returns the marker and colour for a service state. The shape alone
@@ -222,12 +284,18 @@ func (s *sidebar) frame(focused bool) paneFrame {
 			}
 		}
 		f.footLeft = styleMuted.Render(fmt.Sprintf("%d/%d up", up, len(s.services)))
+		// Say so when the list is windowed — otherwise rows above or below the
+		// fold are invisible with nothing to hint they exist.
+		if first, last := s.window(); last-first < len(s.services) {
+			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.services)))
+		}
 	}
 	return f
 }
 
-// render draws the list rows for a content area `width` columns wide.
-func (s *sidebar) render(width, height int) string {
+// render draws the visible window of list rows for a content area `width`
+// columns wide.
+func (s *sidebar) render(width int) string {
 	switch {
 	case len(s.allServices) == 0 && !s.loaded:
 		return styleMuted.Render(" Loading services…")
@@ -236,11 +304,21 @@ func (s *sidebar) render(width, height int) string {
 	case len(s.services) == 0:
 		return styleMuted.Render(" (no services in target)")
 	}
-	rows := make([]string, len(s.services))
-	for i, svc := range s.services {
-		rows[i] = serviceRow(width, svc, i == s.selected)
+	first, last := s.window()
+	rows := make([]string, 0, last-first)
+	for i := first; i < last; i++ {
+		rows = append(rows, serviceRow(width, s.services[i], i == s.selected))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// window returns the half-open range of service rows currently visible.
+func (s *sidebar) window() (first, last int) {
+	if s.rows <= 0 {
+		return 0, len(s.services)
+	}
+	first = max(0, min(s.top, len(s.services)))
+	return first, min(len(s.services), first+s.rows)
 }
 
 // Column widths of a service row: " ● name  :8080   2.1%".
@@ -276,7 +354,7 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
 
 	glyph, glyphFg := stateGlyph(svc.State)
 	row := base.Foreground(glyphFg).Render(" "+glyph) +
-		base.Foreground(colorText).Render(" "+fmt.Sprintf("%-*s", nameW, truncateName(svc.Name, nameW)))
+		base.Foreground(colorText).Render(" "+padRight(truncateName(svc.Name, nameW), nameW))
 
 	if showState {
 		// A running service shows where to reach it; any other state is named,

@@ -1,12 +1,14 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func svcNames(sb *sidebar) []string {
@@ -115,7 +117,7 @@ func TestTruncateName_TinyWidths(t *testing.T) {
 
 func TestSidebar_LoadingBeforeFirstPoll(t *testing.T) {
 	sb := &sidebar{}
-	out := plain(sb.render(28, 24))
+	out := plain(sb.render(28))
 	assert.Contains(t, out, "Loading services…")
 	assert.NotContains(t, out, "devrun add")
 }
@@ -123,7 +125,7 @@ func TestSidebar_LoadingBeforeFirstPoll(t *testing.T) {
 func TestSidebar_EmptyStateAfterFirstPoll(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(nil, nil) // first poll returned zero services
-	out := plain(sb.render(28, 24))
+	out := plain(sb.render(28))
 	assert.Contains(t, out, "No services — run devrun add <name>")
 	assert.NotContains(t, out, "Loading")
 }
@@ -173,6 +175,10 @@ func TestServiceRow_AlwaysExactlyWidth(t *testing.T) {
 		{Name: "api", State: "running", Port: intp(8080), CPUPct: 100},
 		{Name: "a-service-with-a-very-long-name-indeed", State: "stopping"},
 		{Name: "x"},
+		// Two columns per rune: padding or truncating by rune count overshoots.
+		{Name: "決済", State: "running", Port: intp(9000), CPUPct: 3},
+		{Name: "決済サービス-とても長い名前のサービス", State: "crashed"},
+		{Name: "🚀-rocket", State: "running"},
 	}
 	for _, w := range []int{8, 17, 18, 25, 26, 30, 44} {
 		for _, svc := range svcs {
@@ -204,7 +210,7 @@ func TestCPUColor_OnlyBusyIsColoured(t *testing.T) {
 func TestSidebar_NoInfoBlockOrDuplicateHints(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web"}}, nil)
-	out := plain(sb.render(30, 20))
+	out := plain(sb.render(30))
 	assert.NotContains(t, out, "PID")
 	assert.NotContains(t, out, "start", "s/x hints live in the footer only")
 }
@@ -226,4 +232,96 @@ func TestStateGlyph_DistinctShapePerState(t *testing.T) {
 	exited, _ := stateGlyph("exited")
 	stopped, _ := stateGlyph("stopped")
 	assert.Equal(t, stopped, exited, "any not-running state falls back to the hollow glyph")
+}
+
+// truncateName must never return more than w display columns, including for
+// names whose runes are two columns wide.
+func TestTruncateName_WideRunesNeverExceedWidth(t *testing.T) {
+	name := "決済サービス-とても長い名前"
+	for w := 1; w <= lipgloss.Width(name)+2; w++ {
+		got := truncateName(name, w)
+		assert.LessOrEqual(t, lipgloss.Width(got), w, "w=%d got %q", w, got)
+	}
+	assert.Equal(t, name, truncateName(name, lipgloss.Width(name)), "a name that fits is untouched")
+}
+
+func TestPadRight_CountsDisplayColumns(t *testing.T) {
+	assert.Equal(t, 8, lipgloss.Width(padRight("決済", 8)))
+	assert.Equal(t, "ab  ", padRight("ab", 4))
+	assert.Equal(t, "toolong", padRight("toolong", 3), "never truncates")
+}
+
+func manyServices(n int) []ipc.ServiceInfo {
+	out := make([]ipc.ServiceInfo, n)
+	for i := range out {
+		out[i] = ipc.ServiceInfo{Name: fmt.Sprintf("svc-%02d", i), State: "stopped"}
+	}
+	return out
+}
+
+// The pane clips the list to its height, so the sidebar must scroll: wherever
+// the cursor goes, its row has to be inside the rendered window.
+func TestSidebar_WindowFollowsCursor(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(manyServices(40), nil)
+	sb.setRows(10)
+
+	visible := func() bool {
+		first, last := sb.window()
+		return sb.selected >= first && sb.selected < last && last-first == 10
+	}
+	for i := 0; i < 45; i++ { // past the end: wraps back to the top
+		require.True(t, visible(), "moving down, selected=%d top=%d", sb.selected, sb.top)
+		sb.moveDown()
+	}
+	for i := 0; i < 45; i++ { // and back up through the wrap to the bottom
+		require.True(t, visible(), "moving up, selected=%d top=%d", sb.selected, sb.top)
+		sb.moveUp()
+	}
+}
+
+func TestSidebar_WindowMovesOnlyWhenItMust(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(manyServices(40), nil)
+	sb.setRows(10)
+
+	for i := 0; i < 9; i++ {
+		sb.moveDown()
+	}
+	assert.Equal(t, 0, sb.top, "the cursor reaches the last visible row without scrolling")
+	sb.moveDown()
+	assert.Equal(t, 1, sb.top, "one more row scrolls by exactly one")
+	sb.moveUp()
+	assert.Equal(t, 1, sb.top, "moving back inside the window does not scroll")
+}
+
+func TestSidebar_WindowSurvivesShrinkingListAndResize(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(manyServices(40), nil)
+	sb.setRows(10)
+	sb.selected = 39
+	sb.scrollToCursor()
+	require.Equal(t, 30, sb.top)
+
+	// The list shrinks under the cursor: no blank rows, cursor still visible.
+	sb.update(manyServices(12), nil)
+	first, last := sb.window()
+	assert.Equal(t, 10, last-first, "the window stays full while there are rows to fill it")
+	assert.True(t, sb.selected >= first && sb.selected < last)
+
+	// A taller pane than the list shows everything from the top.
+	sb.setRows(50)
+	first, last = sb.window()
+	assert.Equal(t, 0, first)
+	assert.Equal(t, 12, last)
+}
+
+func TestSidebar_FooterSaysWhenTheListIsWindowed(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(manyServices(40), nil)
+	sb.setRows(10)
+	assert.Contains(t, plain(sb.frame(true).footRight), "1–10 of 40")
+
+	sb.update(manyServices(5), nil)
+	assert.Empty(t, sb.frame(true).footRight, "nothing to say when every row fits")
 }

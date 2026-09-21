@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -54,7 +55,7 @@ func TestModel_DaemonErrorEndsLoadingState(t *testing.T) {
 	m = m2.(model)
 	assert.True(t, m.sidebarC.loaded, "a first-poll error ends the loading state")
 
-	out := plain(m.sidebarC.render(28, 24))
+	out := plain(m.sidebarC.render(28))
 	assert.Contains(t, out, "devrun add", "sidebar shows the empty state, not a spinner, after the error")
 }
 
@@ -170,6 +171,33 @@ func TestModel_ViewFillsTerminalExactly(t *testing.T) {
 		for i, row := range rows {
 			assert.LessOrEqual(t, lipgloss.Width(row), size[0], "%dx%d: row %d width", size[0], size[1], i)
 		}
+	}
+}
+
+// TestModel_SelectedServiceStaysOnScreenInLongList is the end-to-end check for
+// the sidebar's scroll window: with far more services than rows, the service the
+// main pane is showing must always be drawn in the sidebar too.
+func TestModel_SelectedServiceStaysOnScreenInLongList(t *testing.T) {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 16})
+	m = m2.(model)
+	m.sidebarC.update(manyServices(40), nil)
+	m.relayout()
+
+	for i := 0; i < 40; i++ {
+		name := m.sidebarC.selectedService().Name
+		rows := strings.Split(plain(m.View()), "\n")
+		require.Len(t, rows, 16)
+		found := false
+		for _, row := range rows[headerRows+1 : 16-footerRows-1] {
+			// Only the sidebar's share of the row — the main pane's title
+			// names the service too and must not satisfy the check.
+			if strings.Contains(ansi.Truncate(row, m.sidebarWidth(), ""), name) {
+				found = true
+			}
+		}
+		require.True(t, found, "%s is selected but not drawn in the sidebar", name)
+		m = pressKey(m, 'j')
 	}
 }
 

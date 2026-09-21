@@ -90,9 +90,9 @@ func (p targetPicker) view(targets []sidebarTarget, all []ipc.ServiceInfo, filte
 		} else {
 			count = styleMuted.Render(count)
 		}
-		line := fmt.Sprintf("%s %-*s  ", styleAccent.Render(marker), nameW, label)
+		line := styleAccent.Render(marker) + " " + padRight(label, nameW) + "  "
 		if i == p.cursor {
-			line = styleAccent.Render(marker) + " " + styleText.Bold(true).Render(fmt.Sprintf("%-*s", nameW, label)) + "  "
+			line = styleAccent.Render(marker) + " " + styleText.Bold(true).Render(padRight(label, nameW)) + "  "
 		}
 		return line + count
 	}

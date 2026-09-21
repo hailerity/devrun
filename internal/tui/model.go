@@ -925,6 +925,8 @@ func (m *model) relayout() {
 	}
 	w, h := m.mainFrame().innerSize(m.width-m.sidebarWidth(), m.bodyHeight())
 	m.logsC.sb.resize(w, h)
+	_, sideRows := paneFrame{}.innerSize(m.sidebarWidth(), m.bodyHeight())
+	m.sidebarC.setRows(sideRows)
 }
 
 func (m model) pollDaemon() tea.Cmd {
@@ -1197,9 +1199,9 @@ func (m model) View() string {
 
 	// Body: two bordered panes side by side; the focused one takes the accent.
 	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
-	sideW, sideH := sideFrame.innerSize(sidebarW, bodyH)
+	sideW, _ := sideFrame.innerSize(sidebarW, bodyH)
 	body := lipgloss.JoinHorizontal(lipgloss.Top,
-		sideFrame.render(m.sidebarC.render(sideW, sideH), sidebarW, bodyH),
+		sideFrame.render(m.sidebarC.render(sideW), sidebarW, bodyH),
 		m.renderMain(mainW, bodyH),
 	)
 
