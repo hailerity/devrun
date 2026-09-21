@@ -17,8 +17,7 @@ type sidebarTarget struct {
 	members []string
 }
 
-// allServicesLabel names the "no filter" choice in the target picker and in
-// start/stop-all toasts.
+// allServicesLabel names the "no filter" choice in the target picker.
 const allServicesLabel = "All services"
 
 type sidebar struct {

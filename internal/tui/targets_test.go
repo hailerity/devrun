@@ -2,10 +2,12 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
@@ -244,4 +246,25 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 
 	out := plain(sb.render(30, 24, true))
 	assert.Contains(t, out, "no services in target")
+}
+
+// A config with many targets and a large target must not grow the picker past a
+// normal terminal: rows window around the cursor and members are capped.
+func TestTargetPicker_LongListsStayBounded(t *testing.T) {
+	var rows []sidebarTarget
+	var big []string
+	for i := 0; i < 40; i++ {
+		big = append(big, fmt.Sprintf("svc-%02d", i))
+	}
+	for i := 0; i < 30; i++ {
+		rows = append(rows, sidebarTarget{name: fmt.Sprintf("target-%02d", i), members: big})
+	}
+	var p targetPicker
+	p.openAt(rows, "target-29") // cursor on the last row
+
+	out := plain(p.view(rows, nil, "target-29", 100, 36))
+	assert.LessOrEqual(t, lipgloss.Height(out), 36)
+	assert.Contains(t, out, "target-29", "the window follows the cursor")
+	assert.NotContains(t, out, "target-05")
+	assert.Contains(t, out, "+32 more")
 }

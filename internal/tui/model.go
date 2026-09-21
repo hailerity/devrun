@@ -67,15 +67,15 @@ type model struct {
 	focus     focusKind
 	activeTab tabKind
 
-	sidebarC       sidebar
-	logsC          logsPanel
-	detailsC       detailsPanel
-	editC          editPanel
-	targetEditC    targetEditPanel
-	removeC        removeConfirm
-	pickerC        targetPicker
-	headerC        headerBar
-	footerC        footerBar
+	sidebarC    sidebar
+	logsC       logsPanel
+	detailsC    detailsPanel
+	editC       editPanel
+	targetEditC targetEditPanel
+	removeC     removeConfirm
+	pickerC     targetPicker
+	headerC     headerBar
+	footerC     footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -363,20 +363,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// S / X act on everything listed: the filtering target when there is one
 	// (so the daemon tracks it as an active target), otherwise every service.
 	case key.Matches(msg, keys.StartAll):
-		if name := m.sidebarC.filterTarget; name != "" {
-			m.footerC.showToast("starting target " + name)
-			return m, m.doStartTarget(name)
-		}
-		m.footerC.showToast("starting all services")
-		return m, m.doStartAll()
+		return m.runAllListed("start", m.doStartTarget, m.doStartAll)
 
 	case key.Matches(msg, keys.StopAll):
-		if name := m.sidebarC.filterTarget; name != "" {
-			m.footerC.showToast("stopping target " + name)
-			return m, m.doStopTarget(name)
-		}
-		m.footerC.showToast("stopping all services")
-		return m, m.doStopAll()
+		return m.runAllListed("stop", m.doStopTarget, m.doStopAll)
 
 	// t opens the target picker: choose which target filters the service list.
 	case key.Matches(msg, keys.Target):
@@ -408,6 +398,27 @@ func (m model) onServiceRow() bool {
 	return m.focus == focusSidebar &&
 		m.registry != nil &&
 		m.sidebarC.selectedService() != nil
+}
+
+// runAllListed runs the S / X action over everything listed — forTarget with the
+// filtering target when there is one, otherwise forAll — and toasts what it is
+// doing. The toast only promises an action that was actually dispatched: with no
+// daemon socket, or nothing runnable in scope, it says so instead.
+func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll func() tea.Cmd) (tea.Model, tea.Cmd) {
+	scope := "all services"
+	var cmd tea.Cmd
+	if name := m.sidebarC.filterTarget; name != "" {
+		scope = "target " + name
+		cmd = forTarget(name)
+	} else {
+		cmd = forAll()
+	}
+	if cmd == nil {
+		m.footerC.showToast("nothing to " + verb + " in " + scope)
+		return m, nil
+	}
+	m.footerC.showToast(verb + "ing " + scope)
+	return m, cmd
 }
 
 // modalOpen reports whether a modal — an editor, the remove confirm, or the

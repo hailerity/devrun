@@ -311,6 +311,13 @@ func TestModel_StartStopAllListed(t *testing.T) {
 		assert.Contains(t, err.err.Error(), "start all:", "no filter → the start-all batch")
 	}
 
+	// No socket → nothing is dispatched, and the toast must not claim otherwise.
+	noSock := m
+	noSock.socketPath = ""
+	m2, cmd = noSock.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	assert.Nil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "nothing to start")
+
 	m.sidebarC.setFilter("frontend")
 	m2, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
 	require.NotNil(t, cmd)
