@@ -45,7 +45,7 @@ func TestSidebar_TargetsAreNotRows(t *testing.T) {
 	sb.moveDown()
 	assert.Equal(t, 0, sb.selected, "wraps back to first")
 
-	out := plain(sb.render(28, 24, true))
+	out := plain(sb.render(28))
 	assert.NotContains(t, out, "TARGETS")
 	assert.NotContains(t, out, "t1")
 }
@@ -87,13 +87,13 @@ func TestSidebar_SetFilterKeepsSelectedService(t *testing.T) {
 	assert.Equal(t, "db", sb.services[sb.selected].Name)
 }
 
-func TestSidebar_FilterShownInHeading(t *testing.T) {
+func TestSidebar_FilterShownInPaneTitle(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-	assert.NotContains(t, plain(sb.render(30, 24, true)), "·")
+	assert.NotContains(t, plain(sb.frame(true).title), "·")
 
 	sb.setFilter("t1")
-	assert.Contains(t, plain(sb.render(30, 24, true)), "SERVICES · t1")
+	assert.Contains(t, plain(sb.frame(true).title), "SERVICES · t1")
 }
 
 func TestSidebar_FilterPreservedAcrossUpdate(t *testing.T) {
@@ -141,7 +141,7 @@ func TestTargetPicker_ViewMarksFilterAndUnreportedMembers(t *testing.T) {
 	var p targetPicker
 	rows := targetRows()
 	p.openAt(rows, "t2") // members: api, db — db is not reported
-	out := plain(p.view(rows, []ipc.ServiceInfo{{Name: "api", State: "running"}}, "t2", 80, 30))
+	out := plain(p.view(rows, []ipc.ServiceInfo{{Name: "api", State: "running"}}, "t2"))
 	assert.Contains(t, out, "▸")
 	assert.Contains(t, out, "1/2")
 	assert.Contains(t, out, "not reported")
@@ -244,7 +244,7 @@ func TestSidebar_EmptyFilterShowsPlaceholderRow(t *testing.T) {
 	sb.setFilter("t2")
 	require.Empty(t, sb.services)
 
-	out := plain(sb.render(30, 24, true))
+	out := plain(sb.render(30))
 	assert.Contains(t, out, "no services in target")
 }
 
@@ -262,7 +262,7 @@ func TestTargetPicker_LongListsStayBounded(t *testing.T) {
 	var p targetPicker
 	p.openAt(rows, "target-29") // cursor on the last row
 
-	out := plain(p.view(rows, nil, "target-29", 100, 36))
+	out := plain(p.view(rows, nil, "target-29"))
 	assert.LessOrEqual(t, lipgloss.Height(out), 36)
 	assert.Contains(t, out, "target-29", "the window follows the cursor")
 	assert.NotContains(t, out, "target-05")

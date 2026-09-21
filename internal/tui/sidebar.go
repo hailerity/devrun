@@ -21,9 +21,11 @@ type sidebarTarget struct {
 const allServicesLabel = "All services"
 
 type sidebar struct {
-	allServices []ipc.ServiceInfo // full scoped list, sorted by Name
+	allServices []ipc.ServiceInfo // full scoped list: crashed first, then by Name
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
+	top         int               // first visible services row — the scroll window's offset
+	rows        int               // visible row count, set by the model's layout; 0 = not laid out yet
 
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
@@ -39,8 +41,17 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 		curSvc = s.services[s.selected].Name
 	}
 
+	// Crashed services lead the list so a failure is never below the fold;
+	// everything else stays alphabetical. The cursor follows its service by
+	// name (below), so a row that jumps to the top takes the highlight with it.
 	sorted := append([]ipc.ServiceInfo(nil), svcs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ci, cj := sorted[i].State == "crashed", sorted[j].State == "crashed"
+		if ci != cj {
+			return ci
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 	s.allServices = sorted
 	s.targets = targets
 
@@ -60,9 +71,10 @@ func (s *sidebar) selectServiceByName(n string) {
 	for i, svc := range s.services {
 		if svc.Name == n {
 			s.selected = i
-			return
+			break
 		}
 	}
+	s.scrollToCursor()
 }
 
 // target returns the configured target called name, or nil.
@@ -116,6 +128,30 @@ func (s *sidebar) setFilter(name string) {
 	s.selectServiceByName(curSvc)
 }
 
+// setRows tells the sidebar how many rows its pane can show, and re-anchors the
+// scroll window on the cursor.
+func (s *sidebar) setRows(n int) {
+	s.rows = n
+	s.scrollToCursor()
+}
+
+// scrollToCursor moves the window the least it must to keep the cursor visible,
+// and never leaves blank rows below the list when there is more above. Called
+// after anything that moves the cursor or changes the list.
+func (s *sidebar) scrollToCursor() {
+	if s.rows <= 0 {
+		s.top = 0 // not laid out yet: render() shows everything
+		return
+	}
+	if s.selected < s.top {
+		s.top = s.selected
+	}
+	if s.selected >= s.top+s.rows {
+		s.top = s.selected - s.rows + 1
+	}
+	s.top = max(0, min(s.top, len(s.services)-s.rows))
+}
+
 // moveDown / moveUp walk the (filtered) service list, wrapping at the ends.
 
 func (s *sidebar) moveDown() {
@@ -123,6 +159,7 @@ func (s *sidebar) moveDown() {
 		return
 	}
 	s.selected = (s.selected + 1) % len(s.services)
+	s.scrollToCursor()
 }
 
 func (s *sidebar) moveUp() {
@@ -130,6 +167,7 @@ func (s *sidebar) moveUp() {
 		return
 	}
 	s.selected = (s.selected - 1 + len(s.services)) % len(s.services)
+	s.scrollToCursor()
 }
 
 func (s *sidebar) selectedService() *ipc.ServiceInfo {
@@ -151,19 +189,6 @@ func stateLabel(svc ipc.ServiceInfo) string {
 	return svc.State
 }
 
-// stateLine is the coloured status shown in the selected-service info block,
-// e.g. "running :8080", "detecting", "stopped", "crashed".
-func stateLine(svc ipc.ServiceInfo) string {
-	switch svc.State {
-	case "running":
-		return styleGreen.Render("running ") + styleMuted.Render(stateLabel(svc))
-	case "crashed":
-		return styleRed.Render("crashed")
-	default:
-		return styleMuted.Render(svc.State)
-	}
-}
-
 // truncateName shortens s to fit w display columns, keeping the head and the
 // tail and marking the cut with "…" in the middle — so a shared prefix and the
 // distinguishing suffix both stay visible.
@@ -171,138 +196,200 @@ func truncateName(s string, w int) string {
 	if w < 1 {
 		w = 1
 	}
-	if lipgloss.Width(s) <= w {
+	total := lipgloss.Width(s)
+	if total <= w {
 		return s
 	}
 	if w == 1 {
 		return "…"
 	}
-	r := []rune(s)
+	// Cut by display columns, not runes: a CJK or emoji name is two columns per
+	// rune, and a rune-count cut would hand back something wider than w. Both
+	// ends are measured rune by rune rather than left to a library's handling of
+	// a cut that lands inside a wide rune (ansi.TruncateLeft keeps the whole
+	// rune, which overshoots by a column) — so the result can come back a column
+	// under w, never over.
 	keep := w - 1 // room taken by the ellipsis
-	head := (keep + 1) / 2
-	tail := keep - head
-	return string(r[:head]) + "…" + string(r[len(r)-tail:])
+	headW := (keep + 1) / 2
+	tailW := keep - headW
+
+	r := []rune(s)
+	head, used := 0, 0
+	for head < len(r) {
+		rw := lipgloss.Width(string(r[head]))
+		if used+rw > headW {
+			break
+		}
+		used += rw
+		head++
+	}
+	tail, used := len(r), 0
+	for tail > head {
+		rw := lipgloss.Width(string(r[tail-1]))
+		if used+rw > tailW {
+			break
+		}
+		used += rw
+		tail--
+	}
+	return string(r[:head]) + "…" + string(r[tail:])
+}
+
+// padRight pads s with spaces to w display columns. fmt's %-*s counts runes,
+// which under-pads nothing but over-runs on wide characters — this counts what
+// the terminal will actually draw.
+func padRight(s string, w int) string {
+	return s + strings.Repeat(" ", max(0, w-lipgloss.Width(s)))
+}
+
+// stateGlyph returns the marker and colour for a service state. The shape alone
+// identifies the state — ● running, ◐ in transition (starting / stopping),
+// ✖ crashed, ○ not running — so it still reads under --no-color or for a
+// colour-blind user; the colour only reinforces it.
+func stateGlyph(state string) (string, lipgloss.TerminalColor) {
+	switch state {
+	case "running":
+		return "●", colorGreen
+	case "starting", "stopping":
+		return "◐", colorYellow
+	case "crashed":
+		return "✖", colorRed
+	default:
+		return "○", colorMuted
+	}
 }
 
 func stateDot(state string) string {
-	switch state {
-	case "running":
-		return styleGreen.Render("●")
-	case "crashed":
-		return styleRed.Render("●")
-	default:
-		return styleMuted.Render("●")
-	}
+	glyph, fg := stateGlyph(state)
+	return lipgloss.NewStyle().Foreground(fg).Render(glyph)
 }
 
-// sectionHeader renders a bordered sidebar column heading, accented while the
-// cursor is in that section.
-func sectionHeader(label string, width int, accented bool) string {
-	txt := styleMuted.Render(label)
-	if accented {
-		txt = styleAccent.Underline(true).Render(label)
+// frame is the sidebar's border: the title names the list and any target
+// filtering it — so the reason a service is missing is always on screen — and
+// the bottom edge counts how many of the listed services are up.
+func (s *sidebar) frame(focused bool) paneFrame {
+	title := styleMuted.Render("SERVICES")
+	if focused {
+		title = styleAccent.Bold(true).Render("SERVICES")
 	}
-	return lipgloss.NewStyle().
-		Width(width).
-		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(colorBorder).
-		Render(txt)
-}
-
-func (s *sidebar) render(width, height int, focused bool) string {
-	if len(s.allServices) == 0 {
-		if !s.loaded {
-			return styleMuted.Render("Loading services…")
-		}
-		return styleMuted.Render("No services — run devrun add <name>")
-	}
-
-	// The heading names the active target filter, so the reason a service is
-	// missing from the list is always on screen.
-	heading := "SERVICES"
 	if s.filterTarget != "" {
-		heading += " · " + truncateName(s.filterTarget, max(1, width-len(heading)-3))
+		title += styleMuted.Render(" · ") + styleAccent.Render(s.filterTarget)
 	}
-	top := []string{sectionHeader(heading, width, focused)}
-
-	if len(s.services) == 0 {
-		top = append(top, styleMuted.Render("  (no services in target)"))
-	}
-	for i, svc := range s.services {
-		name := truncateName(svc.Name, width-3) // dot(1) + space(1) + margin(1)
-		if i == s.selected {
-			top = append(top, selectedServiceRow(width, svc.State, name))
-		} else {
-			top = append(top, stateDot(svc.State)+" "+name)
+	f := paneFrame{title: title, focused: focused}
+	if len(s.services) > 0 {
+		up := 0
+		for _, svc := range s.services {
+			if svc.State == "running" {
+				up++
+			}
+		}
+		f.footLeft = styleMuted.Render(fmt.Sprintf("%d/%d up", up, len(s.services)))
+		// Say so when the list is windowed — otherwise rows above or below the
+		// fold are invisible with nothing to hint they exist.
+		if first, last := s.window(); last-first < len(s.services) {
+			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.services)))
 		}
 	}
-
-	// --- Bottom: info block for the selected service + action hints, pinned to
-	// the bottom edge so their position doesn't drift with the list length. ---
-
-	var bottom []string
-	if svc := s.selectedService(); svc != nil {
-		sep := "── " + truncateName(svc.Name, width-6) + " ──"
-		bottom = append(bottom,
-			styleMuted.Render(sep),
-			"  "+stateLine(*svc),
-			fmt.Sprintf("PID  %s", renderPID(svc.PID)),
-			fmt.Sprintf("CPU  %s", renderCPUPct(svc.CPUPct)),
-			fmt.Sprintf("MEM  %s", formatBytes(svc.MemBytes)),
-			fmt.Sprintf("UP   %s", formatUptime(svc.UptimeSec)),
-		)
-	}
-	bottom = append(bottom,
-		strings.Repeat("─", width),
-		renderHint("s", "start"),
-		renderHint("x", "stop"),
-	)
-
-	topStr := strings.Join(top, "\n")
-	bottomStr := strings.Join(bottom, "\n")
-
-	// Fill the space between the list and the bottom block. Clamped to one line
-	// so an over-long list still renders (it overflows past the bottom edge,
-	// the same as before — the sidebar has no scroll yet).
-	gap := height - lipgloss.Height(topStr) - lipgloss.Height(bottomStr)
-	if gap < 1 {
-		gap = 1
-	}
-	return topStr + strings.Repeat("\n", gap+1) + bottomStr
+	return f
 }
 
-// selectedServiceRow builds a full-width highlighted row for the selected
-// service. Each segment explicitly carries the selection background so that
-// internal SGR resets from sub-styles do not clear it mid-line.
-func selectedServiceRow(width int, state, name string) string {
-	sel := lipgloss.NewStyle().Background(colorSelSidebar)
+// render draws the visible window of list rows for a content area `width`
+// columns wide.
+func (s *sidebar) render(width int) string {
+	switch {
+	case len(s.allServices) == 0 && !s.loaded:
+		return styleMuted.Render(" Loading services…")
+	case len(s.allServices) == 0:
+		return styleMuted.Render(" No services — run devrun add <name>")
+	case len(s.services) == 0:
+		return styleMuted.Render(" (no services in target)")
+	}
+	first, last := s.window()
+	rows := make([]string, 0, last-first)
+	for i := first; i < last; i++ {
+		rows = append(rows, serviceRow(width, s.services[i], i == s.selected))
+	}
+	return strings.Join(rows, "\n")
+}
 
-	var dotFg lipgloss.Color
-	switch state {
-	case "running":
-		dotFg = colorGreen
-	case "crashed":
-		dotFg = colorRed
+// window returns the half-open range of service rows currently visible.
+func (s *sidebar) window() (first, last int) {
+	if s.rows <= 0 {
+		return 0, len(s.services)
+	}
+	first = max(0, min(s.top, len(s.services)))
+	return first, min(len(s.services), first+s.rows)
+}
+
+// Column widths of a service row: " ● name  :8080   2.1%".
+const (
+	rowStateW = 9 // "detecting" / "stopping" — the longest state token
+	rowCPUW   = 6 // "100.0%"
+	// Below these row widths the CPU column, then the state column, is dropped
+	// so the name keeps a usable share of a narrow sidebar.
+	rowMinWForCPU   = 27
+	rowMinWForState = 19
+)
+
+// serviceRow renders one table row of the service list — glyph, name, port or
+// state, CPU — exactly `width` columns wide. Every segment of a selected row
+// carries the selection background itself, so an SGR reset inside one styled
+// segment cannot punch a hole in the highlight.
+func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = base.Background(colorSelSidebar)
+	}
+	showState := width >= rowMinWForState
+	showCPU := width >= rowMinWForCPU
+
+	nameW := width - 3 // margin + glyph + space
+	if showState {
+		nameW -= 1 + rowStateW
+	}
+	if showCPU {
+		nameW -= 1 + rowCPUW
+	}
+	nameW = max(1, nameW)
+
+	glyph, glyphFg := stateGlyph(svc.State)
+	row := base.Foreground(glyphFg).Render(" "+glyph) +
+		base.Foreground(colorText).Render(" "+padRight(truncateName(svc.Name, nameW), nameW))
+
+	if showState {
+		// A running service shows where to reach it; any other state is named,
+		// in the state's own colour.
+		label, fg := stateLabel(svc), glyphFg
+		switch {
+		case svc.State == "running" && strings.HasPrefix(label, ":"):
+			fg = colorAccent
+		case svc.State == "running":
+			fg = colorMuted
+		}
+		row += base.Foreground(fg).Render(" " + fmt.Sprintf("%-*s", rowStateW, label))
+	}
+	if showCPU {
+		cpu := ""
+		if svc.State == "running" {
+			cpu = fmt.Sprintf("%.1f%%", svc.CPUPct)
+		}
+		row += base.Foreground(cpuColor(svc.CPUPct)).Render(" " + fmt.Sprintf("%*s", rowCPUW, cpu))
+	}
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += base.Render(strings.Repeat(" ", pad))
+	}
+	return row
+}
+
+// cpuColor keeps an idle CPU figure quiet: only a busy service is coloured, so
+// yellow and red mean something when they appear.
+func cpuColor(pct float64) lipgloss.TerminalColor {
+	switch {
+	case pct > 80:
+		return colorRed
+	case pct > 50:
+		return colorYellow
 	default:
-		dotFg = colorMuted
+		return colorMuted
 	}
-
-	dot := sel.Foreground(dotFg).Render("●")
-	namePart := sel.Foreground(colorText).Render(" " + name)
-	content := dot + namePart
-
-	// Fill remaining columns with the selection background.
-	if pad := width - lipgloss.Width(content); pad > 0 {
-		content += sel.Render(strings.Repeat(" ", pad))
-	}
-	return content
-}
-
-func renderCPUPct(pct float64) string {
-	s := fmt.Sprintf("%.1f%%", pct)
-	if pct > 80 {
-		return styleRed.Render(s)
-	}
-	return styleYellow.Render(s)
 }

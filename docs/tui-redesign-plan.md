@@ -70,31 +70,40 @@ Removes the TARGETS rows, the two-list cursor, and every roll-up guard in
    offsets are updated.
 8. **Modals float over the body** — goal: edit / target / remove / picker
    modals are composited over the dimmed panes instead of replacing them.
+9. **Sidebar scroll window** — goal: a list longer than the pane scrolls to
+   keep the cursor visible, and the border says `6–15 of 40`. (Moved up from
+   PR 4: the bordered pane clips the list, so without scrolling the selected
+   row could sit below the fold.)
 
 ## PR 3 — footer, help, log tools (`feat/tui-footer-help-logs`, stacked on PR 2)
 
-9. **Priority footer** — goal: hints carry a priority; when the row is too
+10. **Priority footer** — goal: hints carry a priority; when the row is too
    narrow whole hints are dropped lowest-priority first; `? help` and `q quit`
    are pinned right.
-10. **Help overlay** — goal: `?` shows the full keymap grouped by area.
-11. **New-line counter** — goal: with follow off, the log border shows
+11. **Help overlay** — goal: `?` shows the full keymap grouped by area.
+12. **New-line counter** — goal: with follow off, the log border shows
     `↓ N new`; `G` clears it and re-follows.
-12. **Log search** — goal: `/` opens an input in the footer, matches are
+13. **Log search** — goal: `/` opens an input in the footer, matches are
     highlighted, `n`/`N` step through them, `Esc` clears; the border shows
     `k/N matches`.
-13. **Restart** — goal: `r` stops then starts the selected service.
+14. **Restart** — goal: `r` stops then starts the selected service.
 
 ## PR 4 — details, scrolling, small terminals (`feat/tui-details-narrow`, stacked on PR 3)
 
-14. **Focusable DETAILS** — goal: DETAILS takes focus, has a row cursor, scrolls,
+15. **Focusable DETAILS** — goal: DETAILS takes focus, has a row cursor, scrolls,
     and `y` copies the value under the cursor.
-15. **Sidebar scroll window** — goal: a list longer than the pane scrolls to
-    keep the cursor visible.
 16. **Narrow single-pane layout** — goal: below 70 columns only the focused
     pane is drawn and `Tab` swaps it.
 17. **README and screenshot notes** — goal: README keymap matches the new UI.
 
 ## Verification for every task
 
-`go build ./... && go test ./... -count=1 && go vet ./...`, plus a manual run
-of `bin/devrun` against `testdata` services before each PR is opened.
+`go build ./... && go test ./... -count=1 && go vet ./...`. Layout is verified
+by tests that render `model.View()` at several terminal sizes and assert the
+output is exactly the terminal's rows and columns (an extra row scrolls the
+header off a real terminal), and by reading rendered frames during development.
+
+Not covered by the automated checks: running the real binary in a terminal.
+Starting `devrun` spawns the daemon against the user's own state directory, so
+that pass — true-colour rendering, light-terminal colours, mouse selection,
+resize behaviour — is left to the human reviewer of each PR.

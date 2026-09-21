@@ -207,16 +207,20 @@ Managed automatically by `devrun add/remove`. You can also edit it directly.
 ## TUI Dashboard (`devrun`)
 
 ```
-⬡ devrun  3 running / 4 total
-──────────────────────────────────────────────────────────────
-SERVICES · frontend │ LOGS  ● follow
-────────────────────│──────────────────────────────────────────
-● web               │ → GET  /api/users    200  12ms
-● api               │ → POST /api/auth     201  45ms
-                    │ → GET  /api/profile  200   8ms
-─────────────────────────────────────────────────────────────
-Tab switch  ↵ details  s start  x stop  S/X all  t target  q quit
+ ⬡ devrun  shop · devrun.yaml                          2/3 running  ✖ 1 crashed
+╭─ SERVICES · frontend ───────╮╭─ web  ● running :5173  up 2h 14m ─ [LOGS] details ─╮
+│ ✖ chat      crashed         ││ → GET  /api/users    200  12ms                     │
+│ ● api       :8080      2.1% ││ → POST /api/auth     201  45ms                     │
+│ ● web       :5173     64.0% ││ → GET  /api/profile  200   8ms                     │
+╰─ 2/3 up ────────────────────╯╰─ 1,204 lines ─────────────────────────── ⇣ follow ─╯
+ Tab switch  ↵ details  s start  x stop  S/X all  t target  q quit
 ```
+
+Each service row shows a state glyph (`●` running, `◐` starting / stopping,
+`○` stopped, `✖` crashed), the name, the port or state, and CPU. Crashed
+services sort to the top. The focused pane has the accent-coloured border, and
+the main pane's border always names the service whose logs or details it shows.
+Colours adapt to light and dark terminals.
 
 The sidebar is one list of services. When the active config defines targets,
 `t` opens the **target picker**: every target with its running count and

@@ -2,20 +2,22 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// GitHub Dark palette
+// The palette is adaptive: each colour is a light/dark pair, and lipgloss picks
+// the side that matches the terminal's background. The dark side is GitHub Dark
+// (the original look); the light side is GitHub Light, so text stays readable on
+// a light terminal instead of rendering pale grey on white.
 var (
-	colorBg     = lipgloss.Color("#0d1117")
-	colorText   = lipgloss.Color("#c9d1d9")
-	colorMuted  = lipgloss.Color("#6e7681")
-	colorAccent = lipgloss.Color("#58a6ff")
-	colorGreen  = lipgloss.Color("#3fb950")
-	colorRed    = lipgloss.Color("#f85149")
-	colorYellow = lipgloss.Color("#f0e68c")
-	colorBorder = lipgloss.Color("#21262d")
-	colorSelBg      = lipgloss.Color("#161b22") // subtle: unused legacy shade
-	colorSelSidebar = lipgloss.Color("#2d333b") // visible: sidebar selection
-	colorSelCursor  = lipgloss.Color("#343b45") // logs cursor line
-	colorVisBg      = lipgloss.Color("#1f3a5f")
+	colorText   = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#c9d1d9"}
+	colorMuted  = lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#6e7681"}
+	colorAccent = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"}
+	colorGreen  = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}
+	colorRed    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"}
+	colorYellow = lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#f0e68c"}
+	colorBorder = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#21262d"}
+
+	colorSelSidebar = lipgloss.AdaptiveColor{Light: "#eaeef2", Dark: "#2d333b"} // sidebar selection
+	colorSelCursor  = lipgloss.AdaptiveColor{Light: "#e2e8ee", Dark: "#343b45"} // logs cursor line
+	colorVisBg      = lipgloss.AdaptiveColor{Light: "#ddf4ff", Dark: "#1f3a5f"} // visual selection
 )
 
 var (
@@ -29,10 +31,6 @@ var (
 	styleBorderH = lipgloss.NewStyle().
 			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorBorder)
-
-	// Background-only highlight; no border so Width(width) fills cleanly.
-	styleSelectedSidebar = lipgloss.NewStyle().
-				Background(colorSelBg)
 
 	styleVisualLine = lipgloss.NewStyle().
 			Background(colorVisBg).

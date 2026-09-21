@@ -110,7 +110,7 @@ func (p *editPanel) validate(existing map[string]bool) string {
 	return ""
 }
 
-func (p editPanel) view(width, height int) string {
+func (p editPanel) view() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", styleAccent.Bold(true).Render("Edit "+p.origName))
 	for i := range p.inputs {
@@ -127,13 +127,9 @@ func (p editPanel) view(width, height int) string {
 	}
 	b.WriteString("\n" + styleMuted.Render("Tab move · Enter save · Esc cancel"))
 
-	box := lipgloss.NewStyle().
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorAccent).
 		Padding(1, 2).
 		Render(b.String())
-	if height < lipgloss.Height(box) {
-		height = lipgloss.Height(box)
-	}
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
 }
