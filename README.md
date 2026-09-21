@@ -209,24 +209,20 @@ Managed automatically by `devrun add/remove`. You can also edit it directly.
 ```
 ⬡ devrun  3 running / 4 total
 ──────────────────────────────────────────────────────────────
-TARGETS      │ LOGS
-─────────────│─────────────────────────────────────────────────
-  All services
-● frontend   │ → GET  /api/users    200  12ms
-○ backend    │ → POST /api/auth     201  45ms
-             │
-SERVICES     │
-─────────────│
-● web        │ → GET  /api/profile  200   8ms
-● api        │
+SERVICES · frontend │ LOGS  ● follow
+────────────────────│──────────────────────────────────────────
+● web               │ → GET  /api/users    200  12ms
+● api               │ → POST /api/auth     201  45ms
+                    │ → GET  /api/profile  200   8ms
 ─────────────────────────────────────────────────────────────
-Tab switch  ↵ details  s start  x stop  q quit
+Tab switch  ↵ details  s start  x stop  S/X all  t target  q quit
 ```
 
-The **TARGETS** list appears only when the active config defines targets.
-Selecting a target filters the SERVICES list to its members; `All services`
-clears the filter. With a target row selected, `s` / `x` start / stop the whole
-target instead of a single service.
+The sidebar is one list of services. When the active config defines targets,
+`t` opens the **target picker**: every target with its running count and
+members. `↵` filters the list to that target (its name then shows in the
+SERVICES heading), `All services` clears the filter, and `e` edits the
+highlighted target.
 
 **Navigation:**
 
@@ -239,31 +235,32 @@ target instead of a single service.
 | `↵` | Toggle DETAILS / LOGS for the selected service |
 | `Esc` | Back out of DETAILS to LOGS |
 
-**Service / target control (sidebar focused):**
+**Service / target control:**
 
 | Key | Action |
 |---|---|
-| `s` | Start the selected service, or the selected target |
-| `x` | Stop the selected service, or the selected target |
-| `e` | Edit the selected service — or, on a target row, the selected target |
-| `d` | Remove the selected service (asks to confirm) |
+| `s` / `x` | Start / stop the selected service |
+| `S` / `X` | Start / stop everything listed — the filtering target, or every service when there is no filter |
+| `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
+| `e` | Edit the selected service (sidebar focused) |
+| `d` | Remove the selected service (sidebar focused, asks to confirm) |
 
 Pressing `e` opens a modal editor. It writes back to the active config — the
 project `devrun.yaml` when one is in scope, otherwise `~/.config/devrun/services.yaml` —
 using the same resolution as `devrun add`.
 
-- **On a service row** the modal edits the service's name, command, and working
+- **On a service** (`e` in the sidebar) the modal edits the service's name, command, and working
   directory. Saving refuses an empty name or command, or a name that collides
   with another service. If the edited service is running it is stopped and
   restarted (under the new name, on a rename) so the change takes effect
   immediately.
-- **On a target row** the modal edits the target's name and members: a name
+- **On a target** (`e` in the target picker) the modal edits the target's name and members: a name
   field plus a checklist of every service — `Tab` switches between the two,
   `space` toggles a service in or out. Saving refuses an empty name or one that
   collides with another target. A running target keeps its current membership
   until you stop and start it again.
 
-Pressing `d` on a service row asks to confirm, then deletes that service from
+Pressing `d` on a service asks to confirm, then deletes that service from
 the active config — the same file `e` writes to, the same effect as
 `devrun remove`. A running service must be stopped first.
 
