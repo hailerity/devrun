@@ -85,7 +85,7 @@ func (f *footerBar) render(activeTab tabKind, focus focusKind, visualMode, onSer
 	if visualMode {
 		hints = append(hints, renderHint("Esc", "cancel"))
 	}
-	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"), renderHint("t", "target"))
+	hints = append(hints, renderHint("s", "start"), renderHint("x", "stop"), renderHint("S/X", "all"), renderHint("t", "target"))
 	if onServiceRow {
 		hints = append(hints, renderHint("e", "edit"), renderHint("d", "remove"))
 	}

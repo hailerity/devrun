@@ -355,6 +355,24 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Stop):
 		return m, m.doStop()
 
+	// S / X act on everything listed: the filtering target when there is one
+	// (so the daemon tracks it as an active target), otherwise every service.
+	case key.Matches(msg, keys.StartAll):
+		if name := m.sidebarC.filterTarget; name != "" {
+			m.footerC.showToast("starting target " + name)
+			return m, m.doStartTarget(name)
+		}
+		m.footerC.showToast("starting all services")
+		return m, m.doStartAll()
+
+	case key.Matches(msg, keys.StopAll):
+		if name := m.sidebarC.filterTarget; name != "" {
+			m.footerC.showToast("stopping target " + name)
+			return m, m.doStopTarget(name)
+		}
+		m.footerC.showToast("stopping all services")
+		return m, m.doStopAll()
+
 	// t opens the target picker: choose which target filters the service list.
 	case key.Matches(msg, keys.Target):
 		if len(m.sidebarC.targets) == 0 {
@@ -1042,8 +1060,8 @@ func (m model) scopedServiceNames() []string {
 	return names
 }
 
-// doStartAll starts every scoped service — the action behind `s` on the
-// synthetic "All services" row, the TUI equivalent of `devrun start --all`. It
+// doStartAll starts every scoped service — the action behind `S` with no target
+// filter, the TUI equivalent of `devrun start --all`. It
 // dials once per service (the daemon serves one request per connection),
 // shipping each definition inline so a project service the daemon has not seen
 // still starts. A service already running is left alone; a member that fails
@@ -1075,8 +1093,8 @@ func (m model) doStartAll() tea.Cmd {
 	}
 }
 
-// doStopAll stops every scoped service — the action behind `x` on the synthetic
-// "All services" row, the TUI equivalent of `devrun stop --all`. Like
+// doStopAll stops every scoped service — the action behind `X` with no target
+// filter, the TUI equivalent of `devrun stop --all`. Like
 // doStartAll it dials once per service; a service already stopped is not an
 // error, and per-service failures are collected into one message.
 func (m model) doStopAll() tea.Cmd {

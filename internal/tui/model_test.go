@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"path/filepath"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -285,6 +286,28 @@ func TestModel_TargetPickerWithoutTargets(t *testing.T) {
 	m = pressKey(m, 't')
 	assert.False(t, m.pickerC.open)
 	assert.Contains(t, m.footerC.toast, "no targets defined")
+}
+
+// TestModel_StartStopAllListed verifies S / X pick their scope from the filter:
+// the filtering target when there is one, every service otherwise.
+func TestModel_StartStopAllListed(t *testing.T) {
+	m := targetFilterModel(t)
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	require.NotNil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "all services")
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		assert.Contains(t, err.err.Error(), "start all:", "no filter → the start-all batch")
+	}
+
+	m.sidebarC.setFilter("frontend")
+	m2, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	require.NotNil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "target frontend")
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		assert.NotContains(t, err.err.Error(), "stop all:", "a filter → one target-stop request")
+	}
 }
 
 // TestModel_EnterTogglesDetailsWithFilterActive verifies Enter means the same
