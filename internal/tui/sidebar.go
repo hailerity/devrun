@@ -9,13 +9,12 @@ import (
 	"github.com/hailerity/devrun/internal/ipc"
 )
 
-// sidebarTarget is one configured target: its name, its declared members, and
-// whether every member is currently running. Targets are not sidebar rows — they
-// feed the target picker and the service filter.
+// sidebarTarget is one configured target: its name and its declared members.
+// Targets are not sidebar rows — they feed the target picker and the service
+// filter.
 type sidebarTarget struct {
 	name    string
 	members []string
-	active  bool
 }
 
 // allServicesLabel names the "no filter" choice in the target picker and in

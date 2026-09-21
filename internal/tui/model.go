@@ -137,7 +137,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonRespMsg:
 		m.spinning = false
 		scoped := m.scopedServices(msg.payload.Services)
-		m.sidebarC.update(scoped, m.buildTargets(scoped))
+		m.sidebarC.update(scoped, m.buildTargets())
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -195,6 +195,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickSpin()
 
 	case tea.MouseMsg:
+		// A modal owns the screen: the log pane under it is hidden, so a click
+		// or drag must not move focus there or start a selection.
+		if m.modalOpen() {
+			return m, nil
+		}
 		if m.activeTab == tabLogs {
 			// topOffset=4: header(2 rows) + tab-bar label+border(2 rows) = 4 rows above log content.
 			// leftOffset: sidebar width + divider(1); reserved for future character-level selection.
@@ -403,6 +408,12 @@ func (m model) onServiceRow() bool {
 	return m.focus == focusSidebar &&
 		m.registry != nil &&
 		m.sidebarC.selectedService() != nil
+}
+
+// modalOpen reports whether a modal — an editor, the remove confirm, or the
+// target picker — currently owns the screen and all input.
+func (m model) modalOpen() bool {
+	return m.editC.open || m.targetEditC.open || m.removeC.open || m.pickerC.open
 }
 
 // handlePickerKey routes a key to the open target picker: j/k move, Enter
@@ -839,44 +850,15 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 // buildTargets turns the registry's target definitions into the sorted list the
 // target picker and the service filter work from. Returns nil with no registry
 // or no targets.
-//
-// A target is marked active when it has at least one member and every member is
-// currently running, checked against `services` (the daemon-reported view) —
-// so a configured service the daemon has not reported keeps it off.
-func (m model) buildTargets(services []ipc.ServiceInfo) []sidebarTarget {
+func (m model) buildTargets() []sidebarTarget {
 	if m.registry == nil || len(m.registry.Targets) == 0 {
 		return nil
 	}
-	running := make(map[string]bool, len(services))
-	for _, s := range services {
-		if s.State == "running" {
-			running[s.Name] = true
-		}
-	}
 	var rows []sidebarTarget
 	for _, name := range config.SortedTargetNames(m.registry.Targets) {
-		members := m.registry.Targets[name]
-		rows = append(rows, sidebarTarget{
-			name:    name,
-			members: members,
-			active:  membersAllRunning(members, running),
-		})
+		rows = append(rows, sidebarTarget{name: name, members: m.registry.Targets[name]})
 	}
 	return rows
-}
-
-// membersAllRunning reports whether members is non-empty and every member name
-// is in the running set.
-func membersAllRunning(members []string, running map[string]bool) bool {
-	if len(members) == 0 {
-		return false
-	}
-	for _, m := range members {
-		if !running[m] {
-			return false
-		}
-	}
-	return true
 }
 
 func (m *model) updateLogFile() {

@@ -20,7 +20,7 @@ func plain(s string) string { return sgrRe.ReplaceAllString(s, "") }
 
 func targetRows() []sidebarTarget {
 	return []sidebarTarget{
-		{name: "t1", members: []string{"web"}, active: true},
+		{name: "t1", members: []string{"web"}},
 		{name: "t2", members: []string{"api", "db"}},
 	}
 }
@@ -110,7 +110,7 @@ func TestSidebar_FilterClearedWhenTargetVanishes(t *testing.T) {
 
 	// t2 is gone from the next poll.
 	sb.update(svcs("api", "web"), []sidebarTarget{
-		{name: "t1", members: []string{"web"}, active: true},
+		{name: "t1", members: []string{"web"}},
 	})
 	assert.Empty(t, sb.filterTarget, "filter drops when its target no longer exists")
 	assert.Equal(t, []string{"api", "web"}, svcNames(sb))
@@ -147,22 +147,17 @@ func TestTargetPicker_ViewMarksFilterAndUnreportedMembers(t *testing.T) {
 
 func TestModel_BuildTargets(t *testing.T) {
 	m := model{}
-	assert.Nil(t, m.buildTargets(nil), "nil registry → no targets")
+	assert.Nil(t, m.buildTargets(), "nil registry → no targets")
 
 	m.registry = &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}, "api": {Name: "api"}},
 		Targets:  map[string][]string{"zeta": {"web"}, "alpha": {"api"}},
 	}
-	// api running, web stopped: only "alpha" (member api) is fully up.
-	rows := m.buildTargets([]ipc.ServiceInfo{
-		{Name: "api", State: "running"},
-		{Name: "web", State: "stopped"},
-	})
+	rows := m.buildTargets()
 	require.Len(t, rows, 2)
 	assert.Equal(t, "alpha", rows[0].name, "targets sorted")
-	assert.True(t, rows[0].active, "alpha active — its only member (api) is running")
+	assert.Equal(t, []string{"api"}, rows[0].members)
 	assert.Equal(t, "zeta", rows[1].name)
-	assert.False(t, rows[1].active, "zeta inactive — its member (web) is stopped")
 }
 
 func TestModel_BuildTargets_NilWithoutTargets(t *testing.T) {
@@ -170,7 +165,7 @@ func TestModel_BuildTargets_NilWithoutTargets(t *testing.T) {
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},
 		Targets:  map[string][]string{},
 	}}
-	assert.Nil(t, m.buildTargets(nil))
+	assert.Nil(t, m.buildTargets())
 }
 
 func TestModel_StartStopTarget_UnknownTargetIsNoop(t *testing.T) {
@@ -181,7 +176,7 @@ func TestModel_StartStopTarget_UnknownTargetIsNoop(t *testing.T) {
 			Targets:  map[string][]string{"t1": {"web"}},
 		},
 	}
-	m.sidebarC.update(svcs("web"), m.buildTargets(nil))
+	m.sidebarC.update(svcs("web"), m.buildTargets())
 
 	assert.Nil(t, m.doStartTarget(""), "no target name → no command")
 	assert.Nil(t, m.doStopTarget("gone"), "unknown target → no command")
@@ -235,7 +230,7 @@ func TestModel_StartStopAll_NoopWithoutSocket(t *testing.T) {
 	m := model{registry: &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "x"}},
 	}}
-	m.sidebarC.update(svcs("web"), m.buildTargets(nil))
+	m.sidebarC.update(svcs("web"), m.buildTargets())
 	assert.Nil(t, m.doStartAll(), "no socket → no command")
 	assert.Nil(t, m.doStopAll(), "no socket → no command")
 }

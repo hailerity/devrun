@@ -227,7 +227,7 @@ func targetFilterModel(t *testing.T) model {
 	}, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = m2.(model)
-	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets())
 	return m
 }
 
@@ -275,13 +275,23 @@ func TestModel_TargetPickerIsAKeyboardTrap(t *testing.T) {
 	assert.Empty(t, m.sidebarC.filterTarget)
 }
 
+// TestModel_MouseIgnoredWhileModalOpen verifies a click cannot reach the log
+// pane hidden under the picker.
+func TestModel_MouseIgnoredWhileModalOpen(t *testing.T) {
+	m := targetFilterModel(t)
+	m = pressKey(m, 't')
+
+	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Y: 6})
+	assert.Equal(t, focusSidebar, m2.(model).focus, "a click under the picker must not focus the log pane")
+}
+
 // TestModel_TargetPickerWithoutTargets verifies t explains itself instead of
 // opening an empty picker.
 func TestModel_TargetPickerWithoutTargets(t *testing.T) {
 	m := newModel("", &config.Registry{
 		Services: map[string]*config.ServiceConfig{"web": {Name: "web"}},
 	}, config.Source{}, "", clipboard{})
-	m.sidebarC.update(m.scopedServices(nil), m.buildTargets(nil))
+	m.sidebarC.update(m.scopedServices(nil), m.buildTargets())
 
 	m = pressKey(m, 't')
 	assert.False(t, m.pickerC.open)
@@ -329,7 +339,7 @@ func TestModel_ViewShowsPickerWithCountsAndMembers(t *testing.T) {
 	m.sidebarC.update([]ipc.ServiceInfo{
 		{Name: "api", State: "running"},
 		{Name: "web", State: "stopped"},
-	}, m.buildTargets(nil))
+	}, m.buildTargets())
 	m = pressKey(m, 't')
 	m = pressKey(m, 'j')
 
