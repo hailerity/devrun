@@ -2,6 +2,11 @@
 
 Interactive mock of the target design: https://claude.ai/artifact/ERuxvnZZx9EHoXy2NrhwpK
 
+**Status:** all four PRs are open as a stack — #36 → #37 → #38 → #39. Each
+merges only after the one before it, and is retargeted to `main` at that point
+(CI only runs for pull requests into `main`, so the stacked ones show no checks
+until then).
+
 The two-pane shape (service list + logs) stays. The redesign fixes information
 density, focus cues, and the keyboard model. It lands as four stacked PRs, each
 green on its own; every numbered task below is one commit.
