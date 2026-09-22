@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -233,15 +232,13 @@ func (h *handlers) stop(_ context.Context, _ *mcp.CallToolRequest, in StopInput)
 			return nil, StopOutput{}, fmt.Errorf("target %q not found in %s (%s scope)", in.Target, r.SourcePath(), r.ScopeName())
 		}
 		names = members
-		err := ops.StopTarget(in.Target)
-		switch {
-		case err == nil, errors.Is(err, ops.ErrNoDaemon):
-		case strings.Contains(err.Error(), "is not active"):
-			// The daemon only stops a target it started as one. Its members
-			// may still be running on their own or under another target;
-			// they are left alone, and the note says so.
+		// The daemon only stops a target it started as one. Ask first rather
+		// than read its refusal's wording: a target that is not active has
+		// members that may be running on their own or under another target,
+		// so they are left alone and the note says so.
+		if !ops.ActiveTargets()[in.Target] {
 			out.Note = fmt.Sprintf("target %q was not started as a target, so nothing was stopped; stop its services individually if you mean to", in.Target)
-		default:
+		} else if err := ops.StopTarget(in.Target); err != nil && !errors.Is(err, ops.ErrNoDaemon) {
 			return nil, StopOutput{}, err
 		}
 	}

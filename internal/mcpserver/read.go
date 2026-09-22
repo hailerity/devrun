@@ -138,7 +138,9 @@ func (h *handlers) status(_ context.Context, _ *mcp.CallToolRequest, in StatusIn
 	if err != nil {
 		return nil, StatusOutput{}, err
 	}
-	var live ipc.ServiceInfo
+	// Every defined service is in the list — both the live and the offline
+	// paths report never-started ones as stopped — but do not rely on it.
+	live := ipc.ServiceInfo{Name: in.Name, State: string(config.StatusStopped)}
 	for _, s := range res.Services {
 		if s.Name == in.Name {
 			live = s
