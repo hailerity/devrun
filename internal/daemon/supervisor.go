@@ -158,6 +158,11 @@ func (s *supervisor) handleStart(raw json.RawMessage) *ipc.Response {
 // definition (project devrun.yaml services and target members ship it this way);
 // when nil the daemon resolves name from the global registry.
 func (s *supervisor) startService(name string, inlineCfg *config.ServiceConfig) *ipc.Response {
+	// The name becomes the log file's name: refuse one that would put it — or
+	// anything written through it — outside the logs directory.
+	if !config.SafeFileName(name) {
+		return errResp(fmt.Sprintf("invalid service name %q: a name cannot contain '/' or '\\' or be '.' or '..'", name))
+	}
 	cfg := inlineCfg
 	if cfg == nil {
 		reg, err := config.LoadRegistry(config.RegistryPath())

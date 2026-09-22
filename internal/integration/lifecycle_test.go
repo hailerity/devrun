@@ -54,6 +54,7 @@ func testEnv(t *testing.T) (socketPath string, cleanup func()) {
 	if err != nil {
 		t.Fatal("create temp dir:", err)
 	}
+	reapSandbox(t, tmp)
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
 	sockPath := config.SocketPath()
@@ -94,6 +95,37 @@ func registerService(t *testing.T, name, command, cwd string) {
 		reg.Version = "1"
 	}
 	require.NoError(t, config.SaveRegistry(config.RegistryPath(), reg))
+}
+
+// reapSandbox registers a cleanup that kills every process a test left behind
+// in its sandbox tmp: each service recorded in the sandbox's state file (as a
+// process group — a service runs as its own session, with any children it
+// spawned), and each daemon whose command line names the sandbox, which is
+// every one started there since its socket path lives inside it.
+//
+// Removing a daemon's socket does not stop it — the daemon keeps running, and
+// so do the services it manages — which is how tests that start real daemon
+// subprocesses used to leak them. Call it right after creating tmp: cleanups
+// run last-registered first, so this runs before tmp is removed and before
+// t.Setenv restores the environment, which is why paths are taken from tmp.
+func reapSandbox(t *testing.T, tmp string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if st, err := config.LoadState(filepath.Join(tmp, "devrun", "state.json")); err == nil {
+			for _, svc := range st.Services {
+				if svc.PID != nil && *svc.PID > 1 {
+					_ = syscall.Kill(-*svc.PID, syscall.SIGKILL)
+					_ = syscall.Kill(*svc.PID, syscall.SIGKILL)
+				}
+			}
+		}
+		out, _ := exec.Command("pgrep", "-f", tmp).Output()
+		for _, f := range strings.Fields(string(out)) {
+			if pid, err := strconv.Atoi(f); err == nil && pid > 1 && pid != os.Getpid() {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
 }
 
 // send is a helper that opens a fresh connection, sends one request, reads the
@@ -307,6 +339,7 @@ func TestLifecycle_DaemonCrashReAdoption(t *testing.T) {
 	tmp, err := os.MkdirTemp("", "pt-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	reapSandbox(t, tmp)
 
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -343,9 +376,8 @@ func TestLifecycle_DaemonCrashReAdoption(t *testing.T) {
 	require.Len(t, payload.Services, 1)
 	assert.Equal(t, "running", payload.Services[0].State)
 
-	// Clean up: remove socket to signal the second daemon; first daemon
-	// is an orphan but will exit when its socket is cleaned up by the OS.
-	t.Cleanup(func() { os.Remove(socketPath) })
+	// Both daemons and the "persistent" service are killed by reapSandbox:
+	// removing a daemon's socket does not stop it.
 }
 
 // TestLifecycle_DaemonRestartKeepsServicesRunning verifies that a graceful
@@ -356,6 +388,7 @@ func TestLifecycle_DaemonRestartKeepsServicesRunning(t *testing.T) {
 	tmp, err := os.MkdirTemp("", "pt-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	reapSandbox(t, tmp)
 
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -415,6 +448,7 @@ func TestLifecycle_DaemonReexecKeepsLogsFlowing(t *testing.T) {
 	tmp, err := os.MkdirTemp("", "pt-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	reapSandbox(t, tmp)
 
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -523,6 +557,7 @@ func TestLifecycle_DaemonAutoStart(t *testing.T) {
 	tmp, err := os.MkdirTemp("", "pt-")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tmp) })
+	reapSandbox(t, tmp)
 
 	t.Setenv("XDG_CONFIG_HOME", tmp)
 	t.Setenv("XDG_DATA_HOME", tmp)
@@ -539,8 +574,7 @@ func TestLifecycle_DaemonAutoStart(t *testing.T) {
 	_, err = os.Stat(socketPath)
 	assert.NoError(t, err, "socket should exist after EnsureDaemon")
 
-	// Clean up the subprocess daemon
-	t.Cleanup(func() { os.Remove(socketPath) })
+	// The subprocess daemon is killed by reapSandbox.
 }
 
 // TestLifecycle_ListShowsRegistryOnlyServices verifies that a service registered
@@ -604,4 +638,25 @@ func TestLifecycle_LogsWithoutDaemon(t *testing.T) {
 	data, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "line1")
+}
+
+// The daemon refuses to start a service whose name would put its log file —
+// or anything written through that path — outside the logs directory, however
+// the name got into a config: a hand-edited devrun.yaml ships it inline.
+func TestLifecycle_DaemonRefusesAPathTraversingName(t *testing.T) {
+	socketPath, _ := testEnv(t)
+	outside := filepath.Join(filepath.Dir(config.LogPath("x")), "..", "..", "escaped.log")
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "../../escaped",
+		Config: &config.ServiceConfig{Name: "../../escaped", Command: "echo hi"}})
+	assert.False(t, resp.OK)
+	assert.Contains(t, resp.Error, "invalid service name")
+	_, err := os.Stat(outside)
+	assert.True(t, os.IsNotExist(err), "no file was written outside the logs directory")
+
+	// A legacy name that is odd but cannot escape still starts.
+	resp = send(t, socketPath, "start", ipc.StartPayload{Name: "my service",
+		Config: &config.ServiceConfig{Name: "my service", Command: "sleep 5"}})
+	assert.True(t, resp.OK, resp.Error)
+	_ = send(t, socketPath, "stop", ipc.StopPayload{Name: "my service"})
 }

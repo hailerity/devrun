@@ -13,8 +13,13 @@ import (
 var addCmd = &cobra.Command{
 	Use:   "add <name> <command>",
 	Short: "Register a new service",
-	Args:  cobra.ExactArgs(2),
-	RunE:  runAdd,
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(2)(cmd, args); err != nil {
+			return err
+		}
+		return config.ValidateName("service", args[0])
+	},
+	RunE: runAdd,
 }
 
 var addFlags struct {

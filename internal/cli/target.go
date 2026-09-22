@@ -19,7 +19,12 @@ var targetCmd = &cobra.Command{
 var targetCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a new, empty target",
-	Args:  cobra.ExactArgs(1),
+	Args: func(cmd *cobra.Command, args []string) error {
+		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			return err
+		}
+		return config.ValidateName("target", args[0])
+	},
 	RunE: func(_ *cobra.Command, args []string) error {
 		name := args[0]
 		scope, err := cliScope()
@@ -37,7 +42,7 @@ var targetCreateCmd = &cobra.Command{
 var targetAddCmd = &cobra.Command{
 	Use:   "add <name> <service>...",
 	Short: "Add one or more services to a target (creating it if needed)",
-	Args:  cobra.MinimumNArgs(2),
+	Args:  newTargetNameArgs(cobra.MinimumNArgs(2)),
 	RunE: func(_ *cobra.Command, args []string) error {
 		name, svcs := args[0], args[1:]
 		scope, err := cliScope()
@@ -173,4 +178,21 @@ func init() {
 		targetStartCmd,
 		targetStopCmd,
 	)
+}
+
+// newTargetNameArgs wraps an argument-count check with the name rule for a
+// target that does not exist yet. An existing target keeps whatever name it
+// already has, so a config written before the rule still works.
+func newTargetNameArgs(count cobra.PositionalArgs) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if err := count(cmd, args); err != nil {
+			return err
+		}
+		if reg, _, err := activeRegistry(); err == nil {
+			if _, exists := reg.Targets[args[0]]; exists {
+				return nil
+			}
+		}
+		return config.ValidateName("target", args[0])
+	}
 }

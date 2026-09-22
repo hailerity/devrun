@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/hailerity/devrun/internal/config"
 )
 
 // targetEditRows caps how many service rows the checklist shows at once; the
@@ -152,6 +154,8 @@ func (p *targetEditPanel) validate(existing map[string]bool) string {
 	switch {
 	case name == "":
 		return "name cannot be empty"
+	case name != p.origName && config.ValidateName("target", name) != nil:
+		return config.ValidateName("target", name).Error()
 	case name != p.origName && existing[name]:
 		return fmt.Sprintf("a target named %q already exists", name)
 	}
