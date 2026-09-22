@@ -182,6 +182,9 @@ func (h *handlers) start(_ context.Context, _ *mcp.CallToolRequest, in StartInpu
 	if err := oneOf(in.Service, in.Target); err != nil {
 		return nil, StartOutput{}, err
 	}
+	if err := checkTargetOrService(in.Service, in.Target); err != nil {
+		return nil, StartOutput{}, err
+	}
 	timeout := in.TimeoutS
 	switch {
 	case timeout == 0:
@@ -260,6 +263,14 @@ func (h *handlers) stop(_ context.Context, _ *mcp.CallToolRequest, in StopInput)
 		out.Services = append(out.Services, StopState{Name: n, State: st})
 	}
 	return nil, out, nil
+}
+
+// checkTargetOrService validates whichever of the two names was given.
+func checkTargetOrService(service, target string) error {
+	if service != "" {
+		return checkName("service", service)
+	}
+	return checkName("target", target)
 }
 
 // oneOf checks that exactly one of a service and a target was given.

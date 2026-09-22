@@ -27,7 +27,12 @@ type env struct {
 	cs   *mcp.ClientSession
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvOpts(t, true) }
+
+// newEnvWithoutDaemon is newEnv with no daemon running and none startable.
+func newEnvWithoutDaemon(t *testing.T) *env { return newEnvOpts(t, false) }
+
+func newEnvOpts(t *testing.T, withDaemon bool) *env {
 	t.Helper()
 	// Short path: a Unix socket path must fit in ~104 bytes on macOS, and
 	// t.TempDir embeds the whole test name.
@@ -41,8 +46,12 @@ func newEnv(t *testing.T) *env {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- daemon.RunWithContext(ctx, config.SocketPath()) }()
-	for i := 0; i < 150; i++ {
+	if withDaemon {
+		go func() { done <- daemon.RunWithContext(ctx, config.SocketPath()) }()
+	} else {
+		done <- nil
+	}
+	for i := 0; withDaemon && i < 150; i++ {
 		if c, err := net.Dial("unix", config.SocketPath()); err == nil {
 			c.Close()
 			break

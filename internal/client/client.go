@@ -15,6 +15,11 @@ import (
 // daemon into a prompt error instead of a command that hangs forever.
 const DefaultTimeout = 30 * time.Second
 
+// ConnectTimeout bounds opening the connection. A daemon that is alive but
+// wedged — its accept backlog full — would otherwise block connect forever,
+// and Send's deadline only starts once connected.
+const ConnectTimeout = 5 * time.Second
+
 // Client is a connection to the devrun daemon.
 type Client struct {
 	conn    net.Conn
@@ -23,7 +28,7 @@ type Client struct {
 
 // Connect opens a Unix socket connection to the daemon.
 func Connect(socketPath string) (*Client, error) {
-	conn, err := net.Dial("unix", socketPath)
+	conn, err := net.DialTimeout("unix", socketPath, ConnectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("connect to daemon: %w", err)
 	}
