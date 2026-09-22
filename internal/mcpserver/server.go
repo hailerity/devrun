@@ -101,6 +101,11 @@ func (h *handlers) resolve(in Scoped) (*ops.Resolved, error) {
 		}
 		return nil, err
 	}
+	// config.Resolve only returns a nil registry together with an error, so
+	// this cannot happen today; checking it here means no handler has to.
+	if r.Registry == nil {
+		return nil, fmt.Errorf("no config could be loaded for %s", r.Dir)
+	}
 	return r, nil
 }
 
