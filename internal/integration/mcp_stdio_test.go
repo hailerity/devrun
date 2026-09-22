@@ -87,7 +87,7 @@ func TestMCP_StdioRoundTrip(t *testing.T) {
 
 	send(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)
 	tools := next(2)
-	for _, name := range []string{"list_services", "service_status", "logs"} {
+	for _, name := range []string{"list_services", "service_status", "logs", "add_service", "add_to_target", "start", "stop"} {
 		assert.Contains(t, string(tools.Result), `"name":"`+name+`"`)
 	}
 
