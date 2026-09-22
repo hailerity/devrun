@@ -73,7 +73,12 @@ jobs:
           go-version: "1.25"
           cache: true
 
+      # Pinned, like golangci-lint above: @latest broke this job when
+      # govulncheck v1.8.0 started requiring Go 1.26 while CI runs 1.25.
+      # v1.7.0 is the last release that supports Go 1.25; bump it together
+      # with go-version. The vulnerability database is fetched live, so a
+      # pinned tool still sees newly published vulnerabilities.
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           govulncheck ./...
