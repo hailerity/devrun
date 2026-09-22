@@ -639,3 +639,24 @@ func TestLifecycle_LogsWithoutDaemon(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "line1")
 }
+
+// The daemon refuses to start a service whose name would put its log file —
+// or anything written through that path — outside the logs directory, however
+// the name got into a config: a hand-edited devrun.yaml ships it inline.
+func TestLifecycle_DaemonRefusesAPathTraversingName(t *testing.T) {
+	socketPath, _ := testEnv(t)
+	outside := filepath.Join(filepath.Dir(config.LogPath("x")), "..", "..", "escaped.log")
+
+	resp := send(t, socketPath, "start", ipc.StartPayload{Name: "../../escaped",
+		Config: &config.ServiceConfig{Name: "../../escaped", Command: "echo hi"}})
+	assert.False(t, resp.OK)
+	assert.Contains(t, resp.Error, "invalid service name")
+	_, err := os.Stat(outside)
+	assert.True(t, os.IsNotExist(err), "no file was written outside the logs directory")
+
+	// A legacy name that is odd but cannot escape still starts.
+	resp = send(t, socketPath, "start", ipc.StartPayload{Name: "my service",
+		Config: &config.ServiceConfig{Name: "my service", Command: "sleep 5"}})
+	assert.True(t, resp.OK, resp.Error)
+	_ = send(t, socketPath, "stop", ipc.StopPayload{Name: "my service"})
+}

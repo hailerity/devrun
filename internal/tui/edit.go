@@ -102,6 +102,9 @@ func (p *editPanel) validate(existing map[string]bool) string {
 	switch {
 	case name == "":
 		return "name cannot be empty"
+	case name != p.origName && config.ValidateName("service", name) != nil:
+		// A rename must follow the name rule; keeping an existing name need not.
+		return config.ValidateName("service", name).Error()
 	case strings.TrimSpace(command) == "":
 		return "command cannot be empty"
 	case name != p.origName && existing[name]:

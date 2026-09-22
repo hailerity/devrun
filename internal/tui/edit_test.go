@@ -72,3 +72,28 @@ func TestEditPanel_CloseBlurs(t *testing.T) {
 	assert.False(t, p.open)
 	assert.False(t, p.inputs[fieldName].Focused())
 }
+
+// A rename must follow the name rule — a service's log file is named after it —
+// but a service whose existing name predates the rule can still be edited
+// without renaming it.
+func TestEditPanel_ValidateNameRule(t *testing.T) {
+	p := newEditPanel()
+	p.openFor("web", &config.ServiceConfig{Command: "x"})
+	p.inputs[fieldName].SetValue("../escape")
+	assert.Contains(t, p.validate(map[string]bool{"web": true}), "invalid service name")
+
+	legacy := newEditPanel()
+	legacy.openFor("my service", &config.ServiceConfig{Command: "x"})
+	assert.Equal(t, "", legacy.validate(map[string]bool{"my service": true}), "keeping a legacy name is fine")
+}
+
+func TestTargetEditPanel_ValidateNameRule(t *testing.T) {
+	p := newTargetEditPanel()
+	p.openFor("fe", []string{"web"}, nil)
+	p.nameInput.SetValue("a/b")
+	assert.Contains(t, p.validate(map[string]bool{"fe": true}), "invalid target name")
+
+	legacy := newTargetEditPanel()
+	legacy.openFor("front end", []string{"web"}, nil)
+	assert.Equal(t, "", legacy.validate(map[string]bool{"front end": true}))
+}
