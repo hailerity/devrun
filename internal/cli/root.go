@@ -106,5 +106,6 @@ func init() {
 		fgCmd,
 		infoCmd,
 		daemonCmd,
+		mcpCmd,
 	)
 }
