@@ -10,6 +10,7 @@ import (
 
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/daemon"
+	"github.com/hailerity/devrun/internal/ops"
 	"github.com/hailerity/devrun/internal/tui"
 )
 
@@ -49,6 +50,16 @@ func activeRegistry() (*config.Registry, config.Source, error) {
 		return nil, config.Source{}, fmt.Errorf("get working directory: %w", err)
 	}
 	return config.Resolve(cwd, globalFlag)
+}
+
+// cliScope is the ops.Scope a CLI command acts on: the working directory, plus
+// the --global flag.
+func cliScope() (ops.Scope, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ops.Scope{}, fmt.Errorf("get working directory: %w", err)
+	}
+	return ops.Scope{Dir: cwd, Global: globalFlag}, nil
 }
 
 // Execute is the CLI entry point called from main.
@@ -95,5 +106,6 @@ func init() {
 		fgCmd,
 		infoCmd,
 		daemonCmd,
+		mcpCmd,
 	)
 }

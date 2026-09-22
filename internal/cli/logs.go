@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ops"
 )
 
 var logsCmd = &cobra.Command{
@@ -31,23 +31,13 @@ func init() {
 
 func runLogs(_ *cobra.Command, args []string) error {
 	name := args[0]
-	logPath := config.LogPath(name)
 
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		return fmt.Errorf("no logs found for %q. Has it been started before?", name)
-	}
-
-	f, err := os.Open(logPath)
+	// Raw lines — colour codes and all — exactly as the service wrote them.
+	res, err := ops.Logs(name, ops.LogQuery{Lines: logsFlags.lines})
 	if err != nil {
-		return fmt.Errorf("open log: %w", err)
+		return err
 	}
-	defer f.Close()
-
-	lines, err := tailLines(f, logsFlags.lines)
-	if err != nil {
-		return fmt.Errorf("tail log: %w", err)
-	}
-	for _, line := range lines {
+	for _, line := range res.Lines {
 		fmt.Println(line)
 	}
 
@@ -55,9 +45,15 @@ func runLogs(_ *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Follow: seek to end, poll for new content
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek to end: %w", err)
+	// Follow from exactly where the snapshot ended, so no line written in
+	// between is lost or printed twice.
+	f, err := os.Open(res.Path)
+	if err != nil {
+		return fmt.Errorf("open log: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Seek(res.Offset, io.SeekStart); err != nil {
+		return fmt.Errorf("seek: %w", err)
 	}
 	reader := bufio.NewReader(f)
 	for {
@@ -73,21 +69,4 @@ func runLogs(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("read log: %w", err)
 		}
 	}
-}
-
-// tailLines returns the last n lines of a file.
-func tailLines(f *os.File, n int) ([]string, error) {
-	// Read entire file for simplicity; for large files this would need a reverse-scan
-	scanner := bufio.NewScanner(f)
-	var all []string
-	for scanner.Scan() {
-		all = append(all, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	if len(all) <= n {
-		return all, nil
-	}
-	return all[len(all)-n:], nil
 }
