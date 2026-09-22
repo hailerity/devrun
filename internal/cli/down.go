@@ -6,7 +6,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
 )
 
@@ -38,24 +37,14 @@ func runDown(_ *cobra.Command, _ []string) error {
 		return nil
 	}
 
-	socketPath := config.SocketPath()
-
 	fmt.Printf("[%s] stopping %d service(s)\n", proj.Name, len(proj.Services))
 
 	exitCode := 0
 	for name := range proj.Services {
-		// Fresh connection per service — daemon handles one request per connection.
-		c, err := client.Connect(socketPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  error stopping %s: connect: %v\n", name, err)
-			exitCode = 1
-			continue
-		}
-		if err := stopOne(c, name); err != nil {
-			fmt.Fprintf(os.Stderr, "  error stopping %s: %v\n", name, err)
+		if err := stopOne(name); err != nil {
+			fmt.Fprintf(os.Stderr, "  error stopping %s: %s\n", name, stopErrDetail(err))
 			exitCode = 1
 		}
-		c.Close()
 	}
 	if exitCode != 0 {
 		os.Exit(exitCode)

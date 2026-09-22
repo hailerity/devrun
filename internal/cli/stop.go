@@ -1,14 +1,14 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
 
-	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
-	"github.com/hailerity/devrun/internal/ipc"
+	"github.com/hailerity/devrun/internal/ops"
 )
 
 var stopCmd = &cobra.Command{
@@ -29,36 +29,44 @@ func runStop(_ *cobra.Command, args []string) error {
 		return fmt.Errorf("specify a service name or --all")
 	}
 
-	socketPath := config.SocketPath()
 	if stopFlags.all {
 		reg, _, err := activeRegistry()
 		if err != nil {
 			return err
 		}
-		return stopAll(socketPath, reg)
+		return stopAll(reg)
 	}
-	c, err := client.Connect(socketPath)
-	if err != nil {
-		return fmt.Errorf("connect to daemon: %w", err)
-	}
-	defer c.Close()
-	return stopOne(c, args[0])
+	return stopOne(args[0])
 }
 
-func stopOne(c *client.Client, name string) error {
-	resp, err := c.Send("stop", ipc.StopPayload{Name: name})
+// stopOne stops one service and prints the outcome. A service the daemon
+// declines to stop — typically one that is not running — is reported, not an
+// error.
+func stopOne(name string) error {
+	res, err := ops.Stop(name)
 	if err != nil {
 		return err
 	}
-	if !resp.OK {
-		fmt.Println(resp.Error)
+	if res.NotStopped {
+		fmt.Println(res.Message)
 		return nil
 	}
 	fmt.Printf("stopped %s\n", name)
 	return nil
 }
 
-func stopAll(socketPath string, reg *config.Registry) error {
+// stopErrDetail is the per-service reason `stop --all` and `down` print. A
+// daemon that cannot be reached reads "connect: <why>", as it always has.
+func stopErrDetail(err error) string {
+	if errors.Is(err, ops.ErrNoDaemon) {
+		if inner := errors.Unwrap(err); inner != nil {
+			return "connect: " + inner.Error()
+		}
+	}
+	return err.Error()
+}
+
+func stopAll(reg *config.Registry) error {
 	names := make([]string, 0, len(reg.Services))
 	for name := range reg.Services {
 		names = append(names, name)
@@ -69,18 +77,12 @@ func stopAll(socketPath string, reg *config.Registry) error {
 	}
 	exitCode := 0
 	for _, name := range names {
-		// The daemon handles one request per connection; create a fresh connection per service.
-		c, err := client.Connect(socketPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error stopping %s: connect: %v\n", name, err)
-			exitCode = 1
-			continue
-		}
-		if err := stopOne(c, name); err != nil {
-			fmt.Fprintf(os.Stderr, "error stopping %s: %v\n", name, err)
+		// ops.Stop opens a fresh connection per service: the daemon handles one
+		// request per connection.
+		if err := stopOne(name); err != nil {
+			fmt.Fprintf(os.Stderr, "error stopping %s: %s\n", name, stopErrDetail(err))
 			exitCode = 1
 		}
-		c.Close()
 	}
 	if exitCode != 0 {
 		os.Exit(exitCode)

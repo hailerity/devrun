@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ops"
 )
 
 var infoCmd = &cobra.Command{
@@ -86,16 +87,15 @@ func runServiceInfo(name string) error {
 		return err
 	}
 
-	svc := reg.Services[name]
-	if svc == nil {
-		return fmt.Errorf("service %q not found", name)
+	svc, err := (&ops.Resolved{Registry: reg}).Service(name)
+	if err != nil {
+		return err
 	}
 
-	state, err := config.LoadState(config.StatePath())
+	ss, err := ops.ServiceState(name)
 	if err != nil {
-		return fmt.Errorf("load state: %w", err)
+		return err
 	}
-	ss := state.Services[name]
 
 	statusStr := styleLabel.Render("stopped")
 	if ss != nil {
