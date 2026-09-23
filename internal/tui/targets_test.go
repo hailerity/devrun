@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -145,6 +146,52 @@ func TestTargetPicker_ViewMarksFilterAndUnreportedMembers(t *testing.T) {
 	assert.Contains(t, out, "▸")
 	assert.Contains(t, out, "1/2")
 	assert.Contains(t, out, "not reported")
+}
+
+// overlay() re-centres the picker on every frame, so a box whose size depended on
+// the cursor would jump under you as you moved through the targets. Every branch
+// that used to change it is covered here: "All services" (no members block at
+// all, once), a short target, one that overruns the member cap, and an empty one.
+func TestTargetPicker_GeometryIsStableAcrossCursor(t *testing.T) {
+	rows := []sidebarTarget{
+		{name: "fe", members: []string{"web"}},
+		{name: "everything", members: []string{"web", "api", "db", "cache", "worker", "mailer", "search", "cron", "extra"}},
+		{name: "empty", members: nil},
+		{name: "unreported", members: []string{"ghost"}},
+	}
+	all := []ipc.ServiceInfo{{Name: "web", State: "running"}, {Name: "api", State: "stopped"}}
+
+	var p targetPicker
+	p.openAt(rows, "")
+	var wantH, wantW int
+	for i := 0; i <= len(rows); i++ {
+		p.cursor = i
+		out := plain(p.view(rows, all, ""))
+		h, w := lipgloss.Height(out), lipgloss.Width(out)
+		if i == 0 {
+			wantH, wantW = h, w
+			continue
+		}
+		assert.Equal(t, wantH, h, "cursor %d changed the modal height", i)
+		assert.Equal(t, wantW, w, "cursor %d changed the modal width", i)
+	}
+}
+
+// The cursor row carries an accent gutter bar as well as a background, so the
+// selection is visible at a glance and under --no-color.
+func TestTargetPicker_CursorRowCarriesGutter(t *testing.T) {
+	rows := targetRows()
+	var p targetPicker
+	p.openAt(rows, "")
+	p.cursor = 1 // "t1"
+
+	out := plain(p.view(rows, nil, ""))
+	require.Equal(t, 1, strings.Count(out, "▌"), "exactly one row is the cursor")
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "▌") {
+			assert.Contains(t, line, "t1", "the gutter sits on the cursor's row")
+		}
+	}
 }
 
 func TestModel_BuildTargets(t *testing.T) {
