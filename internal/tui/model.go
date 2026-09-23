@@ -103,6 +103,9 @@ func newModel(socketPath string, reg *config.Registry, src config.Source, logDir
 		source:      src,
 		logDir:      logDir,
 		cb:          cb,
+		// Init polls straight away, so a request is already in flight on the first
+		// frame; both resolve branches clear this.
+		spinning: true,
 	}
 }
 
@@ -115,7 +118,12 @@ func newSearchInput() textinput.Model {
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
-		tickDaemon(),
+		// Poll immediately rather than arming tickDaemon: the tick only schedules,
+		// so waiting for it left the first 2s showing drawn-but-empty chrome even
+		// when the daemon answers in milliseconds. Both the response and the error
+		// branch re-arm tickDaemon, so this starts the same single poll chain a
+		// tick would have — adding tickDaemon() here as well would run two.
+		m.pollDaemon(),
 		tickLog(),
 		tickSpin(),
 	)
