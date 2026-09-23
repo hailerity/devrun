@@ -17,7 +17,10 @@ var (
 	colorGreen  = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}
 	colorRed    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"}
 	colorYellow = lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#f0e68c"}
-	colorBorder = lipgloss.AdaptiveColor{Light: "#d0d7de", Dark: "#21262d"}
+	// Not GitHub's border tone, unlike the rest of the palette: that assumes a
+	// known page background, and on real terminal themes it measured 1.1–1.4:1,
+	// far under the 3:1 a non-text element needs. Floor held by styles_test.go.
+	colorBorder = lipgloss.AdaptiveColor{Light: "#868f99", Dark: "#767e89"}
 
 	colorSelSidebar = lipgloss.AdaptiveColor{Light: "#eaeef2", Dark: "#2d333b"} // sidebar selection
 	colorSelCursor  = lipgloss.AdaptiveColor{Light: "#e2e8ee", Dark: "#343b45"} // logs cursor line
