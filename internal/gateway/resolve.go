@@ -1,0 +1,170 @@
+package gateway
+
+import (
+	"net/http"
+	"sort"
+	"strings"
+)
+
+// Target is the service a request resolved to, and how much of the path belongs
+// to the gateway rather than to the service.
+type Target struct {
+	Service string
+	Prefix  string // path segment to strip before proxying; "" strips nothing
+}
+
+// Outcome says why a request did not resolve to something proxyable.
+type Outcome int
+
+const (
+	OK          Outcome = iota
+	NoSuchRoute         // nothing of that name is configured
+	NotRunning          // configured, but not up or no port known
+	NotExposed          // up, but may not leave this machine
+)
+
+// Resolve picks the service a request is for.
+//
+// Both URL shapes are accepted whatever Config.Mode says — the first Host label,
+// then the first path segment. Mode governs only which form the index
+// advertises. Accepting both costs nothing (neither reaches a service the other
+// could not, and the allowlist applies either way) and avoids a sharp edge:
+// subdomain routing locally means web.localhost:7788, which browsers resolve but
+// curl and some Linux resolvers do not, so a path URL has to keep working.
+//
+// An explicit routes table wins over both, since it was written on purpose.
+func (s *Server) Resolve(r *http.Request) (Target, Outcome) {
+	if t, ok := s.resolveRule(r.URL.Path); ok {
+		return s.check(t, r)
+	}
+	if t, ok := s.resolveHost(r.Host); ok {
+		return s.check(t, r)
+	}
+	if t, ok := s.resolvePath(r.URL.Path); ok {
+		return s.check(t, r)
+	}
+	return Target{}, NoSuchRoute
+}
+
+// check applies the rules that depend on live state rather than on the URL.
+func (s *Server) check(t Target, r *http.Request) (Target, Outcome) {
+	route, ok := s.route(t.Service)
+	if !ok {
+		return Target{}, NoSuchRoute
+	}
+	// The allowlist is a statement about leaving the machine, so it only bites
+	// once the request is coming from off it.
+	if s.Posture(r) == Published && !s.exposed(t.Service) {
+		return Target{}, NotExposed
+	}
+	if !route.Reachable() {
+		return Target{}, NotRunning
+	}
+	return t, OK
+}
+
+// resolveRule matches the longest configured path prefix, so "/api" wins over
+// "/" for /api/users however the map happens to be ordered.
+func (s *Server) resolveRule(path string) (Target, bool) {
+	if len(s.cfg.Rules) == 0 {
+		return Target{}, false
+	}
+	prefixes := make([]string, 0, len(s.cfg.Rules))
+	for p := range s.cfg.Rules {
+		prefixes = append(prefixes, p)
+	}
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+
+	for _, p := range prefixes {
+		if !pathMatches(path, p) {
+			continue
+		}
+		rule := s.cfg.Rules[p]
+		t := Target{Service: rule.Service}
+		if rule.Strip && p != "/" {
+			t.Prefix = strings.TrimSuffix(p, "/")
+		}
+		return t, true
+	}
+	return Target{}, false
+}
+
+// pathMatches reports whether path falls under the prefix. "/" matches
+// everything; "/api" matches /api and /api/... but not /apiary.
+func pathMatches(path, prefix string) bool {
+	if prefix == "/" || prefix == "" {
+		return true
+	}
+	prefix = "/" + strings.Trim(prefix, "/")
+	if path == prefix {
+		return true
+	}
+	return strings.HasPrefix(path, prefix+"/")
+}
+
+// resolveHost takes the service from the first Host label — web.devrun.example.com.
+// A bare host with no label to spare (localhost, an IP, a single-label name) names
+// no service.
+func (s *Server) resolveHost(reqHost string) (Target, bool) {
+	h := hostOnly(reqHost)
+	label, rest, found := strings.Cut(h, ".")
+	if !found || label == "" || rest == "" {
+		return Target{}, false
+	}
+	// "web.localhost" is a service; "127.0.0.1" is not, and neither is a bare
+	// "devrun.example.com" asking for the index.
+	if _, ok := s.route(label); !ok {
+		return Target{}, false
+	}
+	return Target{Service: label}, true
+}
+
+// resolvePath takes the service from the first path segment and strips it,
+// since the service knows nothing about being mounted under its own name.
+func (s *Server) resolvePath(path string) (Target, bool) {
+	seg := strings.Trim(path, "/")
+	if seg == "" {
+		return Target{}, false
+	}
+	if i := strings.Index(seg, "/"); i >= 0 {
+		seg = seg[:i]
+	}
+	if _, ok := s.route(seg); !ok {
+		return Target{}, false
+	}
+	return Target{Service: seg, Prefix: "/" + seg}, true
+}
+
+// exposed reports whether a service may leave this machine. Naming a service in
+// the routes table counts: mentioning it there is the intent, and requiring it
+// in two places would be a trap.
+func (s *Server) exposed(name string) bool {
+	for _, n := range s.Snapshot().Exposed {
+		if n == name {
+			return true
+		}
+	}
+	for _, rule := range s.cfg.Rules {
+		if rule.Service == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Listing is what the index shows: the services this request is allowed to see,
+// in name order.
+func (s *Server) Listing(r *http.Request) []Route {
+	snap := s.Snapshot()
+	published := s.Posture(r) == Published
+
+	out := make([]Route, 0, len(snap.Routes))
+	for _, route := range snap.Routes {
+		if published && !s.exposed(route.Name) {
+			continue
+		}
+		out = append(out, route)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
