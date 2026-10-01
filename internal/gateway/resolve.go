@@ -40,8 +40,13 @@ func (s *Server) Resolve(r *http.Request) (Target, Outcome) {
 	if t, ok := s.resolveHost(r.Host); ok {
 		return s.check(t, r)
 	}
-	if t, ok := s.resolvePath(r.URL.Path); ok {
-		return s.check(t, r)
+	// With an explicit routes table, those paths are the declared topology. A
+	// name-based fallback would hand every service a second address that
+	// bypasses its rule — including the Strip:false that buys prod parity.
+	if len(s.cfg.Rules) == 0 {
+		if t, ok := s.resolvePath(r.URL.Path); ok {
+			return s.check(t, r)
+		}
 	}
 	return Target{}, NoSuchRoute
 }
@@ -174,4 +179,27 @@ func (s *Server) Listing(r *http.Request) []Route {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// rulePath is the path the routes table mounts a service at, so the index can
+// link to the address the user declared rather than inventing /<name>/.
+// Shortest wins, ties by name, so the link does not depend on map order.
+func (s *Server) rulePath(name string) (string, bool) {
+	best, found := "", false
+	for p, rule := range s.cfg.Rules {
+		if rule.Service != name {
+			continue
+		}
+		norm := "/" + strings.Trim(p, "/")
+		if !found || len(norm) < len(best) || (len(norm) == len(best) && norm < best) {
+			best, found = norm, true
+		}
+	}
+	if !found {
+		return "", false
+	}
+	if best == "/" {
+		return "/", true
+	}
+	return best + "/", true
 }

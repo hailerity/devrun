@@ -189,7 +189,11 @@ func (s *Server) row(r *http.Request, route Route) indexRow {
 		out.Warn = true
 	default:
 		out.URL = s.serviceURL(r, route.Name)
-		if s.linkMode() == Subdomain {
+		if out.URL == "" {
+			// Running and reachable, but the routes table mounts it nowhere.
+			out.Note = "not routed"
+			out.Warn = true
+		} else if s.linkMode() == Subdomain {
 			out.Sub = subdomainHost(r.Host, route.Name)
 		}
 	}
@@ -223,6 +227,14 @@ func (s *Server) linkMode() Mode {
 
 // serviceURL builds the link for a service.
 func (s *Server) serviceURL(r *http.Request, name string) string {
+	if len(s.cfg.Rules) > 0 {
+		// The table is the topology; a service it does not mount has no path.
+		p, ok := s.rulePath(name)
+		if !ok {
+			return ""
+		}
+		return p
+	}
 	if s.linkMode() == Path {
 		// Relative, so it works over http locally and https once published
 		// without the gateway having to guess which it is behind.

@@ -203,3 +203,16 @@ func TestIndex_SubdomainLinksCarryTheKeyWhenPublished(t *testing.T) {
 	assert.Contains(t, out, `href="/web/"`)
 	assert.NotContains(t, out, "/web/?k=")
 }
+
+// The index must advertise the address the user declared, not /<service>/.
+func TestIndex_LinksToTheRulePath(t *testing.T) {
+	s := server(t,
+		Config{Rules: map[string]Rule{"/api": {Service: "backend", Strip: false}}},
+		Snapshot{Routes: []Route{running("backend", 3000), running("orphan", 5000)}},
+	)
+	out := body(t, s, get("", "/"))
+
+	assert.Contains(t, out, `href="/api/"`)
+	assert.NotContains(t, out, `href="/backend/"`, "that address no longer routes")
+	assert.Contains(t, out, "not routed", "a service the table mounts nowhere says so")
+}

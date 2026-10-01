@@ -200,3 +200,38 @@ func TestResolve_RuleKeyWithoutLeadingSlashStillStrips(t *testing.T) {
 	assert.Equal(t, "/users", stripPrefix("/api/users", got.Prefix),
 		"a matched prefix must also be a strippable one")
 }
+
+// A routes table is the declared topology. Without this, a rule mounting
+// `backend` at /api with Strip:false left the service reachable at a second,
+// prefix-stripped /backend/ — bypassing the very rule that was written.
+func TestResolve_RoutesTableIsTheOnlyPathTopology(t *testing.T) {
+	s := server(t,
+		Config{Rules: map[string]Rule{"/api": {Service: "backend", Strip: false}}},
+		Snapshot{Routes: []Route{running("backend", 3000)}},
+	)
+
+	got, outcome := s.Resolve(get("", "/api/users"))
+	require.Equal(t, OK, outcome)
+	assert.Equal(t, Target{Service: "backend"}, got, "Strip:false keeps /api on the request")
+
+	_, outcome = s.Resolve(get("", "/backend/users"))
+	assert.Equal(t, NoSuchRoute, outcome, "the name-based path must not be a second address")
+}
+
+func TestRulePath(t *testing.T) {
+	s := server(t, Config{Rules: map[string]Rule{
+		"/":       {Service: "web"},
+		"/api":    {Service: "backend"},
+		"/api/v2": {Service: "backend"},
+		"bare":    {Service: "odd"},
+	}}, Snapshot{})
+
+	for name, want := range map[string]string{"web": "/", "backend": "/api/", "odd": "/bare/"} {
+		got, ok := s.rulePath(name)
+		require.Truef(t, ok, "%s should be mounted", name)
+		assert.Equalf(t, want, got, "%s: shortest mount wins, normalised", name)
+	}
+
+	_, ok := s.rulePath("nothing")
+	assert.False(t, ok)
+}

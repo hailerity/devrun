@@ -175,3 +175,33 @@ func TestStripPrefix(t *testing.T) {
 		assert.Equalf(t, tc.want, stripPrefix(tc.path, tc.prefix), "%q under %q", tc.path, tc.prefix)
 	}
 }
+
+// The upstream is dialled as 127.0.0.1:<port>, but a service may spell the same
+// place "localhost:<port>". Treating that as a real elsewhere left the redirect
+// unrewritten and sent the browser out of the mount point.
+func TestProxy_SelfRedirectSpelledLocalhostIsReprefixed(t *testing.T) {
+	var port int
+	port, _ = upstream(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "http://localhost:"+strconv.Itoa(port)+"/dashboard")
+		w.WriteHeader(http.StatusFound)
+	})
+	s := server(t, Config{}, Snapshot{Routes: []Route{running("web", port)}})
+
+	assert.Equal(t, "/web/dashboard", serve(s, get("", "/web/login")).Header().Get("Location"))
+}
+
+func TestIsUpstream(t *testing.T) {
+	const up = "127.0.0.1:4200"
+	for host, want := range map[string]bool{
+		"127.0.0.1:4200":     true,
+		"localhost:4200":     true,
+		"LOCALHOST:4200":     true,
+		"web.localhost:4200": true,
+		"[::1]:4200":         true,
+		"127.0.0.1:9999":     false, // same host, different service
+		"example.com:4200":   false,
+		"localhost":          false, // no port to compare
+	} {
+		assert.Equalf(t, want, isUpstream(host, up), "%s vs %s", host, up)
+	}
+}

@@ -143,7 +143,7 @@ func reprefixLocation(resp *http.Response, prefix, upstream string) {
 	}
 	// An absolute URL pointing back at the upstream is the service talking about
 	// itself; anything else is a real elsewhere and is left alone.
-	if u.Host != "" && u.Host != upstream {
+	if u.Host != "" && !isUpstream(u.Host, upstream) {
 		return
 	}
 	if !strings.HasPrefix(u.Path, "/") {
@@ -193,4 +193,27 @@ func reprefixCookie(cookie, prefix string) string {
 	// No Path attribute: the browser would scope it to the request's directory,
 	// which is already inside the mount point.
 	return cookie
+}
+
+// isUpstream reports whether a redirect's host is the service talking about
+// itself. The upstream is dialled as 127.0.0.1:<port>, but a service may spell
+// the same place "localhost:<port>" — any loopback name on that port is it.
+func isUpstream(host, upstream string) bool {
+	if strings.EqualFold(host, upstream) {
+		return true
+	}
+	h, hp, err := net.SplitHostPort(host)
+	if err != nil {
+		return false
+	}
+	_, up, err := net.SplitHostPort(upstream)
+	if err != nil || hp != up {
+		return false
+	}
+	h = strings.Trim(h, "[]")
+	if strings.EqualFold(h, "localhost") || hasLocalhostSuffix(h) {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
