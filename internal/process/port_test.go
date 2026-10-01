@@ -74,23 +74,7 @@ func TestParseProcNetTCPListen_Empty(t *testing.T) {
 // /proc/<pid>/net/tcp lists the entire namespace — so a service's reported port
 // could belong to something else running on the machine.
 func TestDetectPort_ReportsTheServicesOwnPort(t *testing.T) {
-	// Take a port, then hand it to the child.
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	want := probe.Addr().(*net.TCPAddr).Port
-	require.NoError(t, probe.Close())
-
-	self, err := os.Executable()
-	require.NoError(t, err)
-
-	p, err := process.Start(
-		fmt.Sprintf("'%s' -test.run='^TestPortListenHelper$'", self),
-		t.TempDir(),
-		map[string]string{"DEVRUN_TEST_LISTEN": fmt.Sprintf("127.0.0.1:%d", want)},
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = p.Stop() })
-	go func() { _, _ = io.Copy(io.Discard, p.PTY) }() // an unread PTY blocks the child
+	p, want := startListeningService(t)
 
 	require.Eventually(t, func() bool {
 		got, _ := process.DetectPort(p.Pid)
@@ -99,11 +83,53 @@ func TestDetectPort_ReportsTheServicesOwnPort(t *testing.T) {
 		"DetectPort never reported the child's own port :%d", want)
 }
 
+// startListeningService launches the test binary as a real devrun service —
+// sh -c, on a PTY — bound to a free port, and returns it with that port.
+func startListeningService(t *testing.T) (*process.Process, int) {
+	t.Helper()
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := probe.Addr().(*net.TCPAddr).Port
+	require.NoError(t, probe.Close()) // hand the port to the child
+
+	self, err := os.Executable()
+	require.NoError(t, err)
+
+	p, err := process.Start(
+		fmt.Sprintf("'%s' -test.run='^TestPortListenHelper$'", self),
+		t.TempDir(),
+		map[string]string{"DEVRUN_TEST_LISTEN": fmt.Sprintf("127.0.0.1:%d", port)},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = p.Stop() })
+	go func() { _, _ = io.Copy(io.Discard, p.PTY) }() // an unread PTY blocks the child
+	return p, port
+}
+
+// lsof exits non-zero when any requested pid cannot be examined, while still
+// reporting the ones it could. A batch covers whole process trees, so a pid
+// going away mid-call is routine — and must not cost every other service its
+// port. This failed when DetectPorts judged lsof by its exit status.
+func TestDetectPorts_SurvivesADeadPidInTheBatch(t *testing.T) {
+	p, want := startListeningService(t)
+
+	require.Eventually(t, func() bool {
+		// 0x7FFFFFFF cannot be a live pid; lsof will complain and exit non-zero.
+		return process.DetectPorts([]int{p.Pid, 0x7FFFFFFF})[p.Pid] == want
+	}, 15*time.Second, 250*time.Millisecond,
+		"a dead pid in the batch lost the live service's port :%d", want)
+}
+
 func TestDetectPorts_NoListenerIsAbsent(t *testing.T) {
 	assert.Empty(t, process.DetectPorts(nil))
-	// A pid that cannot be listening: our own test process holds no LISTEN
-	// socket, and pid 0 is not a process at all.
-	assert.NotContains(t, process.DetectPorts([]int{0}), 0)
+}
+
+// pid 0 is the parent of init/launchd, so walking down from it reaches every
+// process on the machine — it once came back with :53 from the DNS resolver.
+func TestDetectPorts_NonPidsAreNotWalked(t *testing.T) {
+	assert.Empty(t, process.DetectPorts([]int{0}))
+	assert.Empty(t, process.DetectPorts([]int{-1}))
 }
 
 // TestPortListenHelper is not a test. It is the child process spawned by
