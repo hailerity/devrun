@@ -43,6 +43,12 @@ func DetectPorts(pids []int) map[int]int {
 	trees := make(map[int][]int, len(pids))
 	seen := map[int]bool{}
 	for _, pid := range pids {
+		// 0 and below are not services. pid 0 is the parent of init/launchd, so
+		// walking down from it would sweep up every process on the machine and
+		// return the first port any of them happens to hold.
+		if pid <= 0 {
+			continue
+		}
 		tree := descendants(pid, children)
 		trees[pid] = tree
 		for _, p := range tree {
@@ -66,6 +72,7 @@ func DetectPorts(pids []int) map[int]int {
 		if len(ports) == 0 {
 			continue
 		}
+		// A service bound to both stacks reports the same port twice.
 		sort.Ints(ports)
 		out[pid] = ports[0]
 	}
@@ -93,14 +100,15 @@ func listenPortsLsof(pids []int) map[int][]int {
 	for i, p := range pids {
 		csv[i] = strconv.Itoa(p)
 	}
-	out, err := exec.Command("lsof",
+	// lsof is judged by its output, not its exit status. It exits non-zero when
+	// any one of the requested pids cannot be examined — routine for a batch
+	// covering whole process trees, where something exits mid-call — while still
+	// printing everything it did find. Treating that as failure threw away every
+	// service's port because one pid had gone.
+	out, _ := exec.Command("lsof",
 		"-a", "-p", strings.Join(csv, ","),
 		"-i", "-n", "-P", "-FpnT",
 	).Output()
-	if err != nil {
-		// lsof exits non-zero when nothing matches, which is not an error here.
-		return map[int][]int{}
-	}
 	return ParseLsofListenPorts(string(out))
 }
 
@@ -279,10 +287,8 @@ func childMap() map[int][]int {
 
 func childMapPS() map[int][]int {
 	m := map[int][]int{}
-	out, err := exec.Command("ps", "-ax", "-o", "pid=,ppid=").Output()
-	if err != nil {
-		return m
-	}
+	// As with lsof, parse whatever it printed rather than trusting the status.
+	out, _ := exec.Command("ps", "-ax", "-o", "pid=,ppid=").Output()
 	for _, line := range strings.Split(string(out), "\n") {
 		f := strings.Fields(line)
 		if len(f) != 2 {
