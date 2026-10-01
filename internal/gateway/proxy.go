@@ -10,9 +10,14 @@ import (
 	"strings"
 )
 
-// ServeHTTP routes a request to its service, or renders the index. The token
-// check arrives in the next commit.
+// ServeHTTP gates a request, then routes it to its service or renders the index.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The gate comes first: resolving reveals whether a name exists, and a
+	// caller without a key is not entitled to learn that.
+	if !s.authorize(w, r) {
+		return
+	}
+
 	target, outcome := s.Resolve(r)
 	switch outcome {
 	case OK:
