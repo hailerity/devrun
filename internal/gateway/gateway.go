@@ -7,10 +7,7 @@
 // routing and access rules testable with httptest alone.
 package gateway
 
-import (
-	"net/http"
-	"sync"
-)
+import "sync"
 
 // Posture says whether a request must be treated as coming from off this
 // machine. It decides whether the allowlist and the auth token apply: a gateway
@@ -147,10 +144,4 @@ func (s *Server) route(name string) (Route, bool) {
 		}
 	}
 	return Route{}, false
-}
-
-// ServeHTTP is filled in by the proxy and index commits; resolution and the
-// access rules land first so they can be tested on their own.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
 }
