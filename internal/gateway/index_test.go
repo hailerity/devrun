@@ -153,3 +153,25 @@ func TestItoa(t *testing.T) {
 		assert.Equal(t, want, itoa(n))
 	}
 }
+
+// Round 1 of review flagged that `/admin/` 404s while admin.host/ renders the
+// index, and proposed 404ing both. That would be backwards: a stranger probing
+// subdomains would then see 404 for a withheld service and 200 for a name that
+// does not exist, which is the enumeration vector. Compared like with like,
+// each URL shape is already indistinguishable — pinned here, since the original
+// test only covered paths.
+func TestWithheldIsIndistinguishable_InBothUrlShapes(t *testing.T) {
+	s := server(t, Config{Posture: PostureForced, Auth: AuthNone},
+		Snapshot{Routes: []Route{running("admin", 9000), running("web", 4200)}, Exposed: []string{"web"}})
+
+	withheldHost := serve(s, get("admin.devrun.example.com", "/"))
+	unknownHost := serve(s, get("zzz.devrun.example.com", "/"))
+	assert.Equal(t, unknownHost.Code, withheldHost.Code, "host form: status must not differ")
+	assert.NotContains(t, withheldHost.Body.String(), "9000",
+		"the index must not describe a service it is withholding")
+
+	withheldPath := serve(s, get("devrun.example.com", "/admin/"))
+	unknownPath := serve(s, get("devrun.example.com", "/zzz/"))
+	assert.Equal(t, unknownPath.Code, withheldPath.Code, "path form: status must not differ")
+	assert.Equal(t, unknownPath.Body.String(), withheldPath.Body.String())
+}

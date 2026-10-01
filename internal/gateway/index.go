@@ -161,10 +161,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		page.Services = append(page.Services, s.row(r, route))
 	}
 	if published {
-		page.Summary = plural(len(listed), "published", "published")
-		if len(all) > 0 {
-			page.Summary = itoa(len(listed)) + " of " + itoa(len(all)) + " published"
-		}
+		page.Summary = itoa(len(listed)) + " of " + itoa(len(all)) + " published"
 	} else {
 		page.Summary = plural(len(all), "service", "services") + " · " + itoa(running) + " running"
 	}

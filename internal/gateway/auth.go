@@ -30,9 +30,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 			s.denied(w, r)
 			return false
 		}
-		// Trade the query parameter for a cookie and send the browser to the
-		// clean URL, so the key stops riding along in the address bar, in
-		// Referer headers, and in whatever the user copies out of it.
+		// Trade the query parameter for a cookie, so the key stops riding along
+		// in the address bar, in Referer headers, and in whatever the user
+		// copies out of it.
 		http.SetCookie(w, &http.Cookie{
 			Name:     tokenCookie,
 			Value:    key,
@@ -41,8 +41,14 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
 			SameSite: http.SameSiteLaxMode,
 			Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 		})
-		http.Redirect(w, r, cleanURL(r), http.StatusFound)
-		return false
+		// Only a navigation gains anything from the clean address, and a
+		// redirect would turn a POST into a GET and drop its body — so anything
+		// else keeps the request it made and proceeds with the cookie set.
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			http.Redirect(w, r, cleanURL(r), http.StatusFound)
+			return false
+		}
+		return true
 	}
 
 	if after, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {

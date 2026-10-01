@@ -147,3 +147,20 @@ func TestTokenMatches(t *testing.T) {
 	assert.False(t, tokenMatches("", ""), "an unset token can never be matched")
 	assert.False(t, tokenMatches("anything", ""))
 }
+
+// A 302 rewrites a POST to a GET and drops its body, so a non-GET request
+// carrying the key could never authenticate. Only a navigation gains anything
+// from the clean address; everything else keeps the request it made.
+func TestAuth_QueryKeyDoesNotRedirectNonNavigations(t *testing.T) {
+	port, hits := upstream(t, nil)
+	s := published(t, Config{}, oneService(port))
+
+	r := get("devrun.example.com", "/web/items?k="+key)
+	r.Method = http.MethodPost
+	w := serve(s, r)
+
+	assert.Equal(t, http.StatusOK, w.Code, "the POST is served, not redirected")
+	require.Len(t, *hits, 1)
+	assert.Equal(t, http.MethodPost, (*hits)[0].Method, "the method survives")
+	require.Len(t, w.Result().Cookies(), 1, "and the key is still banked for next time")
+}
