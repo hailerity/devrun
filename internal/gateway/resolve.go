@@ -53,12 +53,16 @@ func (s *Server) check(t Target, r *http.Request) (Target, Outcome) {
 		return Target{}, NoSuchRoute
 	}
 	// The allowlist is a statement about leaving the machine, so it only bites
-	// once the request is coming from off it.
+	// once the request is coming from off it. The target is deliberately dropped
+	// here: a withheld service's name must not reach a caller that could put it
+	// in an error page.
 	if s.Posture(r) == Published && !s.exposed(t.Service) {
 		return Target{}, NotExposed
 	}
+	// NotRunning keeps its target — it passed the allowlist, so naming it in the
+	// response tells the reader nothing they were not already entitled to.
 	if !route.Reachable() {
-		return Target{}, NotRunning
+		return t, NotRunning
 	}
 	return t, OK
 }

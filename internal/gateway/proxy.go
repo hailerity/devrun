@@ -10,19 +10,32 @@ import (
 	"strings"
 )
 
-// ServeHTTP routes a request to its service. The index at / and the token check
-// arrive in later commits; everything here is the proxy path.
+// ServeHTTP routes a request to its service, or renders the index. The token
+// check arrives in the next commit.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target, outcome := s.Resolve(r)
 	switch outcome {
 	case OK:
 		s.proxy(w, r, target)
+
 	case NotRunning:
-		http.Error(w, fmt.Sprintf("%s is not running", target.Service), http.StatusServiceUnavailable)
+		s.statusPage(w, r, http.StatusServiceUnavailable,
+			target.Service+" is not running",
+			"Start it with devrun start "+target.Service+", then reload this page.")
+
 	default:
-		// NotExposed answers exactly as NoSuchRoute does: telling a stranger
-		// that a service exists but is withheld is itself information.
-		http.NotFound(w, r)
+		// The index lives at the root. An explicit catch-all route puts a
+		// service there instead, in which case Resolve above already took it.
+		if r.URL.Path == "/" {
+			s.index(w, r)
+			return
+		}
+		// NotExposed answers exactly as NoSuchRoute does, down to the wording:
+		// that a service exists but is withheld is itself something a stranger
+		// should not learn.
+		s.statusPage(w, r, http.StatusNotFound,
+			"No service here",
+			"Nothing is served at this address.")
 	}
 }
 
