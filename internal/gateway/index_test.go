@@ -175,3 +175,31 @@ func TestWithheldIsIndistinguishable_InBothUrlShapes(t *testing.T) {
 	assert.Equal(t, unknownPath.Code, withheldPath.Code, "path form: status must not differ")
 	assert.Equal(t, unknownPath.Body.String(), withheldPath.Body.String())
 }
+
+// The handover cookie is host-only, and every subdomain link goes to a
+// different host — so a bare link would land somewhere with no cookie and 401.
+// The published subdomain flow is the recommended configuration, so it has to
+// work end to end.
+func TestIndex_SubdomainLinksCarryTheKeyWhenPublished(t *testing.T) {
+	snap := Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}}
+
+	pub := server(t, Config{Posture: PostureForced, Mode: Subdomain, Token: key}, snap)
+	// Already past the gate: a bare ?k= would be traded for a cookie and
+	// redirected before the index ever rendered.
+	r := get("devrun.example.com", "/")
+	r.AddCookie(&http.Cookie{Name: tokenCookie, Value: key})
+	out := body(t, pub, r)
+	assert.Contains(t, out, "https://web.devrun.example.com/?k="+key)
+
+	// Locally nothing is gated, so the key has no business being in the markup.
+	loc := server(t, Config{Mode: Subdomain, Token: key}, snap)
+	assert.NotContains(t, body(t, loc, get("", "/")), "k="+key)
+
+	// Path links stay on this host, which already has the cookie.
+	path := server(t, Config{Posture: PostureForced, Mode: Path, Token: key}, snap)
+	r = get("devrun.example.com", "/")
+	r.AddCookie(&http.Cookie{Name: tokenCookie, Value: key})
+	out = body(t, path, r)
+	assert.Contains(t, out, `href="/web/"`)
+	assert.NotContains(t, out, "/web/?k=")
+}

@@ -85,8 +85,11 @@ func (s *Server) resolveRule(path string) (Target, bool) {
 		}
 		rule := s.cfg.Rules[p]
 		t := Target{Service: rule.Service}
-		if rule.Strip && p != "/" {
-			t.Prefix = strings.TrimSuffix(p, "/")
+		// Normalised the same way pathMatches does, so a key written "api"
+		// rather than "/api" is stripped as well as matched — otherwise it
+		// matches here and then fails to strip, forwarding the whole path.
+		if norm := "/" + strings.Trim(p, "/"); rule.Strip && norm != "/" {
+			t.Prefix = norm
 		}
 		return t, true
 	}

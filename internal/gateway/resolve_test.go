@@ -184,3 +184,19 @@ func TestRoute_Reachable(t *testing.T) {
 	assert.False(t, Route{Name: "web", State: "stopped", Port: 4200}.Reachable())
 	assert.False(t, Route{Name: "web", State: "crashed", Port: 4200}.Reachable())
 }
+
+// pathMatches normalises the prefix but resolveRule used to take Target.Prefix
+// from the raw map key, so a rule written "api" instead of "/api" matched the
+// request and then failed to strip, forwarding the whole path upstream.
+func TestResolve_RuleKeyWithoutLeadingSlashStillStrips(t *testing.T) {
+	s := server(t,
+		Config{Rules: map[string]Rule{"api": {Service: "api", Strip: true}}},
+		Snapshot{Routes: []Route{running("api", 3000)}},
+	)
+
+	got, outcome := s.Resolve(get("", "/api/users"))
+	require.Equal(t, OK, outcome)
+	assert.Equal(t, Target{Service: "api", Prefix: "/api"}, got)
+	assert.Equal(t, "/users", stripPrefix("/api/users", got.Prefix),
+		"a matched prefix must also be a strippable one")
+}

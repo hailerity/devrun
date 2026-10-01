@@ -3,6 +3,7 @@ package gateway
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -231,7 +232,21 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 	if s.Posture(r) == Published {
 		scheme = "https"
 	}
-	return scheme + "://" + subdomainHost(r.Host, name) + "/"
+	link := scheme + "://" + subdomainHost(r.Host, name) + "/"
+
+	// Each service is a different host and the handover cookie is host-only, so
+	// a bare link would land somewhere with no cookie and 401. Carry the key:
+	// the destination trades it for its own cookie and redirects to the clean
+	// address at once. Anyone reading this page already got past the gate, so
+	// the key is not exposed to someone who did not have it.
+	//
+	// A Domain-scoped cookie would avoid the repetition, but it needs the apex
+	// hostname, which this package does not know — Config carries the bind
+	// address, not the public name.
+	if s.NeedsToken(r) {
+		link += "?k=" + url.QueryEscape(s.cfg.Token)
+	}
+	return link
 }
 
 // subdomainHost puts the service's label in front of the gateway's own host,
