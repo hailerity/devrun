@@ -24,16 +24,38 @@ func (s *supervisor) startPortPoller(ctx context.Context) {
 }
 
 func (s *supervisor) pollPorts() {
+	// Snapshot the pids under the lock and detect without holding it. Detection
+	// forks ps and lsof; this used to keep s.mu for the whole walk, so any list
+	// request landing mid-poll waited behind one exec per running service.
+	s.mu.RLock()
+	pids := make([]int, 0, len(s.services))
+	owner := make(map[int]string, len(s.services))
+	for name, svc := range s.services {
+		if svc.state.Status != config.StatusRunning || svc.state.PID == nil {
+			continue
+		}
+		pids = append(pids, *svc.state.PID)
+		owner[*svc.state.PID] = name
+	}
+	s.mu.RUnlock()
+
+	if len(pids) == 0 {
+		return
+	}
+	ports := process.DetectPorts(pids)
+	if len(ports) == 0 {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	changed := false
-	for _, svc := range s.services {
-		if svc.state.Status != config.StatusRunning || svc.state.PID == nil {
-			continue
-		}
-		port, err := process.DetectPort(*svc.state.PID)
-		if err != nil || port == 0 {
+	for pid, port := range ports {
+		svc, ok := s.services[owner[pid]]
+		// A service can have been stopped or restarted while the lock was down,
+		// so only apply a port to the pid it was actually read from.
+		if !ok || svc.state.PID == nil || *svc.state.PID != pid {
 			continue
 		}
 		if svc.state.Port == nil || *svc.state.Port != port {
