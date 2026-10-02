@@ -63,9 +63,12 @@ func fetchRoutes(socketPath string, exposed []string) (gateway.Snapshot, error) 
 	return gateway.Snapshot{Routes: routesFrom(payload.Services), Exposed: exposed}, nil
 }
 
-// routesFrom narrows what the daemon reports to what the gateway needs. A
-// declared port wins over the detected one; detection is correct but lags a
-// start by up to one poll and picks the lowest when there are several.
+// routesFrom narrows what the daemon reports to what the gateway needs.
+//
+// The port is whatever the daemon detected. A service's declared port: reaches
+// the daemon but is not yet carried in ServiceInfo, so it does not reach here —
+// surfacing the effective port belongs with the group that adds URL to that
+// struct, which touches it anyway.
 func routesFrom(services []ipc.ServiceInfo) []gateway.Route {
 	out := make([]gateway.Route, 0, len(services))
 	for _, svc := range services {
