@@ -216,3 +216,19 @@ func TestIndex_LinksToTheRulePath(t *testing.T) {
 	assert.NotContains(t, out, `href="/backend/"`, "that address no longer routes")
 	assert.Contains(t, out, "not routed", "a service the table mounts nowhere says so")
 }
+
+// A label in front of an IP address is not a hostname: hello.127.0.0.1 resolves
+// nowhere. A gateway reached by address can only offer paths.
+func TestIndex_NoSubdomainLinksWhenReachedByIP(t *testing.T) {
+	snap := Snapshot{Routes: []Route{running("web", 4200)}}
+	s := server(t, Config{Mode: Subdomain}, snap)
+
+	out := body(t, s, get("127.0.0.1:7801", "/"))
+	assert.NotContains(t, out, "web.127.0.0.1", "that hostname cannot resolve")
+	assert.Contains(t, out, `href="/web/"`)
+	assert.Contains(t, out, "Served under a path", "and the caveat follows the links")
+
+	// A name can take a label, so the mode is honoured there.
+	out = body(t, s, get("localhost:7801", "/"))
+	assert.Contains(t, out, "web.localhost:7801")
+}
