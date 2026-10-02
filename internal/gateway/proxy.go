@@ -19,6 +19,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	target, outcome := s.Resolve(r)
+	// A name we have not heard of may just be newer than the last poll. Re-read
+	// once and try again before deciding it does not exist.
+	if outcome == NoSuchRoute && r.URL.Path != "/" && s.missRefresh(r.Context()) {
+		target, outcome = s.Resolve(r)
+	}
 	switch outcome {
 	case OK:
 		s.proxy(w, r, target)

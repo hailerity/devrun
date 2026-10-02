@@ -7,7 +7,10 @@
 // routing and access rules testable with httptest alone.
 package gateway
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // Posture says whether a request must be treated as coming from off this
 // machine. It decides whether the allowlist and the auth token apply: a gateway
@@ -97,8 +100,10 @@ type Snapshot struct {
 type Server struct {
 	cfg Config
 
-	mu   sync.RWMutex
-	snap Snapshot
+	mu        sync.RWMutex
+	snap      Snapshot
+	fetch     Fetcher   // optional; nil means the snapshot is set from outside
+	lastFetch time.Time // rate-limits the on-miss refresh
 }
 
 func New(cfg Config) *Server {
@@ -115,6 +120,14 @@ func New(cfg Config) *Server {
 		cfg.HostHeader = HostUpstream
 	}
 	return &Server{cfg: cfg}
+}
+
+// SetFetcher lets the server re-read its own route table when a request names
+// something it has not heard of. Run sets it; tests usually leave it nil.
+func (s *Server) SetFetcher(f Fetcher) {
+	s.mu.Lock()
+	s.fetch = f
+	s.mu.Unlock()
 }
 
 // Config returns the static configuration. It is a copy: Rules is shared, and
