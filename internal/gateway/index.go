@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -154,7 +155,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	page := indexPage{
 		Host:      r.Host,
 		Published: published,
-		PathMode:  s.linkMode() == Path,
+		PathMode:  s.linkMode() == Path || !canSubdomain(r.Host),
 		Version:   s.cfg.Version,
 		Total:     len(all),
 	}
@@ -193,7 +194,7 @@ func (s *Server) row(r *http.Request, route Route) indexRow {
 			// Running and reachable, but the routes table mounts it nowhere.
 			out.Note = "not routed"
 			out.Warn = true
-		} else if s.linkMode() == Subdomain {
+		} else if s.linkMode() == Subdomain && canSubdomain(r.Host) {
 			out.Sub = subdomainHost(r.Host, route.Name)
 		}
 	}
@@ -235,7 +236,10 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 		}
 		return p
 	}
-	if s.linkMode() == Path {
+	// A label in front of an IP address is not a hostname — hello.127.0.0.1
+	// resolves nowhere — so a gateway reached by address can only offer paths,
+	// whatever the mode says.
+	if s.linkMode() == Path || !canSubdomain(r.Host) {
 		// Relative, so it works over http locally and https once published
 		// without the gateway having to guess which it is behind.
 		return "/" + name + "/"
@@ -259,6 +263,13 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 		link += "?k=" + url.QueryEscape(s.cfg.Token)
 	}
 	return link
+}
+
+// canSubdomain reports whether a label can be put in front of this host and
+// still resolve. An IP address cannot take one, and neither can an empty host.
+func canSubdomain(gatewayHost string) bool {
+	h := hostOnly(gatewayHost)
+	return h != "" && net.ParseIP(h) == nil
 }
 
 // subdomainHost puts the service's label in front of the gateway's own host,
