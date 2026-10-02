@@ -144,12 +144,36 @@ func setExposed(names []string, exposed bool) error {
 			return err
 		}
 	}
+	// Persist first. The allowlist is what may leave this machine, so it has to
+	// outlive the running gateway — otherwise the next `gateway up` reads the
+	// file, sees something different, and silently restarts without the edit.
+	_, src, err := activeRegistry()
+	if err != nil {
+		return err
+	}
+	if err := config.SaveGatewayExpose(src, names, exposed); err != nil {
+		return err
+	}
+
 	status, err := ops.GatewayExpose(config.SocketPath(), names, exposed)
+	if errors.Is(err, ops.ErrNoDaemon) {
+		// Recorded for next time; there is no gateway to tell.
+		fmt.Println(describeExposure(names, exposed) + " (gateway is not running)")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	printGateway(status)
 	return nil
+}
+
+func describeExposure(names []string, exposed bool) string {
+	verb := "may now leave this machine"
+	if !exposed {
+		verb = "may no longer leave this machine"
+	}
+	return strings.Join(names, ", ") + " " + verb
 }
 
 // displayHost turns a listen address into one a person can open. A wildcard

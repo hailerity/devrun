@@ -49,6 +49,8 @@ func runGateway(args []string) int {
 	resolved := block.Defaults()
 
 	cfg := ops.GatewayServerConfig(resolved, version())
+	// The daemon mints the token and passes it down, so the same one survives a
+	// restart. A gateway started by hand has nobody to mint for it.
 	cfg.Token = os.Getenv(gatewayTokenEnv)
 	if cfg.Token == "" {
 		cfg.Token = newToken()
