@@ -36,11 +36,12 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      # Conventional types with or without a scope: docs:, docs(readme):, ci!: ...
+      - '^(docs|test|chore|ci)(\(.*\))?!?:'
+      - "^review:"
       - "Merge pull request"
       - "Merge branch"
+      - "Merge remote-tracking branch"
 
 release:
   github:

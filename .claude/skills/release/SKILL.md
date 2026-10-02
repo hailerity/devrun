@@ -40,7 +40,7 @@ Choose the next semver from the unreleased commits (project is **pre-1.0**):
 | only `fix:` / `perf:` / `docs:` / `chore:` | patch — `0.x.Y` |
 | a breaking change (`feat!:`, `fix!:`, `BREAKING CHANGE:`) | minor while 0.x — **call it out explicitly to the user** |
 
-`docs:`, `test:`, `chore:` and merge commits are filtered out of the generated changelog, but
+`docs`, `test`, `chore`, `ci` (scoped or not), `review:` and merge commits are filtered out of the generated changelog, but
 still count toward "there is something to release". **State the proposed version and the reason,
 and get the user's confirmation before tagging.**
 
