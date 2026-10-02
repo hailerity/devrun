@@ -124,3 +124,40 @@ func TestReadGatewayAddr(t *testing.T) {
 		assert.ErrorContains(t, err, "panic: something")
 	})
 }
+
+// shutdown must serialise with the lifecycle. Without it, an up in flight —
+// holding gatewayOps with mu released to spawn — assigns its child after
+// shutdown has already looked, leaving a listener that outlives the daemon.
+func TestShutdown_WaitsForAnInFlightGatewayUp(t *testing.T) {
+	s := quietSupervisor(t)
+
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	go func() {
+		s.gatewayOps.Lock()
+		defer s.gatewayOps.Unlock()
+		close(started)
+		<-finish // stand in for spawnGateway waiting on the child
+	}()
+	<-started
+
+	acquired := make(chan struct{})
+	go func() {
+		s.gatewayOps.Lock()
+		defer s.gatewayOps.Unlock()
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("shutdown took the lifecycle lock while an up held it")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(finish)
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown never got the lifecycle lock")
+	}
+}

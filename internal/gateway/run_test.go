@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -141,4 +142,27 @@ func TestMissRefresh_IsRateLimited(t *testing.T) {
 func TestMissRefresh_WithoutAFetcherDoesNothing(t *testing.T) {
 	s := server(t, Config{}, Snapshot{})
 	assert.False(t, s.missRefresh(context.Background()), "a test server has no daemon to ask")
+}
+
+// The point of the miss-refresh limit is to bound how often the daemon is
+// asked. A periodic poll asks it too, so it has to count.
+func TestMissRefresh_PeriodicPollCountsTowardTheBudget(t *testing.T) {
+	var calls atomic.Int32
+	s := server(t, Config{}, Snapshot{})
+	s.SetFetcher(func(context.Context) (Snapshot, error) {
+		calls.Add(1)
+		return Snapshot{}, nil
+	})
+
+	s.markFetched() // stand in for the refresh loop having just run
+	assert.False(t, s.missRefresh(context.Background()),
+		"a miss straight after a poll must not ask again")
+	assert.Equal(t, int32(0), calls.Load())
+}
+
+func TestNewToken(t *testing.T) {
+	a, b := NewToken(), NewToken()
+	assert.NotEqual(t, a, b, "a predictable key is worse than no gateway")
+	assert.True(t, strings.HasPrefix(a, "k_"))
+	assert.Len(t, a, 2+32, "128 bits as hex")
 }
