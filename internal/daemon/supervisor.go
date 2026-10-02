@@ -42,6 +42,8 @@ type supervisor struct {
 	// managed services running. Set by server.go once the listener is up; a nil
 	// value makes the daemon-reexec request report "unsupported".
 	onReexec func()
+	// gateway is the running gateway child, or nil. Guarded by mu.
+	gateway *gatewayChild
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -117,6 +119,14 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleRemove(req.Payload))
 	case "list":
 		_ = ipc.WriteMessage(conn, s.handleList())
+	case "gateway-up":
+		_ = ipc.WriteMessage(conn, s.handleGatewayUp(req.Payload))
+	case "gateway-down":
+		_ = ipc.WriteMessage(conn, s.handleGatewayDown())
+	case "gateway-status":
+		_ = ipc.WriteMessage(conn, s.handleGatewayStatus())
+	case "gateway-expose":
+		_ = ipc.WriteMessage(conn, s.handleGatewayExpose(req.Payload))
 	case "attach":
 		s.handleAttach(conn, req.Payload)
 	case "daemon-stop":
@@ -679,6 +689,9 @@ func (s *supervisor) shutdown() {
 	}
 
 	s.mu.Lock()
+	// The gateway goes too: publishing an origin whose services are being
+	// stopped is worse than not publishing.
+	s.stopGatewayLocked()
 	var targets []target
 	for name, svc := range s.services {
 		if svc.state.Status != config.StatusRunning && svc.state.Status != config.StatusStarting {

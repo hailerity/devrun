@@ -3,7 +3,9 @@ package ops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
@@ -95,4 +97,58 @@ func GatewayServerConfig(g config.GatewayConfig, version string) gateway.Config 
 		}
 	}
 	return cfg
+}
+
+// GatewayUp starts the gateway, or reconfigures a running one. Idempotent: the
+// daemon leaves an identically-configured gateway alone.
+func GatewayUp(socketPath string, cfg *config.GatewayConfig) (ipc.GatewayStatusPayload, error) {
+	return gatewayCall(socketPath, "gateway-up", ipc.GatewayUpPayload{Config: cfg})
+}
+
+// GatewayDown stops it. Stopping a gateway that is not running is not an error.
+func GatewayDown(socketPath string) error {
+	_, err := gatewayCall(socketPath, "gateway-down", struct{}{})
+	return err
+}
+
+// GatewayStatus reports what the gateway is doing. A zero payload means it is
+// not running.
+func GatewayStatus(socketPath string) (ipc.GatewayStatusPayload, error) {
+	return gatewayCall(socketPath, "gateway-status", struct{}{})
+}
+
+// GatewayExpose adds or removes services from the allowlist — what may leave
+// this machine.
+func GatewayExpose(socketPath string, names []string, exposed bool) (ipc.GatewayStatusPayload, error) {
+	return gatewayCall(socketPath, "gateway-expose",
+		ipc.GatewayExposePayload{Names: names, Exposed: exposed})
+}
+
+func gatewayCall(socketPath, reqType string, payload any) (ipc.GatewayStatusPayload, error) {
+	var out ipc.GatewayStatusPayload
+
+	c, err := client.Connect(socketPath)
+	if err != nil {
+		return out, ErrNoDaemon
+	}
+	defer func() { _ = c.Close() }()
+
+	resp, err := c.Send(reqType, payload)
+	if err != nil {
+		return out, err
+	}
+	if !resp.OK {
+		// A daemon from before the gateway existed answers every new request
+		// type the same way; say what to do about it rather than echoing it.
+		if strings.Contains(resp.Error, "unknown request type") {
+			return out, fmt.Errorf("this daemon predates the gateway — run `devrun daemon restart`")
+		}
+		return out, errors.New(resp.Error)
+	}
+	if len(resp.Payload) > 0 {
+		if err := json.Unmarshal(resp.Payload, &out); err != nil {
+			return out, fmt.Errorf("decode %s: %w", reqType, err)
+		}
+	}
+	return out, nil
 }

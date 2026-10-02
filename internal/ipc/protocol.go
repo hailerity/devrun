@@ -32,11 +32,21 @@ type StartPayload struct {
 	Name   string                `json:"name"`
 	Config *config.ServiceConfig `json:"config,omitempty"`
 }
-type StartResponsePayload struct{ PID int `json:"pid"` }
-type StopPayload struct{ Name string `json:"name"` }
-type RemovePayload struct{ Name string `json:"name"` }
-type AttachPayload struct{ Name string `json:"name"` }
-type DetachPayload struct{ Name string `json:"name"` }
+type StartResponsePayload struct {
+	PID int `json:"pid"`
+}
+type StopPayload struct {
+	Name string `json:"name"`
+}
+type RemovePayload struct {
+	Name string `json:"name"`
+}
+type AttachPayload struct {
+	Name string `json:"name"`
+}
+type DetachPayload struct {
+	Name string `json:"name"`
+}
 
 // TargetStartPayload starts every service in a target. Services carries the full
 // definitions inline — the daemon has no target vocabulary of its own — the same
@@ -49,7 +59,9 @@ type TargetStartPayload struct {
 // TargetStopPayload stops a target. The daemon resolves which members to stop
 // from the snapshot it recorded at target-start time, skipping any still held by
 // another active target.
-type TargetStopPayload struct{ Name string `json:"name"` }
+type TargetStopPayload struct {
+	Name string `json:"name"`
+}
 
 type ServiceInfo struct {
 	Name      string  `json:"name"`
@@ -105,4 +117,30 @@ func ReadMessage(r io.Reader, dst interface{}) error {
 		return fmt.Errorf("unmarshal message: %w", err)
 	}
 	return nil
+}
+
+// GatewayUpPayload starts (or reconfigures) the gateway. The config travels
+// inline for the same reason a project service's does: the daemon cannot read
+// the devrun.yaml the CLI resolved.
+type GatewayUpPayload struct {
+	Config *config.GatewayConfig `json:"config,omitempty"`
+}
+
+// GatewayExposePayload adds or removes services from the allowlist — what may
+// leave this machine.
+type GatewayExposePayload struct {
+	Names   []string `json:"names"`
+	Exposed bool     `json:"exposed"`
+}
+
+// GatewayStatusPayload is the gateway's runtime state. A zero value means it is
+// not running.
+type GatewayStatusPayload struct {
+	Running bool     `json:"running"`
+	Addr    string   `json:"addr,omitempty"`
+	Posture string   `json:"posture,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Token   string   `json:"token,omitempty"`
+	Exposed []string `json:"exposed,omitempty"`
+	PID     *int     `json:"pid,omitempty"`
 }
