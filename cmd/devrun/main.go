@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/hailerity/devrun/internal/cli"
@@ -16,6 +17,10 @@ func main() {
 			socketPath = os.Args[2]
 		}
 		if err := daemon.Run(socketPath); err != nil {
+			// Say why. A daemon that dies silently is indistinguishable from
+			// one that never started, and the caller only sees "timed out
+			// waiting for daemon to start".
+			fmt.Fprintf(os.Stderr, "devrun daemon: %v\n", err)
 			os.Exit(1)
 		}
 		return
