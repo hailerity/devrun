@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -53,7 +51,7 @@ func runGateway(args []string) int {
 	// restart. A gateway started by hand has nobody to mint for it.
 	cfg.Token = os.Getenv(gatewayTokenEnv)
 	if cfg.Token == "" {
-		cfg.Token = newToken()
+		cfg.Token = gateway.NewToken()
 	}
 
 	// SIGTERM is how the supervisor stops it; SIGINT is a person in a terminal.
@@ -73,16 +71,4 @@ func runGateway(args []string) int {
 		return 1
 	}
 	return 0
-}
-
-// newToken mints a key for this gateway. 128 bits of randomness, hex so it
-// survives a URL, a shell and a copy-paste without escaping.
-func newToken() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failing is not survivable: a predictable key is worse
-		// than no gateway.
-		panic("gateway: cannot mint a token: " + err.Error())
-	}
-	return "k_" + hex.EncodeToString(b[:])
 }

@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,11 +11,18 @@ import (
 	"time"
 
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/gateway"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/process"
 )
 
 // gatewayChild is the supervisor's handle on the running gateway process.
+//
+// It is deliberately not persisted. state.json has no gateway field, so a
+// gateway does not survive `devrun daemon restart` — the re-exec leaves the
+// child running but the replacement daemon has no handle on it. Re-adopting it
+// by pid is plan step 2.4's remaining half and is not in this change; until
+// then, `devrun gateway up` after a daemon restart is the way back.
 type gatewayChild struct {
 	pid   int
 	addr  string
@@ -68,7 +73,7 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 		// Minted here, not in the child: the daemon is what reports it to the
 		// CLI, and what must hand the same one back on every restart so a link
 		// already shared keeps working.
-		token = newGatewayToken()
+		token = gateway.NewToken()
 	}
 	s.mu.Unlock()
 
@@ -80,7 +85,6 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	s.mu.Lock()
 	s.gateway = child
 	resp := s.gatewayStatusLocked()
-	_ = s.saveStateLocked()
 	s.mu.Unlock()
 	return okResp(resp)
 }
@@ -92,7 +96,6 @@ func (s *supervisor) handleGatewayDown() *ipc.Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopGatewayLocked()
-	_ = s.saveStateLocked()
 	return &ipc.Response{OK: true}
 }
 
@@ -137,7 +140,6 @@ func (s *supervisor) handleGatewayExpose(raw json.RawMessage) *ipc.Response {
 	s.mu.Lock()
 	s.gateway = child
 	resp := s.gatewayStatusLocked()
-	_ = s.saveStateLocked()
 	s.mu.Unlock()
 	return okResp(resp)
 }
@@ -316,15 +318,4 @@ func okResp(v any) *ipc.Response {
 		return errResp(fmt.Sprintf("encode response: %v", err))
 	}
 	return &ipc.Response{OK: true, Payload: blob}
-}
-
-// newGatewayToken mints a key for the gateway: 128 bits of randomness, hex so it
-// survives a URL, a shell and a copy-paste without escaping.
-func newGatewayToken() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// A predictable key is worse than no gateway.
-		panic("devrun: cannot mint a gateway token: " + err.Error())
-	}
-	return "k_" + hex.EncodeToString(b[:])
 }

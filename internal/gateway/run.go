@@ -93,6 +93,10 @@ func (s *Server) refresh(ctx context.Context, fetch Fetcher) {
 		case <-t.C:
 			if snap, err := fetchOnce(ctx, fetch); err == nil {
 				s.SetSnapshot(snap)
+				// Counts toward the miss-refresh budget: the point of that
+				// limit is to bound how often the daemon is asked, and this
+				// asked.
+				s.markFetched()
 			}
 		}
 	}
@@ -129,6 +133,13 @@ func (s *Server) missRefresh(ctx context.Context) bool {
 	}
 	s.SetSnapshot(snap)
 	return true
+}
+
+// markFetched records that the daemon was just asked, whoever asked it.
+func (s *Server) markFetched() {
+	s.mu.Lock()
+	s.lastFetch = time.Now()
+	s.mu.Unlock()
 }
 
 // missRefreshEvery bounds how often an unknown name may trigger a fetch.

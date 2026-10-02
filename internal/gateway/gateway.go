@@ -8,6 +8,8 @@
 package gateway
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -157,4 +159,18 @@ func (s *Server) route(name string) (Route, bool) {
 		}
 	}
 	return Route{}, false
+}
+
+// NewToken mints a key for a gateway: 128 bits of randomness, hex so it
+// survives a URL, a shell and a copy-paste without escaping.
+//
+// The daemon calls this and passes the result down, so the same key survives a
+// restart; a gateway started by hand calls it for itself.
+func NewToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A predictable key is worse than no gateway at all.
+		panic("gateway: cannot mint a token: " + err.Error())
+	}
+	return "k_" + hex.EncodeToString(b[:])
 }

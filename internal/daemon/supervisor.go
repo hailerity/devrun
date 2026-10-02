@@ -693,6 +693,13 @@ func (s *supervisor) shutdown() {
 		pid  int
 	}
 
+	// Take the lifecycle lock before anything else. Without it, a gateway up
+	// in flight — which holds gatewayOps and has released mu to spawn — would
+	// see its child assigned *after* this ran, leaving a listener that outlives
+	// the daemon with nothing able to stop it. Bounded by gatewayStartTimeout.
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
 	s.mu.Lock()
 	// The gateway goes too: publishing an origin whose services are being
 	// stopped is worse than not publishing.
