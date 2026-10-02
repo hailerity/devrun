@@ -3,6 +3,7 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -39,6 +40,12 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	}
 	cfg := p.Config.Defaults()
 
+	// One lifecycle operation at a time. Without this, two concurrent ups each
+	// spawn a child and the second assignment orphans the first — a listener
+	// holding a port with nothing left to stop it.
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
 	s.mu.Lock()
 	// Already up with the same configuration: idempotent, so `tunnel up` can
 	// call this without caring whether the gateway is running.
@@ -71,6 +78,9 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 }
 
 func (s *supervisor) handleGatewayDown() *ipc.Response {
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopGatewayLocked()
@@ -92,6 +102,9 @@ func (s *supervisor) handleGatewayExpose(raw json.RawMessage) *ipc.Response {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResp(fmt.Sprintf("bad payload: %v", err))
 	}
+
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
 
 	s.mu.Lock()
 	if s.gateway == nil {
@@ -145,7 +158,6 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	if err != nil {
 		return nil, fmt.Errorf("pipe: %w", err)
 	}
-	defer func() { _ = pw.Close() }()
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -176,6 +188,10 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 		// also take the gateway down behind our back.
 		Sys: &syscall.SysProcAttr{Setsid: true},
 	})
+	// The child holds the write end now, so close the parent's copy. That is
+	// what lets the scanner below see EOF when the child dies before
+	// announcing, instead of waiting out the whole start timeout.
+	_ = pw.Close()
 	if err != nil {
 		_ = pr.Close()
 		return nil, fmt.Errorf("start gateway: %w", err)
@@ -210,7 +226,13 @@ func readGatewayAddr(pr *os.File, token string) (addr, outToken string, err erro
 			ch <- line{s: sc.Text()}
 			return
 		}
-		ch <- line{err: sc.Err()}
+		if err := sc.Err(); err != nil {
+			ch <- line{err: err}
+			return
+		}
+		// EOF with nothing read. The child holds the only write end, so this
+		// means it exited before it managed to listen.
+		ch <- line{err: errors.New("it exited before listening")}
 	}()
 
 	select {
@@ -268,7 +290,10 @@ func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	return syscall.Kill(pid, 0) == nil
+	err := syscall.Kill(pid, 0)
+	// EPERM means the process is there but not ours to signal, which is still
+	// alive. Only ESRCH means gone.
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func sameGatewayConfig(a, b config.GatewayConfig) bool {

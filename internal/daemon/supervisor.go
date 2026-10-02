@@ -42,8 +42,13 @@ type supervisor struct {
 	// managed services running. Set by server.go once the listener is up; a nil
 	// value makes the daemon-reexec request report "unsupported".
 	onReexec func()
-	// gateway is the running gateway child, or nil. Guarded by mu.
+	// gateway is the running gateway child, or nil. Reads and writes are guarded
+	// by mu; gatewayOps serialises the lifecycle operations themselves.
 	gateway *gatewayChild
+	// gatewayOps makes up/expose/down one-at-a-time. It cannot be mu: spawning
+	// waits for the child to announce its address, and holding mu that long
+	// would block every list.
+	gatewayOps sync.Mutex
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
