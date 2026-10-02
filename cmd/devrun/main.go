@@ -20,5 +20,12 @@ func main() {
 		}
 		return
 	}
+	// --_gateway is the same trick for the gateway child.
+	if len(os.Args) >= 2 && os.Args[1] == "--_gateway" {
+		os.Exit(runGateway(os.Args[2:]))
+	}
 	cli.Execute()
 }
+
+// version is what the gateway prints in its footer.
+func version() string { return cli.Version }
