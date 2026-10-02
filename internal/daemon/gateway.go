@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +63,12 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	if s.gateway != nil {
 		token = s.gateway.token
 		s.stopGatewayLocked()
+	}
+	if token == "" {
+		// Minted here, not in the child: the daemon is what reports it to the
+		// CLI, and what must hand the same one back on every restart so a link
+		// already shared keeps working.
+		token = newGatewayToken()
 	}
 	s.mu.Unlock()
 
@@ -201,7 +209,7 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	pid := proc.Pid
 	_ = proc.Release()
 
-	addr, token2, err := readGatewayAddr(pr, token)
+	addr, err := readGatewayAddr(pr)
 	_ = pr.Close()
 	if err != nil {
 		// It never got as far as listening; do not leave it behind.
@@ -210,11 +218,11 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	}
 
 	s.logger.Info("gateway started", "pid", pid, "addr", addr)
-	return &gatewayChild{pid: pid, addr: addr, token: token2, cfg: cfg}, nil
+	return &gatewayChild{pid: pid, addr: addr, token: token, cfg: cfg}, nil
 }
 
 // readGatewayAddr waits for the child's "gateway listening <addr>" line.
-func readGatewayAddr(pr *os.File, token string) (addr, outToken string, err error) {
+func readGatewayAddr(pr *os.File) (string, error) {
 	type line struct {
 		s   string
 		err error
@@ -238,15 +246,15 @@ func readGatewayAddr(pr *os.File, token string) (addr, outToken string, err erro
 	select {
 	case l := <-ch:
 		if l.err != nil {
-			return "", "", fmt.Errorf("gateway did not start: %w", l.err)
+			return "", fmt.Errorf("gateway did not start: %w", l.err)
 		}
 		const prefix = "gateway listening "
 		if !strings.HasPrefix(l.s, prefix) {
-			return "", "", fmt.Errorf("gateway said %q", l.s)
+			return "", fmt.Errorf("gateway said %q", l.s)
 		}
-		return strings.TrimSpace(strings.TrimPrefix(l.s, prefix)), token, nil
+		return strings.TrimSpace(strings.TrimPrefix(l.s, prefix)), nil
 	case <-time.After(gatewayStartTimeout):
-		return "", "", fmt.Errorf("gateway did not announce an address within %s", gatewayStartTimeout)
+		return "", fmt.Errorf("gateway did not announce an address within %s", gatewayStartTimeout)
 	}
 }
 
@@ -308,4 +316,15 @@ func okResp(v any) *ipc.Response {
 		return errResp(fmt.Sprintf("encode response: %v", err))
 	}
 	return &ipc.Response{OK: true, Payload: blob}
+}
+
+// newGatewayToken mints a key for the gateway: 128 bits of randomness, hex so it
+// survives a URL, a shell and a copy-paste without escaping.
+func newGatewayToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A predictable key is worse than no gateway.
+		panic("devrun: cannot mint a gateway token: " + err.Error())
+	}
+	return "k_" + hex.EncodeToString(b[:])
 }

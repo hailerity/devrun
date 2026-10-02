@@ -95,10 +95,9 @@ func TestReadGatewayAddr(t *testing.T) {
 			_, _ = io.WriteString(pw, "gateway listening 127.0.0.1:7788\n")
 			_ = pw.Close()
 		}()
-		addr, token, err := readGatewayAddr(pr, "k_abc")
+		addr, err := readGatewayAddr(pr)
 		require.NoError(t, err)
 		assert.Equal(t, "127.0.0.1:7788", addr)
-		assert.Equal(t, "k_abc", token, "the token survives the handshake")
 	})
 
 	t.Run("child died before announcing", func(t *testing.T) {
@@ -107,7 +106,7 @@ func TestReadGatewayAddr(t *testing.T) {
 		_ = pw.Close() // stand in for the child exiting
 
 		start := time.Now()
-		_, _, err = readGatewayAddr(pr, "")
+		_, err = readGatewayAddr(pr)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "exited before listening")
 		assert.Less(t, time.Since(start), gatewayStartTimeout/2,
@@ -121,7 +120,7 @@ func TestReadGatewayAddr(t *testing.T) {
 			_, _ = io.WriteString(pw, "panic: something\n")
 			_ = pw.Close()
 		}()
-		_, _, err = readGatewayAddr(pr, "")
+		_, err = readGatewayAddr(pr)
 		assert.ErrorContains(t, err, "panic: something")
 	})
 }

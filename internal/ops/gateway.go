@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hailerity/devrun/internal/client"
 	"github.com/hailerity/devrun/internal/config"
@@ -21,32 +22,27 @@ import (
 // state, and the daemon restarts the gateway when it changes.
 func GatewayFetcher(socketPath string, exposed []string) gateway.Fetcher {
 	return func(ctx context.Context) (gateway.Snapshot, error) {
-		type result struct {
-			snap gateway.Snapshot
-			err  error
+		// Bounded by the connection's own deadline rather than by racing a
+		// goroutine against ctx: the loser of that race stays blocked on the
+		// socket, leaking a goroutine and a half-open connection every tick a
+		// wedged daemon causes to time out.
+		deadline := gateway.RefreshEvery
+		if d, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(d); remaining > 0 {
+				deadline = remaining
+			}
 		}
-		done := make(chan result, 1)
-
-		go func() {
-			snap, err := fetchRoutes(socketPath, exposed)
-			done <- result{snap, err}
-		}()
-
-		select {
-		case <-ctx.Done():
-			return gateway.Snapshot{}, ctx.Err()
-		case r := <-done:
-			return r.snap, r.err
-		}
+		return fetchRoutes(socketPath, exposed, deadline)
 	}
 }
 
-func fetchRoutes(socketPath string, exposed []string) (gateway.Snapshot, error) {
+func fetchRoutes(socketPath string, exposed []string, deadline time.Duration) (gateway.Snapshot, error) {
 	c, err := client.Connect(socketPath)
 	if err != nil {
 		return gateway.Snapshot{}, fmt.Errorf("connect to daemon: %w", err)
 	}
 	defer func() { _ = c.Close() }()
+	c.SetTimeout(deadline)
 
 	resp, err := c.Send("list", struct{}{})
 	if err != nil {

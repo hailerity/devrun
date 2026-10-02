@@ -226,3 +226,47 @@ func contains(haystack []string, needle string) bool {
 }
 
 func itoa(n int) string { return fmt.Sprintf("%d", n) }
+
+// SaveGatewayExpose adds or removes services from the gateway allowlist in
+// whichever config src points at — the project devrun.yaml when src.IsLocal(),
+// otherwise the global registry. It mirrors SaveTargetEdit: an allowlist is a
+// named set of services, and `gateway expose` is as much a config edit as
+// `target add` is.
+//
+// Persisting matters beyond convenience. The allowlist is what may leave the
+// machine; if it lived only in the running gateway, the next `gateway up` would
+// read the file, see something different, and silently restart without it.
+func SaveGatewayExpose(src Source, names []string, exposed bool) error {
+	if src.IsLocal() {
+		proj, err := LoadProject(src.Dir)
+		if err != nil {
+			return err
+		}
+		if proj == nil {
+			return fmt.Errorf("no %s in %s", ProjectFileName, src.Dir)
+		}
+		if proj.Gateway == nil {
+			proj.Gateway = &GatewayConfig{}
+		}
+		if !proj.Gateway.SetExposed(names, exposed) {
+			return nil
+		}
+		return SaveProject(src.Dir, proj)
+	}
+
+	path := RegistryPath()
+	reg, err := LoadRegistry(path)
+	if err != nil {
+		return err
+	}
+	if reg.Gateway == nil {
+		reg.Gateway = &GatewayConfig{}
+	}
+	if !reg.Gateway.SetExposed(names, exposed) {
+		return nil
+	}
+	if reg.Version == "" {
+		reg.Version = "1"
+	}
+	return SaveRegistry(path, reg)
+}
