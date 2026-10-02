@@ -42,6 +42,13 @@ type supervisor struct {
 	// managed services running. Set by server.go once the listener is up; a nil
 	// value makes the daemon-reexec request report "unsupported".
 	onReexec func()
+	// gateway is the running gateway child, or nil. Reads and writes are guarded
+	// by mu; gatewayOps serialises the lifecycle operations themselves.
+	gateway *gatewayChild
+	// gatewayOps makes up/expose/down one-at-a-time. It cannot be mu: spawning
+	// waits for the child to announce its address, and holding mu that long
+	// would block every list.
+	gatewayOps sync.Mutex
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -117,6 +124,14 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleRemove(req.Payload))
 	case "list":
 		_ = ipc.WriteMessage(conn, s.handleList())
+	case "gateway-up":
+		_ = ipc.WriteMessage(conn, s.handleGatewayUp(req.Payload))
+	case "gateway-down":
+		_ = ipc.WriteMessage(conn, s.handleGatewayDown())
+	case "gateway-status":
+		_ = ipc.WriteMessage(conn, s.handleGatewayStatus())
+	case "gateway-expose":
+		_ = ipc.WriteMessage(conn, s.handleGatewayExpose(req.Payload))
 	case "attach":
 		s.handleAttach(conn, req.Payload)
 	case "daemon-stop":
@@ -678,7 +693,17 @@ func (s *supervisor) shutdown() {
 		pid  int
 	}
 
+	// Take the lifecycle lock before anything else. Without it, a gateway up
+	// in flight — which holds gatewayOps and has released mu to spawn — would
+	// see its child assigned *after* this ran, leaving a listener that outlives
+	// the daemon with nothing able to stop it. Bounded by gatewayStartTimeout.
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
 	s.mu.Lock()
+	// The gateway goes too: publishing an origin whose services are being
+	// stopped is worse than not publishing.
+	s.stopGatewayLocked()
 	var targets []target
 	for name, svc := range s.services {
 		if svc.state.Status != config.StatusRunning && svc.state.Status != config.StatusStarting {

@@ -12,10 +12,10 @@ import (
 // scrollBuffer is a self-contained scrollable line buffer. It owns the log
 // lines, scroll position, cursor, and selection state for the logs panel.
 type scrollBuffer struct {
-	lines      []string // raw log lines, ANSI codes preserved
-	yOffset    int      // index of first visible line
-	width      int
-	height     int
+	lines   []string // raw log lines, ANSI codes preserved
+	yOffset int      // index of first visible line
+	width   int
+	height  int
 
 	cursor     int
 	selStart   int

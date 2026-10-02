@@ -7,7 +7,12 @@
 // routing and access rules testable with httptest alone.
 package gateway
 
-import "sync"
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"sync"
+	"time"
+)
 
 // Posture says whether a request must be treated as coming from off this
 // machine. It decides whether the allowlist and the auth token apply: a gateway
@@ -97,8 +102,10 @@ type Snapshot struct {
 type Server struct {
 	cfg Config
 
-	mu   sync.RWMutex
-	snap Snapshot
+	mu        sync.RWMutex
+	snap      Snapshot
+	fetch     Fetcher   // optional; nil means the snapshot is set from outside
+	lastFetch time.Time // rate-limits the on-miss refresh
 }
 
 func New(cfg Config) *Server {
@@ -115,6 +122,14 @@ func New(cfg Config) *Server {
 		cfg.HostHeader = HostUpstream
 	}
 	return &Server{cfg: cfg}
+}
+
+// SetFetcher lets the server re-read its own route table when a request names
+// something it has not heard of. Run sets it; tests usually leave it nil.
+func (s *Server) SetFetcher(f Fetcher) {
+	s.mu.Lock()
+	s.fetch = f
+	s.mu.Unlock()
 }
 
 // Config returns the static configuration. It is a copy: Rules is shared, and
@@ -144,4 +159,18 @@ func (s *Server) route(name string) (Route, bool) {
 		}
 	}
 	return Route{}, false
+}
+
+// NewToken mints a key for a gateway: 128 bits of randomness, hex so it
+// survives a URL, a shell and a copy-paste without escaping.
+//
+// The daemon calls this and passes the result down, so the same key survives a
+// restart; a gateway started by hand calls it for itself.
+func NewToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A predictable key is worse than no gateway at all.
+		panic("gateway: cannot mint a token: " + err.Error())
+	}
+	return "k_" + hex.EncodeToString(b[:])
 }
