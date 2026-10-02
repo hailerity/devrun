@@ -82,8 +82,8 @@ func TestProjectConfig_ToServiceConfigs(t *testing.T) {
 	cfgs := proj.ToServiceConfigs(dir)
 
 	assert.Equal(t, "myapp", cfgs["web"].Group)
-	assert.Equal(t, dir, cfgs["web"].CWD)                              // empty → dir
-	assert.Equal(t, "/projects/myapp/backend", cfgs["api"].CWD)        // relative → resolved
+	assert.Equal(t, dir, cfgs["web"].CWD)                       // empty → dir
+	assert.Equal(t, "/projects/myapp/backend", cfgs["api"].CWD) // relative → resolved
 	assert.Equal(t, "yarn dev", cfgs["web"].Command)
 }
 

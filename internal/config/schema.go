@@ -12,6 +12,12 @@ type ServiceConfig struct {
 	Group   string            `yaml:"group,omitempty" json:"group,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
 	Desc    string            `yaml:"desc,omitempty" json:"desc,omitempty"`
+	// Port overrides what the daemon detects. Detection is correct but not
+	// instant — it lags a service's start by up to one poll, and picks the
+	// lowest when a service holds several listeners — so this is the answer for
+	// a service the gateway must reach immediately or that runs a debugger
+	// alongside its app port.
+	Port int `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 // Registry is the top-level structure of services.yaml.
@@ -23,4 +29,6 @@ type Registry struct {
 	// that do not resolve to a known service are ignored at use time rather than
 	// rejected on load, so removing a service never breaks config parsing.
 	Targets map[string][]string `yaml:"targets,omitempty"`
+	// Gateway configures the local HTTP gateway. Absent means all defaults.
+	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
 }

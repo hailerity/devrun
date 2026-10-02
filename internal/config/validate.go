@@ -15,7 +15,7 @@ func (c *ServiceConfig) Validate() error {
 	if strings.TrimSpace(c.Command) == "" {
 		return fmt.Errorf("command is empty")
 	}
-	return nil
+	return validatePort(c.Port)
 }
 
 // Validate mirrors ServiceConfig.Validate for a devrun.yaml service entry.
@@ -25,6 +25,15 @@ func (c *ProjectServiceConfig) Validate() error {
 	}
 	if strings.TrimSpace(c.Command) == "" {
 		return fmt.Errorf("command is empty")
+	}
+	return validatePort(c.Port)
+}
+
+// validatePort rejects a declared port that cannot be listened on. 0 means
+// "not declared" and leaves detection in charge.
+func validatePort(port int) error {
+	if port < 0 || port > 65535 {
+		return fmt.Errorf("port %d is out of range", port)
 	}
 	return nil
 }
