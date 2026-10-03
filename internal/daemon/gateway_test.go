@@ -80,11 +80,11 @@ func TestPidAlive(t *testing.T) {
 }
 
 func TestSameGatewayConfig(t *testing.T) {
-	a := (&config.GatewayConfig{Port: 7788}).Defaults()
-	b := (&config.GatewayConfig{Port: 7788}).Defaults()
+	a := (&config.GatewayConfig{Port: config.GatewayPort(7788)}).Defaults()
+	b := (&config.GatewayConfig{Port: config.GatewayPort(7788)}).Defaults()
 	assert.True(t, sameGatewayConfig(a, b), "an unchanged config must not restart the child")
 
-	c := (&config.GatewayConfig{Port: 7799}).Defaults()
+	c := (&config.GatewayConfig{Port: config.GatewayPort(7799)}).Defaults()
 	assert.False(t, sameGatewayConfig(a, c))
 }
 
@@ -285,7 +285,7 @@ func TestAdoptGateway(t *testing.T) {
 			Addr:  "127.0.0.1:7788",
 			Token: "k_abc",
 			Config: config.GatewayConfig{
-				Port: 7788, Posture: config.PostureAuto, Expose: []string{"web"},
+				Port: config.GatewayPort(7788), Posture: config.PostureAuto, Expose: []string{"web"},
 			},
 		}, log)
 
@@ -334,7 +334,7 @@ func TestLoadState_TakesBackTheRecordedGateway(t *testing.T) {
 	first.statePath = filepath.Join(dir, "state.json")
 	first.gateway = &gatewayChild{
 		pid: pid, addr: "127.0.0.1:7788", token: "k_shared",
-		cfg: config.GatewayConfig{Port: 7788},
+		cfg: config.GatewayConfig{Port: config.GatewayPort(7788)},
 	}
 	require.NoError(t, first.saveStateLocked())
 
