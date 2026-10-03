@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,6 +37,30 @@ func upstream(t *testing.T, h http.HandlerFunc) (port int, hits *[]*http.Request
 	return p, &seen
 }
 
+// upstreamOn is upstream pinned to one loopback family. httptest always binds
+// 127.0.0.1, which is exactly the case these tests need to get away from.
+func upstreamOn(t *testing.T, addr string) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("cannot listen on %s here: %v", addr, err)
+	}
+	srv := &httptest.Server{
+		Listener: ln,
+		Config: &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, "upstream ok")
+		})},
+	}
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	_, p, err := net.SplitHostPort(ln.Addr().String())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(p)
+	require.NoError(t, err)
+	return port
+}
+
 func serve(s *Server, r *http.Request) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, r)
@@ -53,7 +79,7 @@ func TestProxy_StripsThePrefixAndRewritesHost(t *testing.T) {
 	got := (*hits)[0]
 	assert.Equal(t, "/assets/app.js", got.URL.Path, "the service never sees its own mount point")
 	assert.Equal(t, "v=2", got.URL.RawQuery, "the query survives")
-	assert.Equal(t, "127.0.0.1:"+strconv.Itoa(port), got.Host,
+	assert.Equal(t, "localhost:"+strconv.Itoa(port), got.Host,
 		"dev servers reject a Host they do not know, so it is rewritten")
 	assert.Equal(t, "localhost:7788", got.Header.Get("X-Forwarded-Host"),
 		"the name the eyeball used is still recoverable")
@@ -176,18 +202,49 @@ func TestStripPrefix(t *testing.T) {
 	}
 }
 
-// The upstream is dialled as 127.0.0.1:<port>, but a service may spell the same
-// place "localhost:<port>". Treating that as a real elsewhere left the redirect
-// unrewritten and sent the browser out of the mount point.
-func TestProxy_SelfRedirectSpelledLocalhostIsReprefixed(t *testing.T) {
-	var port int
-	port, _ = upstream(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "http://localhost:"+strconv.Itoa(port)+"/dashboard")
-		w.WriteHeader(http.StatusFound)
-	})
+// The gateway addresses the upstream as localhost:<port>, but a service may
+// spell the same place "[::1]:<port>" or "127.0.0.1:<port>". Treating any of
+// those as a real elsewhere leaves the redirect unrewritten and sends the
+// browser out of the mount point.
+func TestProxy_SelfRedirectInAnyLoopbackSpellingIsReprefixed(t *testing.T) {
+	for _, host := range []string{"localhost", "127.0.0.1", "[::1]"} {
+		t.Run(host, func(t *testing.T) {
+			var port int
+			port, _ = upstream(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Location", "http://"+host+":"+strconv.Itoa(port)+"/dashboard")
+				w.WriteHeader(http.StatusFound)
+			})
+			s := server(t, Config{}, Snapshot{Routes: []Route{running("web", port)}})
+
+			assert.Equal(t, "/web/dashboard", serve(s, get("", "/web/login")).Header().Get("Location"))
+		})
+	}
+}
+
+// The bug this guards: a dev server told to listen on "localhost" binds ::1
+// alone, because that is what localhost resolves to first. devrun detects its
+// port from the listener and lists it as running, so the service looks healthy
+// right up until the gateway dials 127.0.0.1 and is refused.
+func TestProxy_ReachesAServiceListeningOnIPv6LoopbackOnly(t *testing.T) {
+	port := upstreamOn(t, "[::1]:0")
 	s := server(t, Config{}, Snapshot{Routes: []Route{running("web", port)}})
 
-	assert.Equal(t, "/web/dashboard", serve(s, get("", "/web/login")).Header().Get("Location"))
+	w := serve(s, get("", "/web/"))
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "upstream ok", w.Body.String())
+}
+
+// And the other way round, which is the common case and must not regress.
+func TestProxy_ReachesAServiceListeningOnIPv4LoopbackOnly(t *testing.T) {
+	port := upstreamOn(t, "127.0.0.1:0")
+	s := server(t, Config{}, Snapshot{Routes: []Route{running("web", port)}})
+
+	assert.Equal(t, http.StatusOK, serve(s, get("", "/web/")).Code)
+}
+
+func TestDialLoopback_RejectsAnAddressWithNoPort(t *testing.T) {
+	_, err := dialLoopback(context.Background(), "tcp", "localhost")
+	assert.Error(t, err)
 }
 
 func TestIsUpstream(t *testing.T) {

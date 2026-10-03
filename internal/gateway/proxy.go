@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -49,6 +50,51 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// upstreamTransport is what services are reached through. It differs from
+// http.DefaultTransport only in the dialler; everything else — pooling,
+// timeouts, HTTP/2 — is the standard library's. One shared instance, because
+// the ReverseProxy below is built per request and a per-request transport would
+// open a new connection every time.
+var upstreamTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.DialContext = dialLoopback
+	return t
+}()
+
+// dialLoopback connects to a port on this machine, ignoring the host it was
+// given and trying both loopback families in turn.
+//
+// A dev server told to listen on "localhost" binds ::1 alone, since that is what
+// localhost resolves to first. Dialling 127.0.0.1 is then refused and the
+// service 502s through the gateway while devrun list shows its port quite
+// happily — the port is detected from the listener either way.
+//
+// Resolving "localhost" per dial would fix that and hand the set of reachable
+// hosts to /etc/hosts; an entry pointing it off the box would make a tunnelled
+// gateway forward to somewhere else entirely. Naming the two addresses here
+// makes "this machine only" a property of the code.
+//
+// Trying both costs nothing measurable: a refused loopback connect returns in
+// well under a millisecond, and only on the connections the pool has to open.
+func dialLoopback(ctx context.Context, network, addr string) (net.Conn, error) {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	var d net.Dialer
+	var first error
+	for _, host := range []string{"127.0.0.1", "::1"} {
+		conn, err := d.DialContext(ctx, network, net.JoinHostPort(host, port))
+		if err == nil {
+			return conn, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return nil, first
+}
+
 // proxy forwards a resolved request to the service's port on loopback.
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request, t Target) {
 	route, ok := s.route(t.Service)
@@ -69,10 +115,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request, t Target) {
 		return
 	}
 
-	upstream := net.JoinHostPort("127.0.0.1", strconv.Itoa(route.Port))
+	// A name, not an address: dialLoopback decides where this actually goes, and
+	// "localhost" is the Host every dev server's allowlist already knows.
+	upstream := net.JoinHostPort("localhost", strconv.Itoa(route.Port))
 	inHost := r.Host
 
 	rp := &httputil.ReverseProxy{
+		Transport: upstreamTransport,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// X-Forwarded-Host carries the name the eyeball used, so an app that
 			// needs it can still recover it after the Host rewrite below.
@@ -201,8 +250,8 @@ func reprefixCookie(cookie, prefix string) string {
 }
 
 // isUpstream reports whether a redirect's host is the service talking about
-// itself. The upstream is dialled as 127.0.0.1:<port>, but a service may spell
-// the same place "localhost:<port>" — any loopback name on that port is it.
+// itself. The gateway addresses it as localhost:<port>, but a service may spell
+// the same place "127.0.0.1:<port>" — any loopback name on that port is it.
 func isUpstream(host, upstream string) bool {
 	if strings.EqualFold(host, upstream) {
 		return true
