@@ -4,6 +4,8 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,4 +162,94 @@ func TestShutdown_WaitsForAnInFlightGatewayUp(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("shutdown never got the lifecycle lock")
 	}
+}
+
+// The child names its own cause on stderr — "address already in use", a bad
+// bind, a panic. Discarding it turned every start failure into the same
+// contentless "it exited before listening".
+func TestChildStderr(t *testing.T) {
+	write := func(t *testing.T, c *childStderr, s string) {
+		t.Helper()
+		_, err := io.WriteString(c.f, s)
+		require.NoError(t, err)
+	}
+
+	t.Run("quotes the cause without the child's own label", func(t *testing.T) {
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		t.Cleanup(c.discard)
+		write(t, c, "gateway: listen on 127.0.0.1:7788: bind: address already in use\n")
+
+		assert.Equal(t, "listen on 127.0.0.1:7788: bind: address already in use", c.firstLine())
+	})
+
+	t.Run("keeps the opening line, not the stack", func(t *testing.T) {
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		t.Cleanup(c.discard)
+		write(t, c, "panic: nil map\n\ngoroutine 1 [running]:\nmain.run(...)\n")
+
+		assert.Equal(t, "panic: nil map", c.firstLine())
+	})
+
+	t.Run("a silent child says nothing", func(t *testing.T) {
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		t.Cleanup(c.discard)
+
+		assert.Empty(t, c.firstLine())
+	})
+
+	t.Run("discard removes the temp file", func(t *testing.T) {
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		require.True(t, c.temp)
+		name := c.f.Name()
+		c.closeParentCopy()
+		c.discard()
+
+		_, err = os.Stat(name)
+		assert.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	// DEVRUN_GATEWAY_LOG is appended to across restarts. Reading the whole file
+	// would quote the *previous* child's failure at a child that is merely slow.
+	t.Run("reads only what this child wrote to the log file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gateway.err")
+		require.NoError(t, os.WriteFile(path, []byte("gateway: an older failure\n"), 0o644))
+		t.Setenv(gatewayLogEnv, path)
+
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		t.Cleanup(c.closeParentCopy)
+		assert.Empty(t, c.firstLine(), "nothing written by this child yet")
+
+		write(t, c, "gateway: the new failure\n")
+		assert.Equal(t, "the new failure", c.firstLine())
+	})
+
+	// The point of setting it is to keep the output.
+	t.Run("never removes the log file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gateway.err")
+		t.Setenv(gatewayLogEnv, path)
+
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		write(t, c, "gateway: kept\n")
+		c.closeParentCopy()
+		c.discard()
+
+		kept, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Contains(t, string(kept), "kept")
+	})
+
+	t.Run("a long stack does not read back unbounded", func(t *testing.T) {
+		c, err := openChildStderr()
+		require.NoError(t, err)
+		t.Cleanup(c.discard)
+		write(t, c, strings.Repeat("x", 4*stderrCap)+"\nlater\n")
+
+		assert.Len(t, c.firstLine(), stderrCap, "capped, and never reaches the later line")
+	})
 }

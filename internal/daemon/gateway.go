@@ -176,13 +176,16 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	}
 	defer func() { _ = devNull.Close() }()
 
-	stderr := devNull
-	if logFile := os.Getenv("DEVRUN_GATEWAY_LOG"); logFile != "" {
-		if f, err2 := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err2 == nil {
-			stderr = f
-			defer func() { _ = f.Close() }()
-		}
+	// The child's stderr is where it says why it could not start: a port already
+	// taken, a bind it cannot have, a panic. Sending it to /dev/null turned every
+	// one of those into "it exited before listening", which names no cause at
+	// all and leaves nothing to act on.
+	said, err := openChildStderr()
+	if err != nil {
+		_ = pr.Close()
+		return nil, err
 	}
+	defer said.closeParentCopy()
 
 	env := append(os.Environ(),
 		"DEVRUN_GATEWAY_CONFIG="+string(blob),
@@ -193,7 +196,7 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 
 	proc, err := os.StartProcess(self, []string{self, "--_gateway", s.socketPath}, &os.ProcAttr{
 		Env:   env,
-		Files: []*os.File{devNull, pw, stderr},
+		Files: []*os.File{devNull, pw, said.f},
 		// Its own session, so a signal aimed at the daemon's group does not
 		// also take the gateway down behind our back.
 		Sys: &syscall.SysProcAttr{Setsid: true},
@@ -216,11 +219,93 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	if err != nil {
 		// It never got as far as listening; do not leave it behind.
 		_, _ = process.TerminateGroup(pid, process.DefaultStopGrace)
+		if line := said.firstLine(); line != "" {
+			err = fmt.Errorf("%w: %s", err, line)
+		}
+		said.discard()
 		return nil, err
 	}
+	said.discard()
 
 	s.logger.Info("gateway started", "pid", pid, "addr", addr)
 	return &gatewayChild{pid: pid, addr: addr, token: token, cfg: cfg}, nil
+}
+
+// stderrCap bounds how much of the child's stderr is read back when it fails.
+const stderrCap = 4096
+
+// gatewayLogEnv names a file to keep the gateway's stderr in, for anyone
+// debugging the child itself. Unset, it goes to a temp file that is read back
+// only on failure and then removed.
+const gatewayLogEnv = "DEVRUN_GATEWAY_LOG"
+
+// childStderr is where the gateway child's stderr goes, and how to read back
+// what this particular child wrote to it.
+//
+// A file, deliberately, not a pipe. The gateway is meant to outlive this
+// daemon, and a write to a pipe whose read end has gone raises SIGPIPE — which
+// on fd 2 the Go runtime turns into a fatal signal. Tying the child's stderr
+// to the daemon's lifetime would mean a surviving gateway dies the next time
+// anything logs. A file cannot kill it, and needs no draining goroutine.
+type childStderr struct {
+	f *os.File
+	// from is the size the file had before this child started. With
+	// DEVRUN_GATEWAY_LOG the file is appended to across restarts, and quoting a
+	// previous child's failure would be worse than quoting none.
+	from int64
+	temp bool
+}
+
+func openChildStderr() (*childStderr, error) {
+	if path := os.Getenv(gatewayLogEnv); path != "" {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", gatewayLogEnv, err)
+		}
+		var from int64
+		if st, err := f.Stat(); err == nil {
+			from = st.Size()
+		}
+		return &childStderr{f: f, from: from}, nil
+	}
+	f, err := os.CreateTemp("", "devrun-gateway-*.err")
+	if err != nil {
+		return nil, fmt.Errorf("gateway stderr file: %w", err)
+	}
+	return &childStderr{f: f, temp: true}, nil
+}
+
+// closeParentCopy drops this process's descriptor. The child holds its own.
+func (c *childStderr) closeParentCopy() { _ = c.f.Close() }
+
+// discard removes the temp file once its contents are no longer wanted. The
+// child keeps writing to the open descriptor either way; unlinked, that costs
+// nothing once it exits. A file named by DEVRUN_GATEWAY_LOG is left alone —
+// the point of setting it is to keep the output.
+func (c *childStderr) discard() {
+	if c.temp {
+		_ = os.Remove(c.f.Name())
+	}
+}
+
+// firstLine is the one line worth putting in an error: "address already in
+// use", or "panic: ...". What follows is the stack, or the fallout.
+func (c *childStderr) firstLine() string {
+	f, err := os.Open(c.f.Name())
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, stderrCap)
+	n, _ := f.ReadAt(buf, c.from)
+	for _, line := range strings.Split(string(buf[:n]), "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			// The child labels its own messages "gateway: ", which would read
+			// twice over inside an error the caller also labels.
+			return strings.TrimPrefix(l, "gateway: ")
+		}
+	}
+	return ""
 }
 
 // readGatewayAddr waits for the child's "gateway listening <addr>" line.
