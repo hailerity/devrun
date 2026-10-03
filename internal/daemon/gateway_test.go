@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -252,4 +254,115 @@ func TestChildStderr(t *testing.T) {
 
 		assert.Len(t, c.firstLine(), stderrCap, "capped, and never reaches the later line")
 	})
+}
+
+// A process whose argv carries the marker, standing in for a gateway left
+// behind by a previous daemon.
+func fakeGateway(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", ": "+gatewayArgMarker+"; sleep 30")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_, _ = cmd.Process.Wait()
+	})
+	require.Eventually(t, func() bool {
+		return strings.Contains(process.CommandLine(cmd.Process.Pid), gatewayArgMarker)
+	}, 5*time.Second, 50*time.Millisecond, "the stand-in never showed the marker")
+	return cmd.Process.Pid
+}
+
+// The gateway outlives the daemon on purpose. Without re-adoption a
+// `daemon stop` or `restart` left it running and holding its port, with
+// nothing able to see or stop it ever again.
+func TestAdoptGateway(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("takes back a gateway that is still running", func(t *testing.T) {
+		pid := fakeGateway(t)
+		got := adoptGateway(&config.GatewayState{
+			PID:   pid,
+			Addr:  "127.0.0.1:7788",
+			Token: "k_abc",
+			Config: config.GatewayConfig{
+				Port: 7788, Posture: config.PostureAuto, Expose: []string{"web"},
+			},
+		}, log)
+
+		require.NotNil(t, got)
+		assert.Equal(t, pid, got.pid)
+		assert.Equal(t, "127.0.0.1:7788", got.addr)
+		assert.Equal(t, "k_abc", got.token, "a link already shared has to keep working")
+		assert.Equal(t, []string{"web"}, got.cfg.Expose)
+	})
+
+	// state.json can name a pid from before a reboot. Whatever holds that
+	// number now would be reported as the gateway, and then signalled by
+	// `devrun gateway down`.
+	t.Run("refuses a live pid that is somebody else", func(t *testing.T) {
+		cmd := exec.Command("sleep", "30")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() {
+			_ = cmd.Process.Kill()
+			_, _ = cmd.Process.Wait()
+		})
+
+		assert.Nil(t, adoptGateway(&config.GatewayState{PID: cmd.Process.Pid}, log))
+	})
+
+	t.Run("nothing recorded, nothing to take back", func(t *testing.T) {
+		assert.Nil(t, adoptGateway(nil, log))
+	})
+
+	t.Run("the recorded gateway is gone", func(t *testing.T) {
+		cmd := exec.Command("true")
+		require.NoError(t, cmd.Start())
+		pid := cmd.Process.Pid
+		_ = cmd.Wait()
+
+		assert.Nil(t, adoptGateway(&config.GatewayState{PID: pid}, log))
+	})
+}
+
+// The round trip that makes a restart survivable: what `gateway up` recorded
+// is what the replacement daemon reads back.
+func TestLoadState_TakesBackTheRecordedGateway(t *testing.T) {
+	pid := fakeGateway(t)
+	dir := t.TempDir()
+
+	first := quietSupervisor(t)
+	first.statePath = filepath.Join(dir, "state.json")
+	first.gateway = &gatewayChild{
+		pid: pid, addr: "127.0.0.1:7788", token: "k_shared",
+		cfg: config.GatewayConfig{Port: 7788},
+	}
+	require.NoError(t, first.saveStateLocked())
+
+	second := quietSupervisor(t)
+	second.statePath = first.statePath
+	require.NoError(t, second.loadState())
+
+	require.NotNil(t, second.gateway, "the replacement daemon must find it")
+	assert.Equal(t, pid, second.gateway.pid)
+	assert.Equal(t, "k_shared", second.gateway.token)
+
+	st := second.gatewayStatusLocked()
+	assert.True(t, st.Running)
+	assert.Equal(t, "127.0.0.1:7788", st.Addr)
+}
+
+// Stopping it must clear the record, or the next daemon re-adopts a corpse —
+// or worse, whatever pid the kernel hands out next.
+func TestHandleGatewayDown_ClearsTheRecord(t *testing.T) {
+	dir := t.TempDir()
+	s := quietSupervisor(t)
+	s.statePath = filepath.Join(dir, "state.json")
+	s.gateway = &gatewayChild{pid: fakeGateway(t), addr: "127.0.0.1:7788"}
+	require.NoError(t, s.saveStateLocked())
+
+	require.True(t, s.handleGatewayDown().OK)
+
+	state, err := config.LoadState(s.statePath)
+	require.NoError(t, err)
+	assert.Nil(t, state.Gateway)
 }
