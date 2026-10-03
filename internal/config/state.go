@@ -45,9 +45,29 @@ type ServiceState struct {
 	ReAdopted    bool          `json:"re_adopted"`
 }
 
+// GatewayState is the running gateway, recorded so a replacement daemon can
+// take it back.
+//
+// The gateway is spawned into its own session and never waited on, so it
+// outlives the daemon on every path except SIGTERM — which is deliberate, the
+// same as for services: `devrun daemon restart` should not drop a published
+// URL. Without this record the replacement daemon had no handle on it, and the
+// gateway became unstoppable and invisible while still holding its port.
+//
+// Token is here because it cannot be re-derived: the running child was given
+// it at startup and a new daemon cannot change its mind. It is why state.json
+// is written 0600.
+type GatewayState struct {
+	PID    int           `json:"pid"`
+	Addr   string        `json:"addr"`
+	Token  string        `json:"token"`
+	Config GatewayConfig `json:"config"`
+}
+
 type State struct {
 	Version  int                      `json:"version"`
 	Services map[string]*ServiceState `json:"services"`
+	Gateway  *GatewayState            `json:"gateway,omitempty"`
 	// ActiveTargets maps a currently-started target to the member service names
 	// captured when it was started. `devrun target stop` consults this snapshot —
 	// not the live config — so editing a target's membership while it runs does
@@ -92,8 +112,15 @@ func SaveState(path string, s *State) error {
 		return fmt.Errorf("mkdir state dir: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// 0600: the gateway's token lives here, and it is the only thing between a
+	// stranger and the services once the gateway is published.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write tmp state: %w", err)
+	}
+	// WriteFile applies the mode only when it creates the file, so a .tmp left
+	// behind by an earlier crash would keep whatever mode it had.
+	if err := os.Chmod(tmp, 0600); err != nil {
+		return fmt.Errorf("chmod tmp state: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename state: %w", err)

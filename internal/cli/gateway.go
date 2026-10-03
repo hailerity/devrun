@@ -59,7 +59,7 @@ var gatewayUpFlags struct {
 }
 
 func init() {
-	gatewayUpCmd.Flags().IntVar(&gatewayUpFlags.port, "port", 0, "Port to listen on (0 = from config, or 7788)")
+	gatewayUpCmd.Flags().IntVar(&gatewayUpFlags.port, "port", 0, "Port to listen on; 0 picks any free port (default 7788)")
 	gatewayUpCmd.Flags().StringVar(&gatewayUpFlags.bind, "bind", "", "Address to bind (default 127.0.0.1)")
 	gatewayUpCmd.Flags().StringVar(&gatewayUpFlags.mode, "mode", "", "URL shape to advertise: subdomain | path")
 
@@ -69,7 +69,7 @@ func init() {
 // gatewayConfig resolves the gateway block from whichever config is active,
 // then applies any flags. It travels to the daemon inline, because the daemon
 // cannot read a project devrun.yaml.
-func gatewayConfig() (*config.GatewayConfig, error) {
+func gatewayConfig(cmd *cobra.Command) (*config.GatewayConfig, error) {
 	reg, _, err := activeRegistry()
 	if err != nil {
 		return nil, err
@@ -79,8 +79,10 @@ func gatewayConfig() (*config.GatewayConfig, error) {
 		copied := *reg.Gateway
 		cfg = &copied
 	}
-	if gatewayUpFlags.port != 0 {
-		cfg.Port = gatewayUpFlags.port
+	// Changed, not non-zero: --port 0 is a request for any free port, which is
+	// a different answer from not passing the flag at all.
+	if cmd.Flags().Changed("port") {
+		cfg.Port = config.GatewayPort(gatewayUpFlags.port)
 	}
 	if gatewayUpFlags.bind != "" {
 		cfg.Bind = gatewayUpFlags.bind
@@ -95,7 +97,7 @@ func gatewayConfig() (*config.GatewayConfig, error) {
 }
 
 func runGatewayUp(cmd *cobra.Command, args []string) error {
-	cfg, err := gatewayConfig()
+	cfg, err := gatewayConfig(cmd)
 	if err != nil {
 		return err
 	}

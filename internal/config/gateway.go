@@ -27,9 +27,15 @@ const (
 	HostPreserve = "preserve"
 )
 
-// DefaultGatewayPort is where the gateway listens unless told otherwise. 0 in
-// config means "pick a free one".
+// DefaultGatewayPort is where the gateway listens when the config says nothing.
+// A stable default matters: it is what makes a shared link keep working across
+// restarts, so it is the behaviour of an absent key rather than of port 0.
 const DefaultGatewayPort = 7788
+
+// GatewayPort is a port literal as GatewayConfig.Port wants it. `port: 0` and
+// an absent `port:` mean different things, so the field is a pointer and a
+// literal needs somewhere to live.
+func GatewayPort(n int) *int { return &n }
 
 // GatewayRoute mounts a service at a path. It accepts two spellings in YAML:
 //
@@ -71,7 +77,11 @@ func (r *GatewayRoute) UnmarshalYAML(value *yaml.Node) error {
 // Every field has a working default, so `devrun gateway up` with no block at all
 // serves every running service on 127.0.0.1:7788.
 type GatewayConfig struct {
-	Port       int                     `yaml:"port,omitempty" json:"port,omitempty"`
+	// Port distinguishes three cases, which an int could not: absent is
+	// DefaultGatewayPort, 0 is "any free port, the kernel picks", and anything
+	// else is itself. Port 0 is how you run two projects at once without
+	// choosing numbers by hand.
+	Port       *int                    `yaml:"port,omitempty" json:"port,omitempty"`
 	Bind       string                  `yaml:"bind,omitempty" json:"bind,omitempty"`
 	Posture    string                  `yaml:"posture,omitempty" json:"posture,omitempty"`
 	Mode       string                  `yaml:"mode,omitempty" json:"mode,omitempty"`
@@ -88,9 +98,13 @@ func (g *GatewayConfig) Defaults() GatewayConfig {
 	if g != nil {
 		out = *g
 	}
-	if out.Port == 0 {
-		out.Port = DefaultGatewayPort
+	// Always a fresh pointer, so a caller's config cannot be changed through the
+	// copy this returns.
+	port := DefaultGatewayPort
+	if out.Port != nil {
+		port = *out.Port
 	}
+	out.Port = &port
 	if out.Bind == "" {
 		out.Bind = "127.0.0.1"
 	}
@@ -109,9 +123,14 @@ func (g *GatewayConfig) Defaults() GatewayConfig {
 	return out
 }
 
-// Addr is the address the gateway listens on.
+// Addr is the address the gateway listens on. Call it on the result of
+// Defaults, which is what guarantees Port is set.
 func (g GatewayConfig) Addr() string {
-	return net.JoinHostPort(g.Bind, itoa(g.Port))
+	port := DefaultGatewayPort
+	if g.Port != nil {
+		port = *g.Port
+	}
+	return net.JoinHostPort(g.Bind, itoa(port))
 }
 
 // Validate rejects a gateway block that cannot mean anything, naming the key at
@@ -121,8 +140,8 @@ func (g *GatewayConfig) Validate() error {
 	if g == nil {
 		return nil
 	}
-	if g.Port < 0 || g.Port > 65535 {
-		return fmt.Errorf("gateway.port %d is out of range", g.Port)
+	if g.Port != nil && (*g.Port < 0 || *g.Port > 65535) {
+		return fmt.Errorf("gateway.port %d is out of range", *g.Port)
 	}
 	if g.Bind != "" && net.ParseIP(g.Bind) == nil && !strings.EqualFold(g.Bind, "localhost") {
 		return fmt.Errorf("gateway.bind %q is not an IP address", g.Bind)

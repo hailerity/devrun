@@ -19,7 +19,7 @@ func TestGatewayConfig_Defaults(t *testing.T) {
 		"absent": absent.Defaults(),
 		"empty":  empty.Defaults(),
 	} {
-		assert.Equal(t, config.DefaultGatewayPort, got.Port, name)
+		assert.Equal(t, config.DefaultGatewayPort, *got.Port, name)
 		assert.Equal(t, "127.0.0.1", got.Bind, name)
 		assert.Equal(t, config.PostureAuto, got.Posture, name)
 		assert.Equal(t, config.ModeSubdomain, got.Mode, name)
@@ -30,8 +30,8 @@ func TestGatewayConfig_Defaults(t *testing.T) {
 }
 
 func TestGatewayConfig_DefaultsKeepWhatWasSet(t *testing.T) {
-	g := (&config.GatewayConfig{Port: 9000, Bind: "0.0.0.0", Auth: config.AuthNone}).Defaults()
-	assert.Equal(t, 9000, g.Port)
+	g := (&config.GatewayConfig{Port: config.GatewayPort(9000), Bind: "0.0.0.0", Auth: config.AuthNone}).Defaults()
+	assert.Equal(t, 9000, *g.Port)
 	assert.Equal(t, "0.0.0.0", g.Bind)
 	assert.Equal(t, config.AuthNone, g.Auth)
 	assert.Equal(t, config.ModeSubdomain, g.Mode, "unset fields still get a default")
@@ -61,9 +61,9 @@ func TestGatewayConfig_Validate(t *testing.T) {
 		in      config.GatewayConfig
 		wantErr string
 	}{
-		"ok":                     {config.GatewayConfig{Port: 7788, Bind: "127.0.0.1", Mode: config.ModePath}, ""},
+		"ok":                     {config.GatewayConfig{Port: config.GatewayPort(7788), Bind: "127.0.0.1", Mode: config.ModePath}, ""},
 		"empty is fine":          {config.GatewayConfig{}, ""},
-		"port range":             {config.GatewayConfig{Port: 70000}, "out of range"},
+		"port range":             {config.GatewayConfig{Port: config.GatewayPort(70000)}, "out of range"},
 		"bad bind":               {config.GatewayConfig{Bind: "not-an-ip"}, "not an IP"},
 		"localhost bind is fine": {config.GatewayConfig{Bind: "localhost"}, ""},
 		// A typo here would otherwise fall back to a weaker setting than asked for.
@@ -148,4 +148,43 @@ gateway:
 	svcs := p.ToServiceConfigs("/tmp/proj")
 	require.Contains(t, svcs, "web")
 	assert.Equal(t, 4200, svcs["web"].Port, "a declared port must survive the trip to the daemon")
+}
+
+// `port: 0` and an absent `port:` are different requests, and an int field
+// could not tell them apart — 0 was silently rewritten to 7788, so the
+// documented "pick a free one" was unreachable from config or the CLI.
+func TestGatewayConfig_PortZeroMeansAnyFreePort(t *testing.T) {
+	absent := (&config.GatewayConfig{}).Defaults()
+	assert.Equal(t, config.DefaultGatewayPort, *absent.Port, "no key: the stable default")
+	assert.Equal(t, "127.0.0.1:7788", absent.Addr())
+
+	zero := (&config.GatewayConfig{Port: config.GatewayPort(0)}).Defaults()
+	assert.Equal(t, 0, *zero.Port, "port 0 survives to the listener, which picks")
+	assert.Equal(t, "127.0.0.1:0", zero.Addr())
+
+	assert.NoError(t, (&config.GatewayConfig{Port: config.GatewayPort(0)}).Validate())
+}
+
+// The YAML spellings have to round-trip, since that is where a user writes it.
+func TestGatewayConfig_PortFromYAML(t *testing.T) {
+	for name, tc := range map[string]struct {
+		yaml string
+		want int
+	}{
+		"absent": {"bind: 127.0.0.1", config.DefaultGatewayPort},
+		"zero":   {"port: 0", 0},
+		"set":    {"port: 8080", 8080},
+	} {
+		var g config.GatewayConfig
+		require.NoError(t, yaml.Unmarshal([]byte(tc.yaml), &g), name)
+		assert.Equal(t, tc.want, *g.Defaults().Port, name)
+	}
+}
+
+// Defaults returns a copy, so filling the port in must not reach back into the
+// caller's config — two gateways resolved from one block would alias.
+func TestGatewayConfig_DefaultsDoesNotMutateTheReceiver(t *testing.T) {
+	g := &config.GatewayConfig{}
+	_ = g.Defaults()
+	assert.Nil(t, g.Port, "the receiver still says nothing about a port")
 }
