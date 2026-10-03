@@ -88,6 +88,7 @@ func (s *supervisor) loadState() error {
 	if state.ActiveTargets != nil {
 		s.activeTargets = state.ActiveTargets
 	}
+	s.gateway = adoptGateway(state.Gateway, s.logger)
 	s.reconcileActiveTargetsLocked()
 	return s.saveStateLocked()
 }
@@ -100,6 +101,14 @@ func (s *supervisor) saveStateLocked() error {
 	}
 	for name, svc := range s.services {
 		state.Services[name] = svc.state
+	}
+	if s.gateway != nil {
+		state.Gateway = &config.GatewayState{
+			PID:    s.gateway.pid,
+			Addr:   s.gateway.addr,
+			Token:  s.gateway.token,
+			Config: s.gateway.cfg,
+		}
 	}
 	return config.SaveState(s.statePath, state)
 }
