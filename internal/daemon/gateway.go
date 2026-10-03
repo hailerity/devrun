@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"syscall"
@@ -18,16 +19,38 @@ import (
 
 // gatewayChild is the supervisor's handle on the running gateway process.
 //
-// It is deliberately not persisted. state.json has no gateway field, so a
-// gateway does not survive `devrun daemon restart` — the re-exec leaves the
-// child running but the replacement daemon has no handle on it. Re-adopting it
-// by pid is plan step 2.4's remaining half and is not in this change; until
-// then, `devrun gateway up` after a daemon restart is the way back.
+// It is recorded in state.json and re-adopted by adoptGateway on startup. The
+// gateway outlives the daemon on every exit path but SIGTERM — it is spawned
+// into its own session and never waited on — so without that record a
+// `devrun daemon stop` or `restart` left it running, holding its port, with
+// nothing able to see or stop it ever again.
 type gatewayChild struct {
 	pid   int
 	addr  string
 	token string
 	cfg   config.GatewayConfig
+}
+
+// gatewayArgMarker is how a gateway process is recognised in its own argv.
+const gatewayArgMarker = "--_gateway"
+
+// adoptGateway takes back the gateway a previous daemon started, or returns nil
+// when there is nothing to take back.
+//
+// Liveness alone is not enough to go on. state.json may name a pid from before
+// a reboot, and whatever holds that number now would be reported as the gateway
+// and then signalled by `devrun gateway down`. The argv has to agree that it is
+// one of ours; when it cannot be read, the answer is no.
+func adoptGateway(gs *config.GatewayState, log *slog.Logger) *gatewayChild {
+	if gs == nil || !pidAlive(gs.PID) {
+		return nil
+	}
+	if !strings.Contains(process.CommandLine(gs.PID), gatewayArgMarker) {
+		log.Info("not re-adopting the recorded gateway: pid is something else now", "pid", gs.PID)
+		return nil
+	}
+	log.Info("gateway re-adopted", "pid", gs.PID, "addr", gs.Addr)
+	return &gatewayChild{pid: gs.PID, addr: gs.Addr, token: gs.Token, cfg: gs.Config}
 }
 
 // gatewayStartTimeout bounds how long we wait for the child to announce its
@@ -84,6 +107,9 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	s.gateway = child
+	// Recorded now, so a daemon that is stopped or re-execs can hand this same
+	// child back rather than leaving it running and unreachable.
+	_ = s.saveStateLocked()
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
 	return okResp(resp)
@@ -96,6 +122,7 @@ func (s *supervisor) handleGatewayDown() *ipc.Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopGatewayLocked()
+	_ = s.saveStateLocked()
 	return &ipc.Response{OK: true}
 }
 
@@ -139,6 +166,7 @@ func (s *supervisor) handleGatewayExpose(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	s.gateway = child
+	_ = s.saveStateLocked()
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
 	return okResp(resp)
