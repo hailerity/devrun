@@ -154,3 +154,44 @@ func printTo(w *bytes.Buffer, fn func()) {
 	_ = r.Close()
 	os.Stdout = old
 }
+
+// The point of printing the command is that it can be pasted. With no tunnel
+// name there is no command to give, and one with a hole in it is worse than
+// none.
+func TestWarnMissingDNS_WithoutATunnelName(t *testing.T) {
+	s := ipc.GatewayStatusPayload{
+		Exposed:        []string{"web"},
+		PublicHostname: "{service}-devrun.invalid",
+		Tunnel:         &ipc.TunnelStatusPayload{Running: true, Kind: "named"}, // no Name
+	}
+	var buf bytes.Buffer
+	printTo(&buf, func() { warnMissingDNS(s, config.TunnelConfig{}) })
+
+	out := buf.String()
+	assert.Contains(t, out, "web-devrun.invalid", "the hostname is still named")
+	assert.Contains(t, out, "needs a CNAME")
+	assert.NotContains(t, out, "route dns  ", "never a command with a missing argument")
+}
+
+// With the name, the command is complete and copy-pasteable.
+func TestWarnMissingDNS_PrintsTheCommand(t *testing.T) {
+	s := ipc.GatewayStatusPayload{
+		Exposed:        []string{"web"},
+		PublicHostname: "{service}-devrun.invalid",
+		Tunnel:         &ipc.TunnelStatusPayload{Running: true, Kind: "named", Name: "devrun"},
+	}
+	var buf bytes.Buffer
+	printTo(&buf, func() { warnMissingDNS(s, config.TunnelConfig{}) })
+
+	assert.Contains(t, buf.String(), "cloudflared tunnel route dns devrun web-devrun.invalid")
+}
+
+// Both ways of asking for a named tunnel must produce the same config.
+func TestResolveTunnel_FlagsAndPromptAgreeOnProvider(t *testing.T) {
+	resetTunnelFlags(t)
+	tunnelUpFlags.hostname = "devrun.example.com"
+
+	got, err := resolveTunnel(&cobra.Command{}, config.Source{}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, config.ProviderCloudflare, got.Provider)
+}
