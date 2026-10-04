@@ -61,7 +61,9 @@ a.row:hover .go{color:var(--accent)}
 .note{font-size:13px;color:var(--muted)}.note.warn{color:var(--amber)}
 .go{width:14px;color:var(--muted);font-size:15px}
 .caveat{margin:10px 12px 14px;padding:10px 12px;background:var(--bar);
-  border-radius:6px;font-size:13px;color:var(--muted)}
+  border-radius:6px;font-size:13px;color:var(--muted);line-height:1.6}
+.caveat b{color:var(--text);font-weight:600}
+.caveat code{font-family:var(--mono);font-size:12px}
 .empty{padding:56px 12px;text-align:center}
 .empty p{margin:0 0 10px}
 .empty code{font-family:var(--mono);font-size:13px;background:var(--bar);
@@ -76,7 +78,11 @@ a.row:hover .go{color:var(--accent)}
 
 <main><div class="wrap">
 {{- if .PathMode}}
-  <p class="caveat">Served under a path. Apps that request assets from the site root may not load &mdash; set a base path, or use a named tunnel for one subdomain per service.</p>
+  <p class="caveat"><b>Services are addressed by path</b> because {{.PathReason}}.
+  An app that asks for assets from the site root &mdash; Vite&rsquo;s <code>/@vite/client</code>,
+  for instance &mdash; will not find them here. Give one service the root with
+  <code>routes: {"/": name}</code>, or set that app&rsquo;s own base path.{{if .PathFix}}
+  {{.PathFix}}{{end}}</p>
 {{- end}}
 {{- if .Services}}
   {{- range .Services}}
@@ -130,13 +136,15 @@ type indexRow struct {
 }
 
 type indexPage struct {
-	Host      string
-	Published bool
-	PathMode  bool
-	Version   string
-	Services  []indexRow
-	Total     int
-	Summary   string
+	Host       string
+	Published  bool
+	PathMode   bool
+	PathReason string // why, since it is often not what was configured
+	PathFix    string // what to do about it, when there is something specific
+	Version    string
+	Services   []indexRow
+	Total      int
+	Summary    string
 }
 
 // index renders the list of services this request is allowed to see.
@@ -158,6 +166,9 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		PathMode:  s.pathLinks(r.Host),
 		Version:   s.cfg.Version,
 		Total:     len(all),
+	}
+	if page.PathMode {
+		page.PathReason, page.PathFix = s.pathExplain(r.Host)
 	}
 	for _, route := range listed {
 		page.Services = append(page.Services, s.row(r, route))
