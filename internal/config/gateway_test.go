@@ -215,3 +215,19 @@ func TestGatewayConfig_ValidatePublicHostname(t *testing.T) {
 		assert.ErrorContainsf(t, err, tc.wantErr, "%s: %q", name, tc.in)
 	}
 }
+
+// A wildcard bind is where the gateway listens, not somewhere a person can
+// go. Only presentation rewrites it: Posture reads the real address, and
+// changing it there would report a wildcard bind as local.
+func TestDisplayHost(t *testing.T) {
+	for addr, want := range map[string]string{
+		"0.0.0.0:7788":   "localhost:7788",
+		"[::]:7788":      "localhost:7788",
+		"127.0.0.1:7788": "127.0.0.1:7788",
+		"192.168.1.8:80": "192.168.1.8:80",
+		"localhost:7788": "localhost:7788",
+		"garbage":        "garbage",
+	} {
+		assert.Equalf(t, want, config.DisplayHost(addr), "%q", addr)
+	}
+}
