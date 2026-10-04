@@ -163,10 +163,28 @@ func setExposed(names []string, exposed bool) error {
 		return nil
 	}
 	if err != nil {
-		return err
+		// The config is already written, so returning the bare error would
+		// say nothing happened when the durable half did. The two directions
+		// are not symmetric: failing to publish is harmless, while failing to
+		// withhold leaves a service the file no longer allows still reachable
+		// from outside — and a plain error invites the reader to believe it
+		// is safe.
+		return fmt.Errorf("%w\n\n%s", err, exposureMismatch(names, exposed))
 	}
 	printGateway(status)
 	return nil
+}
+
+// exposureMismatch describes the state when the config was written but the
+// running gateway could not be told.
+func exposureMismatch(names []string, exposed bool) string {
+	list := strings.Join(names, ", ")
+	if exposed {
+		return "Saved to the config, but the gateway was not told — " + list +
+			" is not published yet. Retry, or run `devrun gateway up`."
+	}
+	return "Saved to the config, but the gateway was not told — " + list +
+		" MAY STILL BE PUBLISHED. Run `devrun gateway down` to be certain."
 }
 
 func describeExposure(names []string, exposed bool) string {
