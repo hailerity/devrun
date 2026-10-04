@@ -133,6 +133,14 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	in := bufio.NewReader(cmd.InOrStdin())
 	fmt.Println("No tunnel configured.")
 	fmt.Println()
+	// What the two answers cost, before the question rather than after it: one
+	// of them needs a Cloudflare account and two commands, and the other needs
+	// nothing. That is the whole decision, and it is not recoverable from a
+	// prompt reading "blank for a quick tunnel".
+	fmt.Println("  A hostname gives a stable URL, and needs a Cloudflare account, a tunnel")
+	fmt.Println("  on it and a DNS record. Blank gives a quick tunnel: nothing to set up,")
+	fmt.Println("  and a new URL every run.")
+	fmt.Println()
 
 	hostname, err := ask(in, "  hostname (blank for a quick tunnel): ", "")
 	if err != nil {
@@ -180,7 +188,46 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	}
 	fmt.Println()
 	fmt.Printf("Saved tunnel.name and tunnel.hostname to %s\n", path)
+	printSetupSteps(setupSteps(cfg.Name, names, known))
 	return cfg, nil
+}
+
+// setupSteps is the account-level work devrun will not do, for a tunnel it
+// has just been told to use.
+//
+// Only what is known to be outstanding. An account that already has this
+// tunnel needs neither command, and telling someone to create what exists
+// teaches them to skim the next one. Unverifiable — no login, no daemon, no
+// cloudflared — lists both: unable to check is not the same as satisfied.
+//
+// DNS is deliberately absent. warnMissingDNS resolves each name after the
+// tunnel is up and prints only the records that are actually missing, and a
+// command worth printing is one worth running.
+func setupSteps(name string, names []string, known bool) []string {
+	var steps []string
+	if !known {
+		steps = append(steps, "cloudflared tunnel login")
+	}
+	if !contains(names, name) {
+		steps = append(steps, "cloudflared tunnel create "+name)
+	}
+	return steps
+}
+
+func printSetupSteps(steps []string) {
+	if len(steps) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("The tunnel has to exist on your Cloudflare account before it can run.")
+	fmt.Println("devrun does not create it — that needs access to your account it has no")
+	fmt.Println("business holding:")
+	fmt.Println()
+	for _, step := range steps {
+		fmt.Println("    " + step)
+	}
+	fmt.Println()
+	fmt.Println("Once it is up, devrun resolves each hostname and names any that is missing.")
 }
 
 func ask(in *bufio.Reader, prompt, fallback string) (string, error) {

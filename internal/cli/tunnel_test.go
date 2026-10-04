@@ -173,6 +173,23 @@ func TestWarnMissingDNS_NamesEachHostOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(out, "route dns"))
 }
 
+// The prompt is the one moment devrun knows someone has not published before,
+// so it is where `tunnel create` gets named. It names only what is left to do.
+func TestSetupSteps(t *testing.T) {
+	assert.Equal(t,
+		[]string{"cloudflared tunnel login", "cloudflared tunnel create devrun"},
+		setupSteps("devrun", nil, false),
+		"unable to check is not the same as satisfied: list both")
+
+	assert.Equal(t,
+		[]string{"cloudflared tunnel create devrun"},
+		setupSteps("devrun", []string{"other"}, true),
+		"logged in, but this tunnel is not on the account")
+
+	assert.Empty(t, setupSteps("devrun", []string{"other", "devrun"}, true),
+		"the tunnel exists; telling someone to create it teaches them to skim")
+}
+
 // warned captures what warnMissingDNS printed. The hostnames are all .invalid,
 // which no resolver will answer, so every one of them counts as missing.
 func warned(t *testing.T, s ipc.GatewayStatusPayload) string {

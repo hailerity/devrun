@@ -321,11 +321,27 @@ Asked once on first use, then remembered:
 ```
 No tunnel configured.
 
+  A hostname gives a stable URL, and needs a Cloudflare account, a tunnel
+  on it and a DNS record. Blank gives a quick tunnel: nothing to set up,
+  and a new URL every run.
+
   hostname (blank for a quick tunnel): devrun.example.com
   cloudflared tunnel [devrun]:
 
 Saved tunnel.name and tunnel.hostname to ./devrun.yaml
+
+The tunnel has to exist on your Cloudflare account before it can run.
+devrun does not create it — that needs access to your account it has no
+business holding:
+
+    cloudflared tunnel create devrun
+
+Once it is up, devrun resolves each hostname and names any that is missing.
 ```
+
+Only the steps that are actually outstanding: a tunnel already on the account
+prints nothing, and one that cannot be checked — no login, no daemon — lists
+`cloudflared tunnel login` too.
 
 Off a terminal it never asks — an agent or a script gets a quick tunnel and a
 printed note. A quick tunnel needs no account, no DNS and no login, and its
