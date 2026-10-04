@@ -64,10 +64,22 @@ type GatewayState struct {
 	Config GatewayConfig `json:"config"`
 }
 
+// TunnelState is the running cloudflared, recorded for the same reason
+// GatewayState is: the process outlives the daemon on every exit path but
+// SIGTERM, so without a record a replacement daemon could neither see it nor
+// stop it, while it went on publishing.
+type TunnelState struct {
+	PID       int          `json:"pid"`
+	Kind      string       `json:"kind"` // "named" | "quick"
+	PublicURL string       `json:"public_url"`
+	Config    TunnelConfig `json:"config"`
+}
+
 type State struct {
 	Version  int                      `json:"version"`
 	Services map[string]*ServiceState `json:"services"`
 	Gateway  *GatewayState            `json:"gateway,omitempty"`
+	Tunnel   *TunnelState             `json:"tunnel,omitempty"`
 	// ActiveTargets maps a currently-started target to the member service names
 	// captured when it was started. `devrun target stop` consults this snapshot —
 	// not the live config — so editing a target's membership while it runs does
