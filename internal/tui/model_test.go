@@ -670,3 +670,32 @@ func TestModel_MouseClick_SetsFocusMain(t *testing.T) {
 	mm := m2.(model)
 	assert.Equal(t, focusMain, mm.focus, "clicking in the log area should auto-focus the main panel")
 }
+
+// Toggling exposure is a config change and nothing more. It must never start
+// a tunnel: a key press in a dashboard putting services on the internet is
+// the safe-implies-dangerous inversion the design rejects everywhere else.
+func TestIsExposed(t *testing.T) {
+	var m model
+	assert.False(t, m.isExposed("web"), "no gateway, nothing is exposed")
+
+	m.gateway = &ipc.GatewayStatusPayload{Running: true, Exposed: []string{"web", "api"}}
+	assert.True(t, m.isExposed("web"))
+	assert.False(t, m.isExposed("admin"))
+}
+
+func TestDescribeExposed(t *testing.T) {
+	assert.Equal(t, "web may now leave this machine", describeExposed("web", true))
+	assert.Equal(t, "web may no longer leave this machine", describeExposed("web", false))
+}
+
+// The poll carries the gateway, so the header and the exposure state follow
+// the daemon rather than whatever the TUI last did.
+func TestDaemonResp_CarriesTheGateway(t *testing.T) {
+	m := newModel("", &config.Registry{Services: map[string]*config.ServiceConfig{}}, config.Source{}, t.TempDir(), clipboard{})
+	require.Nil(t, m.gateway)
+
+	updated, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
+		Gateway: &ipc.GatewayStatusPayload{Running: true, Posture: config.PosturePublished},
+	}})
+	assert.Equal(t, config.PosturePublished, updated.(model).gateway.Posture)
+}
