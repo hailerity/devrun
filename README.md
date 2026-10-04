@@ -18,6 +18,8 @@ with a live TUI dashboard and persistent logs.
 - **Daemon-backed** — services stay alive after you close the terminal
 - **Port detection** — devrun reports which port each service bound to
 - **Attach to any service** — bring a running process to your foreground (interactive)
+- **Local gateway** — one address for everything you are running, with a clickable index
+- **Optional publishing** — put the gateway behind a Cloudflare tunnel, or front it yourself
 - **Works with AI agents** — Claude Code, Codex and other MCP clients can add, start and stop services and read their logs (`devrun mcp`)
 
 ---
@@ -142,6 +144,21 @@ except services another active target still holds.
 | `devrun logs <name> -f` | Follow log output (like `tail -f`) |
 | `devrun logs <name> -n 50` | Print last N lines |
 
+### Publishing
+
+| Command | Description |
+|---|---|
+| `devrun gateway up` | Serve every running service from one address |
+| `devrun gateway status` | What it serves, and whether anything off this machine can reach it |
+| `devrun gateway expose <name>...` | Allow services to leave this machine |
+| `devrun gateway hide <name>...` | Stop them leaving it |
+| `devrun gateway down` | Stop the gateway, and any tunnel over it |
+| `devrun tunnel up [name...]` | Publish over a Cloudflare tunnel, starting the gateway if needed |
+| `devrun tunnel status` | What is published, and where |
+| `devrun tunnel down` | Stop publishing; the gateway keeps serving locally |
+
+See [Local gateway and publishing](#local-gateway-and-publishing).
+
 ### Interaction
 
 | Command | Description |
@@ -203,6 +220,184 @@ targets:
 ### Global registry: `~/.config/devrun/services.yaml`
 
 Managed automatically by `devrun add/remove`. You can also edit it directly.
+
+---
+
+## Local gateway and publishing
+
+`devrun gateway up` serves everything you are running from one address, with an
+index at the root you can click through.
+
+```sh
+devrun gateway up          # http://localhost:7788/
+```
+
+On loopback it needs no configuration and applies no controls — anything that
+can open `localhost:7788` can already open `localhost:4200` directly, so there
+is nothing to gate. The controls switch on the moment it can be reached from
+somewhere else.
+
+### Four ways to use it
+
+| what you want | config | `devrun tunnel up`? |
+|---|---|---|
+| local only | nothing | never |
+| a phone on the same wifi | `gateway.bind: 0.0.0.0` | never |
+| your own tunnel or reverse proxy | `gateway.posture: published` | never |
+| devrun runs cloudflared for you | asked on first use, then saved | yes |
+
+cloudflared is not a dependency. It is absent from `go.mod` and from the
+binary, and never looked for unless you publish.
+
+### Two postures
+
+|  | serves | allowlist | token |
+|---|---|---|---|
+| **local** | every running service | not applied | not required |
+| **published** | only `gateway.expose` | applied | required |
+
+Published is derived, not declared: a devrun-run tunnel, a non-loopback bind,
+or a request arriving with a `Host` the gateway does not recognise as itself.
+
+**That last check is defence in depth, not a guarantee.** Front the gateway
+with something that rewrites `Host` to `localhost` — some proxies do — and it
+will still think it is local while the world can reach it. If you publish it
+yourself, say so:
+
+```yaml
+gateway:
+  posture: published
+```
+
+On a shared machine, loopback is not a trust boundary either. `auth: always`
+keeps the token on locally.
+
+### How a request names a service
+
+Two shapes, and both always resolve whatever the mode says — `mode` only
+decides which one the index advertises.
+
+```
+subdomain   web.localhost:7788          one origin per service
+path        localhost:7788/web/         one origin for everything
+```
+
+**Locally, prefer subdomain.** It is free: browsers resolve `*.localhost` to
+loopback with no setup, and it keeps a frontend's relative `/api/...` calls
+working through its own dev server's proxy, exactly as they do at
+`localhost:4200`. Reaching the gateway at an **IP** forces path links, because
+`web.127.0.0.1` resolves nowhere — so open it by name.
+
+### Path mode breaks root-absolute asset URLs
+
+An app served at `/web/` that asks for `/@vite/client` is asking the *gateway*
+for it, not the app, and gets a 404. Give one service the root:
+
+```yaml
+gateway:
+  routes:
+    "/":    web
+    "/api": { service: api, strip: false }
+```
+
+Now `/@vite/client` reaches `web` untouched, `/api/users` reaches `api` still
+spelled `/api/users`, and both share one origin — so there is no CORS between
+them either. With two frontends only one can hold `/`; the second needs its own
+base path (Vite's `base`, Angular's `--base-href`, webpack's `publicPath`).
+
+**A catch-all `"/"` rule is matched before the Host label**, so once you have
+one, the subdomain URLs all resolve to whatever sits at the root.
+
+### Publishing
+
+```sh
+devrun tunnel up web api     # publishes these two, and starts the gateway
+devrun tunnel status
+devrun tunnel down           # the gateway keeps serving locally
+```
+
+Asked once on first use, then remembered:
+
+```
+No tunnel configured.
+
+  hostname (blank for a quick tunnel): devrun.example.com
+  cloudflared tunnel [devrun]:
+
+Saved tunnel.name and tunnel.hostname to ./devrun.yaml
+```
+
+Off a terminal it never asks — an agent or a script gets a quick tunnel and a
+printed note. A quick tunnel needs no account, no DNS and no login, and its
+URL changes every run.
+
+### What a published subdomain costs
+
+Each service needs a hostname, and **a certificate that covers it**. Cloudflare's
+Universal SSL covers the apex and one wildcard level, so `web.devrun.example.com`
+— two labels deep — is refused at the TLS handshake, not merely distrusted.
+
+```yaml
+gateway:
+  public_hostname: "{service}-devrun.example.com"
+```
+
+| shape | DNS | certificate |
+|---|---|---|
+| `{service}-devrun.example.com` | one CNAME per service | free |
+| `{service}.example.com` | one CNAME per service, or `*.example.com` | free |
+| `{service}.devrun.example.com` | `*.devrun.example.com` | needs Advanced Certificate Manager |
+| *unset* — path mode | one CNAME | free |
+
+The namespaced form is the one to reach for on a domain you use for anything
+else: without the suffix, a service called `api` quietly claims
+`api.example.com`.
+
+devrun does not write DNS records — that needs write access to your zone it has
+no business holding — but it prints the command for any that are missing:
+
+```
+2 hostnames do not resolve yet:
+    cloudflared tunnel route dns devrun web-devrun.example.com
+    cloudflared tunnel route dns devrun api-devrun.example.com
+```
+
+### Telling an app where its backend is
+
+Most projects need nothing here: a frontend's dev server proxies `/api` and the
+relative call keeps working through the gateway. For an app that must call an
+absolute URL, devrun injects one per service:
+
+```
+DEVRUN_URL_API = http://localhost:3000             # local
+DEVRUN_URL_API = https://api-devrun.example.com    # published
+```
+
+Frameworks filter the environment by prefix — Vite exposes only `VITE_`, Create
+React App only `REACT_APP_` — so bridge it in config:
+
+```yaml
+services:
+  web:
+    env:
+      VITE_API_URL: "${DEVRUN_URL_API}"
+```
+
+`${NAME}` only; a bare `$NAME` is left alone so passwords and shell snippets
+survive, and `$$` is a literal `$`.
+
+Dev servers read their environment once, at startup, so a service already
+running when you publish still holds the local value:
+
+```sh
+devrun tunnel up --restart-exposed
+```
+
+### The index is read-only
+
+It lists services and links to them. No start, no stop, no logs. Anything more
+and a leaked token stops being "someone can see my dev app" and becomes remote
+process control on your machine.
 
 ---
 
@@ -362,8 +557,9 @@ prints these instructions.
 
 | Tool | What it does |
 |---|---|
-| `list_services` | Every service and target in scope, with live state, PID, port, uptime and CPU/memory |
+| `list_services` | Every service and target in scope, with live state, PID, port, uptime, CPU/memory and the URL it can be opened at |
 | `service_status` | One service's state and definition — command, directory, env variable **names** (never values), last exit code |
+| `gateway_status` | What the gateway serves, its posture, what may leave the machine, and the public URL when a tunnel is running. Never the token |
 | `logs` | The end of a service's output as plain text: 100 lines by default, at most 1000 and 64 KB, optionally filtered |
 | `add_service` | Define a new service in the project's `devrun.yaml` (or the global registry). Refuses an existing name |
 | `add_to_target` | Create a target or add services to it |
