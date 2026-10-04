@@ -155,7 +155,7 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	page := indexPage{
 		Host:      r.Host,
 		Published: published,
-		PathMode:  s.linkMode() == Path || !canSubdomain(r.Host),
+		PathMode:  s.pathLinks(r.Host),
 		Version:   s.cfg.Version,
 		Total:     len(all),
 	}
@@ -194,8 +194,9 @@ func (s *Server) row(r *http.Request, route Route) indexRow {
 			// Running and reachable, but the routes table mounts it nowhere.
 			out.Note = "not routed"
 			out.Warn = true
-		} else if s.linkMode() == Subdomain && canSubdomain(r.Host) {
-			out.Sub = subdomainHost(r.Host, route.Name)
+		} else {
+			// Empty when the link is a path, which the row already shows.
+			out.Sub = s.serviceHost(r.Host, route.Name)
 		}
 	}
 	return out
@@ -236,10 +237,8 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 		}
 		return p
 	}
-	// A label in front of an IP address is not a hostname — hello.127.0.0.1
-	// resolves nowhere — so a gateway reached by address can only offer paths,
-	// whatever the mode says.
-	if s.linkMode() == Path || !canSubdomain(r.Host) {
+	host := s.serviceHost(r.Host, name)
+	if host == "" {
 		// Relative, so it works over http locally and https once published
 		// without the gateway having to guess which it is behind.
 		return "/" + name + "/"
@@ -248,7 +247,7 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 	if s.Posture(r) == Published {
 		scheme = "https"
 	}
-	link := scheme + "://" + subdomainHost(r.Host, name) + "/"
+	link := scheme + "://" + host + "/"
 
 	// Each service is a different host and the handover cookie is host-only, so
 	// a bare link would land somewhere with no cookie and 401. Carry the key:

@@ -85,9 +85,13 @@ type Config struct {
 	Posture    string // PostureAuto | PostureForced
 	Auth       string // AuthAuto | AuthAlways | AuthNone
 	HostHeader string // HostUpstream | HostPreserve
-	Rules      map[string]Rule
-	Token      string
-	Version    string
+	// PublicHostname addresses services by a domain of their own, as a
+	// template with one {service} placeholder. Empty keeps the prepend, which
+	// is what *.localhost needs locally. See hostname.go.
+	PublicHostname string
+	Rules          map[string]Rule
+	Token          string
+	Version        string
 }
 
 // Snapshot is what the gateway last learned from the daemon. It is replaced

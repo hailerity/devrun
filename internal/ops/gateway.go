@@ -82,12 +82,13 @@ func routesFrom(services []ipc.ServiceInfo) []gateway.Route {
 // to import the config package.
 func GatewayServerConfig(g config.GatewayConfig, version string) gateway.Config {
 	cfg := gateway.Config{
-		Bind:       g.Addr(),
-		Mode:       gateway.Mode(g.Mode),
-		Posture:    g.Posture,
-		Auth:       g.Auth,
-		HostHeader: g.HostHeader,
-		Version:    version,
+		Bind:           g.Addr(),
+		Mode:           gateway.Mode(g.Mode),
+		Posture:        g.Posture,
+		Auth:           g.Auth,
+		HostHeader:     g.HostHeader,
+		PublicHostname: g.PublicHostname,
+		Version:        version,
 	}
 	if len(g.Routes) > 0 {
 		cfg.Rules = make(map[string]gateway.Rule, len(g.Routes))
