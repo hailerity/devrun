@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/gateway"
 	"github.com/hailerity/devrun/internal/ipc"
@@ -107,15 +108,16 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	s.gateway = child
-	// Recorded now, so a daemon that is stopped or re-execs can hand this same
-	// child back rather than leaving it running and unreachable.
-	_ = s.saveStateLocked()
 	moved := s.tunnel != nil && child.addr != previousAddr
 	tunnelCfg := config.TunnelConfig{}
 	if moved {
 		tunnelCfg = s.tunnel.cfg
 		s.stopTunnelLocked()
 	}
+	// Saved once both handles are settled, so the record never describes a
+	// tunnel that has just been stopped. Recording it at all is what lets a
+	// daemon that is stopped or re-execs hand these same children back.
+	_ = s.saveStateLocked()
 	s.mu.Unlock()
 
 	// A tunnel carries one origin, fixed at spawn. If the gateway just moved —
@@ -124,7 +126,12 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	// keeps the tunnel true; a quick tunnel gets a new URL in the process,
 	// which is why the CLI reports the URL after every up.
 	if moved {
-		s.followGateway(tunnelCfg, child.addr)
+		if err := s.followGateway(tunnelCfg, child.addr); err != nil {
+			// The gateway is up; publishing is not. Reported rather than
+			// swallowed, since the two halves now disagree with what the user
+			// had before the command.
+			return errResp(err.Error())
+		}
 	}
 
 	s.mu.Lock()
@@ -133,17 +140,25 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	return okResp(resp)
 }
 
-// followGateway restarts the tunnel against the gateway's new address.
-func (s *supervisor) followGateway(cfg config.TunnelConfig, addr string) {
+// followGateway restarts the tunnel against the gateway's new address, and
+// reports whether it managed to.
+//
+// A failure here leaves the gateway up and nothing publishing, which the
+// caller has to say out loud: the user asked to move the gateway, not to stop
+// publishing, and a log line nobody reads is not an answer.
+func (s *supervisor) followGateway(cfg config.TunnelConfig, addr string) error {
 	child, err := s.spawnTunnel(cfg, originURL(addr))
 	if err != nil {
 		s.logger.Warn("gateway moved; the tunnel could not follow it", "addr", addr, "err", err)
-		return
+		// The stop is already persisted, so the record matches reality —
+		// nothing is publishing — without another save.
+		return fmt.Errorf("the gateway moved to %s but the tunnel could not follow: %w", addr, err)
 	}
 	s.mu.Lock()
 	s.tunnel = child
 	_ = s.saveStateLocked()
 	s.mu.Unlock()
+	return nil
 }
 
 func (s *supervisor) handleGatewayDown() *ipc.Response {
@@ -361,14 +376,9 @@ func (c *childStderr) firstLine() string {
 	defer func() { _ = f.Close() }()
 	buf := make([]byte, stderrCap)
 	n, _ := f.ReadAt(buf, c.from)
-	for _, line := range strings.Split(string(buf[:n]), "\n") {
-		if l := strings.TrimSpace(line); l != "" {
-			// The child labels its own messages "gateway: ", which would read
-			// twice over inside an error the caller also labels.
-			return strings.TrimPrefix(l, "gateway: ")
-		}
-	}
-	return ""
+	// The child labels its own messages "gateway: ", which would read twice
+	// over inside an error the caller also labels.
+	return strings.TrimPrefix(cloudflared.FirstLine(string(buf[:n])), "gateway: ")
 }
 
 // readGatewayAddr waits for the child's "gateway listening <addr>" line.
