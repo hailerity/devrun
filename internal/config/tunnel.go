@@ -89,3 +89,42 @@ func validateHostname(h string) error {
 	}
 	return nil
 }
+
+// SaveTunnel writes the tunnel block to whichever config src points at — the
+// project devrun.yaml when src.IsLocal(), otherwise the global registry — and
+// returns the path it wrote, so the caller can say which file it touched.
+//
+// This is the one place a lifecycle command writes config, and it is a
+// deliberate exception: it records an answer the user has just typed at a
+// prompt, rather than inferring one. `gateway expose` already writes to the
+// active config the way `target add` does.
+func SaveTunnel(src Source, t TunnelConfig) (string, error) {
+	if src.IsLocal() {
+		proj, err := LoadProject(src.Dir)
+		if err != nil {
+			return "", err
+		}
+		if proj == nil {
+			return "", fmt.Errorf("no %s in %s", ProjectFileName, src.Dir)
+		}
+		proj.Tunnel = &t
+		if err := SaveProject(src.Dir, proj); err != nil {
+			return "", err
+		}
+		return src.Local, nil
+	}
+
+	path := RegistryPath()
+	reg, err := LoadRegistry(path)
+	if err != nil {
+		return "", err
+	}
+	reg.Tunnel = &t
+	if reg.Version == "" {
+		reg.Version = "1"
+	}
+	if err := SaveRegistry(path, reg); err != nil {
+		return "", err
+	}
+	return path, nil
+}
