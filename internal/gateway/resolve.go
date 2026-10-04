@@ -37,6 +37,9 @@ func (s *Server) Resolve(r *http.Request) (Target, Outcome) {
 	if t, ok := s.resolveRule(r.URL.Path); ok {
 		return s.check(t, r)
 	}
+	if t, ok := s.resolveTemplate(r.Host); ok {
+		return s.check(t, r)
+	}
 	if t, ok := s.resolveHost(r.Host); ok {
 		return s.check(t, r)
 	}
