@@ -143,6 +143,10 @@ type GatewayStatusPayload struct {
 	Token   string   `json:"token,omitempty"`
 	Exposed []string `json:"exposed,omitempty"`
 	PID     *int     `json:"pid,omitempty"`
+	// PublicHostname is the gateway's {service} template, so a caller can
+	// build each service's address without knowing how the gateway resolves
+	// one. Empty means services are addressed by path.
+	PublicHostname string `json:"public_hostname,omitempty"`
 	// Tunnel is nil when nothing devrun manages is publishing this gateway.
 	// Nil does not mean unpublished: someone may be fronting it with ngrok or
 	// a Caddy devrun knows nothing about, which is what posture reports.
