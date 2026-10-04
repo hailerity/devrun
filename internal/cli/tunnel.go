@@ -133,13 +133,18 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	in := bufio.NewReader(cmd.InOrStdin())
 	fmt.Println("No tunnel configured.")
 	fmt.Println()
-	// What the two answers cost, before the question rather than after it: one
-	// of them needs a Cloudflare account and two commands, and the other needs
-	// nothing. That is the whole decision, and it is not recoverable from a
-	// prompt reading "blank for a quick tunnel".
-	fmt.Println("  A hostname gives a stable URL, and needs a Cloudflare account, a tunnel")
-	fmt.Println("  on it and a DNS record. Blank gives a quick tunnel: nothing to set up,")
-	fmt.Println("  and a new URL every run.")
+	// The commands go above the question, not below it. What a hostname costs
+	// is the whole decision being made here, and naming that cost after the
+	// answer is taken is too late to inform it.
+	fmt.Println("  A hostname gives a stable URL. It needs a Cloudflare account and three")
+	fmt.Println("  commands, which devrun will not run for you:")
+	fmt.Println()
+	for _, step := range setupSteps(exampleTunnel) {
+		fmt.Println("      " + step)
+	}
+	fmt.Println()
+	fmt.Println("  Blank gives a quick tunnel instead: no account, nothing to set up, and")
+	fmt.Println("  a new URL every run.")
 	fmt.Println()
 
 	hostname, err := ask(in, "  hostname (blank for a quick tunnel): ", "")
@@ -188,44 +193,38 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	}
 	fmt.Println()
 	fmt.Printf("Saved tunnel.name and tunnel.hostname to %s\n", path)
-	printSetupSteps(setupSteps(cfg, names, known))
+	printSetupSteps(cfg)
 	return cfg, nil
 }
 
-// setupSteps is the Cloudflare-side work devrun will not do, for a tunnel it
-// has just been told to use: the whole sequence, in the order it must be run.
+// exampleTunnel fills the setup commands shown above the question, where
+// devrun has no name or hostname to put in them yet.
+var exampleTunnel = config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"}
+
+// setupSteps is the Cloudflare-side work devrun will not do, in the order it
+// has to be run.
 //
-// The two account-level commands are given only when they are outstanding. An
-// account that already has this tunnel needs neither, and telling someone to
-// create what exists teaches them to skim the next line. Unverifiable — no
-// login, no daemon, no cloudflared — lists both, because unable to check is
-// not the same as satisfied.
-//
-// The route always appears. It is per hostname, not per tunnel, so an
-// existing tunnel being reused under a new name still needs one, and this is
-// the first moment devrun knows the hostname. warnMissingDNS checks it for
-// real once the tunnel is up — here nothing is resolved, because a hostname
-// typed one line ago has had no chance to exist.
-func setupSteps(cfg config.TunnelConfig, names []string, known bool) []string {
-	var steps []string
-	if !known {
-		steps = append(steps, "cloudflared tunnel login")
+// All three, always, including a login the account may well already have.
+// The sequence is the thing being taught: that a tunnel is a named object
+// which must exist before it can run, and that the hostname is a separate
+// record pointing at it. Printing only the steps devrun can tell are
+// outstanding hides that shape — and above the question it cannot tell
+// anything, because the name and hostname are what is being asked for.
+func setupSteps(cfg config.TunnelConfig) []string {
+	return []string{
+		"cloudflared tunnel login",
+		"cloudflared tunnel create " + cfg.Name,
+		"cloudflared tunnel route dns " + cfg.Name + " " + cfg.Hostname,
 	}
-	if !contains(names, cfg.Name) {
-		steps = append(steps, "cloudflared tunnel create "+cfg.Name)
-	}
-	return append(steps, "cloudflared tunnel route dns "+cfg.Name+" "+cfg.Hostname)
 }
 
-func printSetupSteps(steps []string) {
-	if len(steps) == 0 {
-		return
-	}
+// printSetupSteps repeats the sequence with the answers filled in, so it can
+// be pasted rather than transcribed.
+func printSetupSteps(cfg config.TunnelConfig) {
 	fmt.Println()
-	fmt.Println("Before this tunnel can serve, on your Cloudflare account. devrun does none")
-	fmt.Println("of it — that needs access to your account it has no business holding:")
+	fmt.Println("Your setup, with the values just saved — skip whatever is already done:")
 	fmt.Println()
-	for _, step := range steps {
+	for _, step := range setupSteps(cfg) {
 		fmt.Println("    " + step)
 	}
 	fmt.Println()

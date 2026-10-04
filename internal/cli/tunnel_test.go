@@ -176,22 +176,23 @@ func TestWarnMissingDNS_NamesEachHostOnce(t *testing.T) {
 // The prompt is the one moment devrun knows someone has not published before,
 // so it is where `tunnel create` gets named. It names only what is left to do.
 func TestSetupSteps(t *testing.T) {
-	cfg := config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"}
-	const route = "cloudflared tunnel route dns devrun devrun.example.com"
+	assert.Equal(t, []string{
+		"cloudflared tunnel login",
+		"cloudflared tunnel create pimatix",
+		"cloudflared tunnel route dns pimatix devrun.thesys.link",
+	}, setupSteps(config.TunnelConfig{Name: "pimatix", Hostname: "devrun.thesys.link"}),
+		"the name and the hostname are separate arguments, and route takes both")
+}
 
-	assert.Equal(t,
-		[]string{"cloudflared tunnel login", "cloudflared tunnel create devrun", route},
-		setupSteps(cfg, nil, false),
-		"unable to check is not the same as satisfied: list both")
-
-	assert.Equal(t,
-		[]string{"cloudflared tunnel create devrun", route},
-		setupSteps(cfg, []string{"other"}, true),
-		"logged in, but this tunnel is not on the account")
-
-	assert.Equal(t, []string{route}, setupSteps(cfg, []string{"other", "devrun"}, true),
-		"the tunnel exists, so only its DNS record is left; "+
-			"telling someone to create what is there teaches them to skim")
+// The same three lines are shown above the question as examples and below it
+// with the answers filled in. One function renders both, so they cannot drift
+// into teaching one sequence and printing another.
+func TestExampleTunnel_RendersTheWholeSequence(t *testing.T) {
+	steps := setupSteps(exampleTunnel)
+	assert.Len(t, steps, 3)
+	assert.Equal(t, "cloudflared tunnel login", steps[0],
+		"shown even to an account already logged in: the sequence is the point")
+	assert.Contains(t, steps[2], "devrun.example.com")
 }
 
 // warned captures what warnMissingDNS printed. The hostnames are all .invalid,

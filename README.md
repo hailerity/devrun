@@ -325,18 +325,24 @@ Asked once on first use, then remembered:
 ```
 No tunnel configured.
 
-  A hostname gives a stable URL, and needs a Cloudflare account, a tunnel
-  on it and a DNS record. Blank gives a quick tunnel: nothing to set up,
-  and a new URL every run.
+  A hostname gives a stable URL. It needs a Cloudflare account and three
+  commands, which devrun will not run for you:
+
+      cloudflared tunnel login
+      cloudflared tunnel create devrun
+      cloudflared tunnel route dns devrun devrun.example.com
+
+  Blank gives a quick tunnel instead: no account, nothing to set up, and
+  a new URL every run.
 
   hostname (blank for a quick tunnel): devrun.example.com
   cloudflared tunnel [devrun]:
 
 Saved tunnel.name and tunnel.hostname to ./devrun.yaml
 
-Before this tunnel can serve, on your Cloudflare account. devrun does none
-of it — that needs access to your account it has no business holding:
+Your setup, with the values just saved — skip whatever is already done:
 
+    cloudflared tunnel login
     cloudflared tunnel create devrun
     cloudflared tunnel route dns devrun devrun.example.com
 
@@ -346,10 +352,10 @@ one record per published service; devrun resolves them all once the tunnel
 is up and names any that is missing.
 ```
 
-The two account-level commands appear only when they are outstanding: a tunnel
-already on the account prints neither, and one that cannot be checked — no
-login, no daemon — lists `cloudflared tunnel login` as well. The route is
-always shown, since it is per hostname rather than per tunnel.
+The commands appear above the question because that is the decision they
+inform — a stable URL costs a Cloudflare account and three commands, a quick
+one costs nothing. They are repeated underneath with the answers filled in, so
+they can be pasted.
 
 Off a terminal it never asks — an agent or a script gets a quick tunnel and a
 printed note. A quick tunnel needs no account, no DNS and no login, and its
