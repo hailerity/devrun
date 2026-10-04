@@ -18,6 +18,12 @@ import "os"
 func (s *supervisor) reap(proc *os.Process, what string, clear func(pid int)) {
 	pid := proc.Pid
 	go func() {
+		// Wait returns a nil state alongside its error — ECHILD, say, if
+		// something else reaped first. Logging state.String() is still safe:
+		// (*os.ProcessState).String() guards its nil receiver and yields
+		// "<nil>", measured at this call site. Two review rounds have read
+		// this as an unguarded deref, hence the note rather than a redundant
+		// branch; err carries the reason in that case either way.
 		state, err := proc.Wait()
 		s.logger.Info(what+" exited", "pid", pid, "state", state.String(), "err", err)
 		clear(pid)
