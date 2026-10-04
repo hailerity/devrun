@@ -334,18 +334,22 @@ No tunnel configured.
 
 Saved tunnel.name and tunnel.hostname to ./devrun.yaml
 
-The tunnel has to exist on your Cloudflare account before it can run.
-devrun does not create it — that needs access to your account it has no
-business holding:
+Before this tunnel can serve, on your Cloudflare account. devrun does none
+of it — that needs access to your account it has no business holding:
 
     cloudflared tunnel create devrun
+    cloudflared tunnel route dns devrun devrun.example.com
 
-Once it is up, devrun resolves each hostname and names any that is missing.
+That hostname is the tunnel's own, where the service index is served, and
+in path mode the only record there is. Giving each service a hostname adds
+one record per published service; devrun resolves them all once the tunnel
+is up and names any that is missing.
 ```
 
-Only the steps that are actually outstanding: a tunnel already on the account
-prints nothing, and one that cannot be checked — no login, no daemon — lists
-`cloudflared tunnel login` too.
+The two account-level commands appear only when they are outstanding: a tunnel
+already on the account prints neither, and one that cannot be checked — no
+login, no daemon — lists `cloudflared tunnel login` as well. The route is
+always shown, since it is per hostname rather than per tunnel.
 
 Off a terminal it never asks — an agent or a script gets a quick tunnel and a
 printed note. A quick tunnel needs no account, no DNS and no login, and its
