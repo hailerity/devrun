@@ -3,7 +3,9 @@ package process
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +28,13 @@ func TestCommandLine(t *testing.T) {
 			_, _ = cmd.Process.Wait()
 		})
 
-		assert.Contains(t, CommandLine(cmd.Process.Pid), "sleep")
+		// Start returns once the fork has happened, which on Linux is before
+		// the exec — /proc/<pid>/cmdline is empty in that window. macOS hides
+		// it by showing the parent's argv, so reading immediately passes
+		// locally and fails in CI.
+		require.Eventually(t, func() bool {
+			return strings.Contains(CommandLine(cmd.Process.Pid), "sleep")
+		}, 5*time.Second, 50*time.Millisecond, "the child never showed its argv")
 		assert.NotContains(t, CommandLine(os.Getpid()), "sleep 30")
 	})
 

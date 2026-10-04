@@ -260,15 +260,28 @@ func TestChildStderr(t *testing.T) {
 // behind by a previous daemon.
 func fakeGateway(t *testing.T) int {
 	t.Helper()
-	cmd := exec.Command("sh", "-c", ": "+gatewayArgMarker+"; sleep 30")
+	return standIn(t, gatewayArgMarker)
+}
+
+// standIn starts a long-lived process whose argv carries marker, and does not
+// return until the marker is actually readable from that pid.
+//
+// The wait is load-bearing, not caution. cmd.Start returns once the fork has
+// happened, which on Linux is before the exec: /proc/<pid>/cmdline is empty
+// in that window, so CommandLine reports nothing and a re-adoption check
+// reads the stand-in as somebody else. macOS hides it — ps shows the parent's
+// argv immediately — so it passes locally and fails in CI.
+func standIn(t *testing.T, marker string) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", ": "+marker+"; sleep 30")
 	require.NoError(t, cmd.Start())
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
 	require.Eventually(t, func() bool {
-		return strings.Contains(process.CommandLine(cmd.Process.Pid), gatewayArgMarker)
-	}, 5*time.Second, 50*time.Millisecond, "the stand-in never showed the marker")
+		return strings.Contains(process.CommandLine(cmd.Process.Pid), marker)
+	}, 5*time.Second, 50*time.Millisecond, "the stand-in never showed %q in its argv", marker)
 	return cmd.Process.Pid
 }
 
