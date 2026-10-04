@@ -77,3 +77,36 @@ func TestClearTunnelPid(t *testing.T) {
 	defer s.mu.Unlock()
 	assert.Nil(t, s.tunnel)
 }
+
+// The reaper starts with the process, before the caller can store the handle.
+// A child that dies in that window has its clear() run against a handle not
+// yet set, and the assignment that follows would record a dead pid as live —
+// status then claiming a gateway or tunnel that is gone.
+func TestRecordLive(t *testing.T) {
+	t.Run("a live child is recorded", func(t *testing.T) {
+		var slot *gatewayChild
+		child := &gatewayChild{pid: os.Getpid(), addr: "127.0.0.1:7788"}
+
+		assert.True(t, recordLive(&slot, child, child.pid))
+		require.NotNil(t, slot)
+		assert.Equal(t, "127.0.0.1:7788", slot.addr)
+	})
+
+	t.Run("one that already went is not", func(t *testing.T) {
+		var slot *gatewayChild
+		// Reaped, so the probe gives ESRCH — the state the window produces.
+		proc, err := os.StartProcess("/bin/sh", []string{"sh", "-c", "exit 0"}, &os.ProcAttr{})
+		require.NoError(t, err)
+		_, _ = proc.Wait()
+
+		child := &gatewayChild{pid: proc.Pid, addr: "127.0.0.1:7788"}
+		assert.False(t, recordLive(&slot, child, child.pid))
+		assert.Nil(t, slot, "the handle must not hold a dead child")
+	})
+
+	t.Run("works for the tunnel slot too", func(t *testing.T) {
+		var slot *tunnelChild
+		assert.True(t, recordLive(&slot, &tunnelChild{pid: os.Getpid()}, os.Getpid()))
+		assert.NotNil(t, slot)
+	})
+}
