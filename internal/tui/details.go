@@ -67,15 +67,23 @@ func detailLines(svc *ipc.ServiceInfo, cfg *config.ServiceConfig) []detailLine {
 	if svc.Port != nil && *svc.Port != 0 {
 		port = fmt.Sprintf("%d", *svc.Port)
 	}
-	section("STATUS", [][3]string{
+	status := [][3]string{
 		{"state", renderStateLabel(svc.State), svc.State},
 		{"pid", renderPID(svc.PID), pid},
 		{"port", renderPort(svc.Port), port},
+	}
+	if svc.URL != "" {
+		// Copyable like every other row, which is the point of showing it:
+		// `y` puts the address on the clipboard ready to paste or share.
+		status = append(status, [3]string{"url", styleAccent.Render(svc.URL), svc.URL})
+	}
+	status = append(status, [][3]string{
 		{"uptime", formatUptimeFull(svc.UptimeSec), formatUptimeFull(svc.UptimeSec)},
 		{"cpu", renderCPUFull(svc.CPUPct), fmt.Sprintf("%.1f%%", svc.CPUPct)},
 		{"mem", formatBytes(svc.MemBytes), formatBytes(svc.MemBytes)},
 		{"started", computeStarted(svc.UptimeSec), ansi.Strip(computeStarted(svc.UptimeSec))},
-	})
+	}...)
+	section("STATUS", status)
 	if cfg == nil {
 		return out
 	}

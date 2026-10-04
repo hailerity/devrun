@@ -5,6 +5,7 @@ import (
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/require"
+	"slices"
 	"strings"
 	"testing"
 
@@ -187,4 +188,24 @@ func TestDetailsPanel_RenderFitsWidthAndMarksCursorOnlyWhenFocused(t *testing.T)
 	}
 	assert.Equal(t, normalise(dp.render(lines, 60, false)), normalise(dp.render(lines, 60, true)))
 	assert.Contains(t, plain(dp.render(lines, 40, false)), "…", "an over-long value is cut with an ellipsis")
+}
+
+// The URL is copyable like every other row, which is the point of showing it:
+// `y` puts the address on the clipboard ready to paste or share.
+func TestDetailLines_URLRow(t *testing.T) {
+	svc := &ipc.ServiceInfo{Name: "web", State: "running", URL: "https://web-devrun.example.com/"}
+
+	lines := detailLines(svc, nil)
+	i := slices.IndexFunc(lines, func(l detailLine) bool { return l.label == "url" })
+	require.GreaterOrEqual(t, i, 0, "a service with an address shows it")
+	assert.Equal(t, "https://web-devrun.example.com/", lines[i].copy,
+		"and `y` copies the address itself, not the rendered row")
+}
+
+// No gateway, or a service the gateway cannot reach, means no row — rather
+// than an empty one implying there is an address.
+func TestDetailLines_NoURLRowWithoutOne(t *testing.T) {
+	for _, l := range detailLines(&ipc.ServiceInfo{Name: "web", State: "running"}, nil) {
+		assert.NotEqual(t, "url", l.label)
+	}
 }
