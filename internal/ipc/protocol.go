@@ -72,10 +72,17 @@ type ServiceInfo struct {
 	UptimeSec int64   `json:"uptime_s"`
 	CPUPct    float64 `json:"cpu_pct"`
 	MemBytes  int64   `json:"mem_bytes"`
+	// URL is where this service can be opened, when the gateway is up and
+	// serving it. Empty otherwise — a service with no port, or one withheld
+	// while published, has no address to give out.
+	URL string `json:"url,omitempty"`
 }
 
 type ListResponsePayload struct {
 	Services []ServiceInfo `json:"services"`
+	// Gateway is nil when it is not running, so every caller reads the same
+	// answer rather than each deciding what absence means.
+	Gateway *GatewayStatusPayload `json:"gateway,omitempty"`
 	// ActiveTargets names the targets the daemon currently considers started,
 	// sorted. Empty when no target has been started.
 	ActiveTargets []string `json:"active_targets,omitempty"`
