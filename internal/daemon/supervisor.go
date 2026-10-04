@@ -155,6 +155,12 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleGatewayStatus())
 	case "gateway-expose":
 		_ = ipc.WriteMessage(conn, s.handleGatewayExpose(req.Payload))
+	case "tunnel-up":
+		_ = ipc.WriteMessage(conn, s.handleTunnelUp(req.Payload))
+	case "tunnel-down":
+		_ = ipc.WriteMessage(conn, s.handleTunnelDown())
+	case "tunnel-list":
+		_ = ipc.WriteMessage(conn, s.handleTunnelList())
 	case "attach":
 		s.handleAttach(conn, req.Payload)
 	case "daemon-stop":
