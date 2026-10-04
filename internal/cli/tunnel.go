@@ -69,7 +69,11 @@ func resolveTunnel(cmd *cobra.Command, src config.Source, reg *config.Registry) 
 		return config.TunnelConfig{}, nil
 	}
 	if tunnelUpFlags.hostname != "" || tunnelUpFlags.name != "" {
-		cfg := config.TunnelConfig{Hostname: tunnelUpFlags.hostname, Name: tunnelUpFlags.name}
+		cfg := config.TunnelConfig{
+			Provider: config.ProviderCloudflare,
+			Hostname: tunnelUpFlags.hostname,
+			Name:     tunnelUpFlags.name,
+		}
 		if cfg.Name == "" {
 			cfg.Name = firstLabel(cfg.Hostname)
 		}
@@ -326,6 +330,15 @@ func warnMissingDNS(s ipc.GatewayStatusPayload, cfg config.TunnelConfig) {
 	}
 	fmt.Println()
 	fmt.Println(styleYellow.Render(plural(len(missing), "hostname does", "hostnames do") + " not resolve yet:"))
+	if tunnelName == "" {
+		// Without the name there is no command to give. Printing one with a
+		// hole in it would be worse than printing none: the point of this is
+		// that it can be pasted.
+		for _, host := range missing {
+			fmt.Printf("    %s  — needs a CNAME to this tunnel\n", host)
+		}
+		return
+	}
 	for _, host := range missing {
 		fmt.Printf("    cloudflared tunnel route dns %s %s\n", tunnelName, host)
 	}
