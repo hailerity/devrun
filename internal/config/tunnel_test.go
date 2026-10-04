@@ -81,3 +81,18 @@ tunnel:
 	require.NotNil(t, proj.Tunnel)
 	assert.Equal(t, "devrun", proj.Tunnel.Name)
 }
+
+// The tunnel name is often derived from the hostname, so validating the name
+// first turns a mistyped hostname into a complaint about a name the user
+// never typed.
+func TestTunnelConfig_ValidateBlamesTheHostnameFirst(t *testing.T) {
+	// What `devrun tunnel up --hostname https://x.example.com` produces:
+	// firstLabel gives "https://x" as the name.
+	cfg := config.TunnelConfig{Name: "https://x", Hostname: "https://x.example.com"}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tunnel.hostname")
+	assert.NotContains(t, err.Error(), "invalid tunnel name",
+		"the hostname is what the user typed; the name was derived from it")
+}
