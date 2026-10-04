@@ -64,11 +64,16 @@ func TestRecogniseService_SaysYesWithNothingToCompare(t *testing.T) {
 	assert.True(t, recogniseService(regWith("web", ""))("web", pid), "no command recorded")
 }
 
-// A shell given a simple command exec-replaces itself with it, so the live
-// argv is the resolved program and not `sh -c <command>`. Matching more than
-// the program name would reject a service that is plainly running.
-func TestRecogniseService_SurvivesTheShellExecingItself(t *testing.T) {
-	// Recorded with a trailing comment the exec'd argv will not carry.
+// A shell may exec-replace itself with a simple command, leaving an argv of
+// the resolved program rather than `sh -c <command>` — and it may not. Which
+// it does varies by shell: locally this exec'd and the argv was "sleep 35",
+// while on CI it did not and the whole `sh -c …` line was there, on both
+// Linux and macOS.
+//
+// So the recognition has to hold either way, which is the reason it compares
+// the program name and nothing longer. The test asserts that and deliberately
+// not which shape the argv took.
+func TestRecogniseService_HoldsWhicheverShapeTheArgvTakes(t *testing.T) {
 	recorded := "sleep 35 # " + strings.Repeat("x", 200)
 	cmd := exec.Command("sh", "-c", "trap '' HUP\n"+recorded)
 	require.NoError(t, cmd.Start())
@@ -78,10 +83,8 @@ func TestRecogniseService_SurvivesTheShellExecingItself(t *testing.T) {
 		return strings.Contains(process.CommandLine(pid), "sleep 35")
 	}, 5*time.Second, 50*time.Millisecond)
 
-	assert.NotContains(t, process.CommandLine(pid), "xxx",
-		"the shell exec'd, so the comment is gone from the argv")
 	assert.True(t, recogniseService(regWith("web", recorded))("web", pid),
-		"and the service is still recognised")
+		"recognised whether or not the shell exec'd")
 }
 
 func TestProgramName(t *testing.T) {
