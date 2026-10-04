@@ -163,3 +163,63 @@ func quickURLFast(t *testing.T) {
 }
 
 var _ = strings.TrimSpace
+
+// Stopping the gateway stops the tunnel with it, and bringing the gateway
+// back does NOT start publishing again. That is the proposal's lifecycle
+// rule, not an accident: `gateway up` is the safe command, and a safe command
+// that silently puts services back on the internet is the inversion the
+// design rejects for `gateway expose`. Publishing takes the word "tunnel".
+func TestGatewayDownThenUp_LeavesPublishingOff(t *testing.T) {
+	fakeCloudflared(t, "cat <<'EOF'\n"+quickBanner+"\nEOF\nsleep 30\n")
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	child, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	s.mu.Lock()
+	s.tunnel = child
+	s.mu.Unlock()
+	pid := child.pid
+
+	require.True(t, s.handleGatewayDown().OK)
+
+	s.mu.Lock()
+	assert.Nil(t, s.tunnel, "teardown cascades")
+	s.mu.Unlock()
+	assert.Eventually(t, func() bool { return !pidAlive(pid) }, 5*time.Second, 50*time.Millisecond,
+		"and cloudflared is actually gone")
+
+	// A later gateway up must not resurrect it.
+	s.mu.Lock()
+	s.gateway = &gatewayChild{pid: os.Getpid(), addr: "127.0.0.1:9999"}
+	s.mu.Unlock()
+	s.mu.Lock()
+	tunnel := s.tunnel
+	s.mu.Unlock()
+	assert.Nil(t, tunnel, "publishing stays off until `devrun tunnel up` asks for it")
+}
+
+// The record must not describe a tunnel that has just been stopped.
+func TestGatewayDown_PersistsTheStop(t *testing.T) {
+	fakeCloudflared(t, "sleep 30\n")
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	child, err := s.spawnTunnel(config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"},
+		"http://127.0.0.1:7788")
+	require.NoError(t, err)
+	s.mu.Lock()
+	s.tunnel = child
+	require.NoError(t, s.saveStateLocked())
+	s.mu.Unlock()
+
+	saved, err := config.LoadState(s.statePath)
+	require.NoError(t, err)
+	require.NotNil(t, saved.Tunnel, "recorded while running")
+
+	require.True(t, s.handleGatewayDown().OK)
+
+	saved, err = config.LoadState(s.statePath)
+	require.NoError(t, err)
+	assert.Nil(t, saved.Tunnel, "and gone from the record once stopped")
+}
