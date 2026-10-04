@@ -61,7 +61,9 @@ a.row:hover .go{color:var(--accent)}
 .note{font-size:13px;color:var(--muted)}.note.warn{color:var(--amber)}
 .go{width:14px;color:var(--muted);font-size:15px}
 .caveat{margin:10px 12px 14px;padding:10px 12px;background:var(--bar);
-  border-radius:6px;font-size:13px;color:var(--muted)}
+  border-radius:6px;font-size:13px;color:var(--muted);line-height:1.6}
+.caveat b{color:var(--text);font-weight:600}
+.caveat code{font-family:var(--mono);font-size:12px}
 .empty{padding:56px 12px;text-align:center}
 .empty p{margin:0 0 10px}
 .empty code{font-family:var(--mono);font-size:13px;background:var(--bar);
@@ -76,7 +78,11 @@ a.row:hover .go{color:var(--accent)}
 
 <main><div class="wrap">
 {{- if .PathMode}}
-  <p class="caveat">Served under a path. Apps that request assets from the site root may not load &mdash; set a base path, or use a named tunnel for one subdomain per service.</p>
+  <p class="caveat"><b>Services are addressed by path</b> because {{.PathReason}}.
+  An app that asks for assets from the site root &mdash; Vite&rsquo;s <code>/@vite/client</code>,
+  for instance &mdash; will not find them here. Give one service the root with
+  <code>routes: {"/": name}</code>, or set that app&rsquo;s own base path.{{if .PathFix}}
+  {{.PathFix}}{{end}}</p>
 {{- end}}
 {{- if .Services}}
   {{- range .Services}}
@@ -130,13 +136,15 @@ type indexRow struct {
 }
 
 type indexPage struct {
-	Host      string
-	Published bool
-	PathMode  bool
-	Version   string
-	Services  []indexRow
-	Total     int
-	Summary   string
+	Host       string
+	Published  bool
+	PathMode   bool
+	PathReason string // why, since it is often not what was configured
+	PathFix    string // what to do about it, when there is something specific
+	Version    string
+	Services   []indexRow
+	Total      int
+	Summary    string
 }
 
 // index renders the list of services this request is allowed to see.
@@ -155,9 +163,12 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	page := indexPage{
 		Host:      r.Host,
 		Published: published,
-		PathMode:  s.linkMode() == Path || !canSubdomain(r.Host),
+		PathMode:  s.pathLinks(r.Host),
 		Version:   s.cfg.Version,
 		Total:     len(all),
+	}
+	if page.PathMode {
+		page.PathReason, page.PathFix = s.pathExplain(r.Host)
 	}
 	for _, route := range listed {
 		page.Services = append(page.Services, s.row(r, route))
@@ -194,8 +205,9 @@ func (s *Server) row(r *http.Request, route Route) indexRow {
 			// Running and reachable, but the routes table mounts it nowhere.
 			out.Note = "not routed"
 			out.Warn = true
-		} else if s.linkMode() == Subdomain && canSubdomain(r.Host) {
-			out.Sub = subdomainHost(r.Host, route.Name)
+		} else {
+			// Empty when the link is a path, which the row already shows.
+			out.Sub = s.serviceHost(r.Host, route.Name)
 		}
 	}
 	return out
@@ -236,10 +248,8 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 		}
 		return p
 	}
-	// A label in front of an IP address is not a hostname — hello.127.0.0.1
-	// resolves nowhere — so a gateway reached by address can only offer paths,
-	// whatever the mode says.
-	if s.linkMode() == Path || !canSubdomain(r.Host) {
+	host := s.serviceHost(r.Host, name)
+	if host == "" {
 		// Relative, so it works over http locally and https once published
 		// without the gateway having to guess which it is behind.
 		return "/" + name + "/"
@@ -248,7 +258,7 @@ func (s *Server) serviceURL(r *http.Request, name string) string {
 	if s.Posture(r) == Published {
 		scheme = "https"
 	}
-	link := scheme + "://" + subdomainHost(r.Host, name) + "/"
+	link := scheme + "://" + host + "/"
 
 	// Each service is a different host and the handover cookie is host-only, so
 	// a bare link would land somewhere with no cookie and 401. Carry the key:

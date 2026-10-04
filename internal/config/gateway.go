@@ -81,14 +81,26 @@ type GatewayConfig struct {
 	// DefaultGatewayPort, 0 is "any free port, the kernel picks", and anything
 	// else is itself. Port 0 is how you run two projects at once without
 	// choosing numbers by hand.
-	Port       *int                    `yaml:"port,omitempty" json:"port,omitempty"`
-	Bind       string                  `yaml:"bind,omitempty" json:"bind,omitempty"`
-	Posture    string                  `yaml:"posture,omitempty" json:"posture,omitempty"`
-	Mode       string                  `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Auth       string                  `yaml:"auth,omitempty" json:"auth,omitempty"`
-	HostHeader string                  `yaml:"host_header,omitempty" json:"host_header,omitempty"`
-	Expose     []string                `yaml:"expose,omitempty" json:"expose,omitempty"`
-	Routes     map[string]GatewayRoute `yaml:"routes,omitempty" json:"routes,omitempty"`
+	Port       *int   `yaml:"port,omitempty" json:"port,omitempty"`
+	Bind       string `yaml:"bind,omitempty" json:"bind,omitempty"`
+	Posture    string `yaml:"posture,omitempty" json:"posture,omitempty"`
+	Mode       string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Auth       string `yaml:"auth,omitempty" json:"auth,omitempty"`
+	HostHeader string `yaml:"host_header,omitempty" json:"host_header,omitempty"`
+	// PublicHostname is how a published service is addressed, as a template
+	// with one {service} placeholder — "{service}-devrun.example.com". Unset,
+	// the gateway puts the service's name in front of whatever host it was
+	// reached on, which is what *.localhost needs locally.
+	//
+	// It exists because that prepend cannot be used when published. A
+	// Cloudflare Universal SSL certificate covers the apex and one wildcard
+	// level, so reaching the gateway at devrun.example.com and linking to
+	// web.devrun.example.com produces a name no certificate covers — the TLS
+	// handshake is refused outright, not merely distrusted. A template lets
+	// the service names live wherever the certificate reaches.
+	PublicHostname string                  `yaml:"public_hostname,omitempty" json:"public_hostname,omitempty"`
+	Expose         []string                `yaml:"expose,omitempty" json:"expose,omitempty"`
+	Routes         map[string]GatewayRoute `yaml:"routes,omitempty" json:"routes,omitempty"`
 }
 
 // Defaults returns a copy with every unset field filled in. A nil receiver is
@@ -182,6 +194,37 @@ func (g *GatewayConfig) Validate() error {
 		if err := ValidateName("exposed service", name); err != nil {
 			return fmt.Errorf("gateway.expose: %w", err)
 		}
+	}
+	return validateHostnameTemplate(g.PublicHostname)
+}
+
+// ServicePlaceholder is what gateway.public_hostname substitutes a service name
+// for. Exactly one, so recovering the name from a request's Host is a prefix
+// and suffix strip with nothing to disambiguate.
+const ServicePlaceholder = "{service}"
+
+// validateHostnameTemplate rejects a template that cannot produce a hostname.
+// Strictly, because the failure it prevents is remote: a template with a scheme
+// or a port in it yields links that are wrong only once published, by which
+// point the person debugging them is not at this machine.
+func validateHostnameTemplate(t string) error {
+	if t == "" {
+		return nil
+	}
+	switch strings.Count(t, ServicePlaceholder) {
+	case 1:
+	case 0:
+		return fmt.Errorf("gateway.public_hostname %q has no %s — every service would share one hostname", t, ServicePlaceholder)
+	default:
+		return fmt.Errorf("gateway.public_hostname %q has more than one %s", t, ServicePlaceholder)
+	}
+	if i := strings.IndexAny(t, "/: \t"); i >= 0 {
+		return fmt.Errorf("gateway.public_hostname %q is a hostname, not a URL: remove %q", t, string(t[i]))
+	}
+	// Without a dot outside the placeholder there is no domain, only a label —
+	// which resolves nowhere and silently produces links that cannot work.
+	if !strings.Contains(strings.ReplaceAll(t, ServicePlaceholder, ""), ".") {
+		return fmt.Errorf("gateway.public_hostname %q names no domain", t)
 	}
 	return nil
 }

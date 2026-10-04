@@ -79,12 +79,12 @@ func TestIndex_PathModeCarriesTheCaveatOnce(t *testing.T) {
 	snap := Snapshot{Routes: []Route{running("web", 4200), running("api", 3000)}}
 
 	path := body(t, server(t, Config{Mode: Path}, snap), get("", "/"))
-	assert.Equal(t, 1, strings.Count(path, "Served under a path"),
+	assert.Equal(t, 1, strings.Count(path, "Services are addressed by path"),
 		"the caveat sits above the list once, not on every row")
 	assert.Contains(t, path, `href="/web/"`)
 
 	sub := body(t, server(t, Config{Mode: Subdomain}, snap), get("", "/"))
-	assert.NotContains(t, sub, "Served under a path")
+	assert.NotContains(t, sub, "Services are addressed by path")
 	assert.Contains(t, sub, "web.localhost:7788", "subdomain links keep the gateway's port")
 }
 
@@ -226,7 +226,8 @@ func TestIndex_NoSubdomainLinksWhenReachedByIP(t *testing.T) {
 	out := body(t, s, get("127.0.0.1:7801", "/"))
 	assert.NotContains(t, out, "web.127.0.0.1", "that hostname cannot resolve")
 	assert.Contains(t, out, `href="/web/"`)
-	assert.Contains(t, out, "Served under a path", "and the caveat follows the links")
+	assert.Contains(t, out, "Services are addressed by path", "and the caveat follows the links")
+	assert.Contains(t, out, "reached at 127.0.0.1", "naming the cause, which the reader did not choose")
 
 	// A name can take a label, so the mode is honoured there.
 	out = body(t, s, get("localhost:7801", "/"))
