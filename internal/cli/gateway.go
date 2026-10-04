@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
 	"github.com/hailerity/devrun/internal/config"
@@ -178,22 +177,6 @@ func describeExposure(names []string, exposed bool) string {
 	return strings.Join(names, ", ") + " " + verb
 }
 
-// displayHost turns a listen address into one a person can open. A wildcard
-// bind is announced as 0.0.0.0:<port>, which is where it listens but not
-// somewhere you can go. The real address stays untouched everywhere else —
-// Posture reads it, and rewriting it to loopback would wrongly report a
-// wildcard bind as local.
-func displayHost(addr string) string {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && ip.IsUnspecified() {
-		return net.JoinHostPort("localhost", port)
-	}
-	return addr
-}
-
 // printGateway reports what the gateway is doing, and — the part that matters —
 // whether anything can reach it from off this machine.
 func printGateway(s ipc.GatewayStatusPayload) {
@@ -202,7 +185,7 @@ func printGateway(s ipc.GatewayStatusPayload) {
 		return
 	}
 
-	url := "http://" + displayHost(s.Addr) + "/"
+	url := "http://" + config.DisplayHost(s.Addr) + "/"
 	fmt.Printf("%s  %s\n", styleBold.Render("gateway"), styleAccent.Render(url))
 
 	// The posture is the whole security model, so it is never left implicit.
