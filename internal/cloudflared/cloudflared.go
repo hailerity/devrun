@@ -117,7 +117,9 @@ func parseTunnelRows(out []byte) ([]tunnelRow, error) {
 			if err := json.Unmarshal(out[start:], &rows); err == nil {
 				return rows, nil
 			}
-			break
+			// No break: a log line of its own that happens to start with a
+			// bracket must not end the search while the array is still to
+			// come. The output is a few KB, so trying each candidate is free.
 		}
 		offset += len(line) + 1 // the newline Split consumed
 	}

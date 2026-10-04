@@ -131,3 +131,12 @@ func TestList_BracketsButNoArray(t *testing.T) {
 	_, err := List(context.Background(), fake(t, "INF [core] nothing to report", "", 0))
 	assert.ErrorContains(t, err, "unreadable output")
 }
+
+// A log line of its own that starts with a bracket must not end the search
+// while the array is still to come.
+func TestList_BracketStartingLineBeforeTheArray(t *testing.T) {
+	noisy := "[core] starting up\n[warn] something\n" + listJSON
+	names, err := List(context.Background(), fake(t, noisy, "", 0))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+}
