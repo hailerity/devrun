@@ -237,10 +237,10 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 		_ = pr.Close()
 		return nil, fmt.Errorf("start gateway: %w", err)
 	}
-	// Read the pid first: Release sets it to -1, and everything afterwards —
-	// the liveness probe, stopping it, the status payload — is that number.
+	// Read the pid first: everything afterwards — the liveness probe, stopping
+	// it, the status payload — is that number.
 	pid := proc.Pid
-	_ = proc.Release()
+	s.reap(proc, "gateway", s.clearGatewayPid)
 
 	addr, err := readGatewayAddr(pr)
 	_ = pr.Close()
