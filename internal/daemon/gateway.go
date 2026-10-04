@@ -87,9 +87,9 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	// Configuration changed, so the child has to be replaced — it reads its
 	// config once at startup. Keep the token: a link already shared must
 	// keep working.
-	token := ""
+	token, previousAddr := "", ""
 	if s.gateway != nil {
-		token = s.gateway.token
+		token, previousAddr = s.gateway.token, s.gateway.addr
 		s.stopGatewayLocked()
 	}
 	if token == "" {
@@ -110,9 +110,40 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	// Recorded now, so a daemon that is stopped or re-execs can hand this same
 	// child back rather than leaving it running and unreachable.
 	_ = s.saveStateLocked()
+	moved := s.tunnel != nil && child.addr != previousAddr
+	tunnelCfg := config.TunnelConfig{}
+	if moved {
+		tunnelCfg = s.tunnel.cfg
+		s.stopTunnelLocked()
+	}
+	s.mu.Unlock()
+
+	// A tunnel carries one origin, fixed at spawn. If the gateway just moved —
+	// a new port, a new bind — cloudflared would go on publishing the old
+	// address, which now answers nothing. Following it is the only option that
+	// keeps the tunnel true; a quick tunnel gets a new URL in the process,
+	// which is why the CLI reports the URL after every up.
+	if moved {
+		s.followGateway(tunnelCfg, child.addr)
+	}
+
+	s.mu.Lock()
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
 	return okResp(resp)
+}
+
+// followGateway restarts the tunnel against the gateway's new address.
+func (s *supervisor) followGateway(cfg config.TunnelConfig, addr string) {
+	child, err := s.spawnTunnel(cfg, originURL(addr))
+	if err != nil {
+		s.logger.Warn("gateway moved; the tunnel could not follow it", "addr", addr, "err", err)
+		return
+	}
+	s.mu.Lock()
+	s.tunnel = child
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
 }
 
 func (s *supervisor) handleGatewayDown() *ipc.Response {
@@ -121,6 +152,10 @@ func (s *supervisor) handleGatewayDown() *ipc.Response {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// The tunnel first. It is pointed at the gateway as its only origin, so
+	// stopping them the other way round leaves cloudflared publishing an
+	// address nothing answers on.
+	s.stopTunnelLocked()
 	s.stopGatewayLocked()
 	_ = s.saveStateLocked()
 	return &ipc.Response{OK: true}

@@ -35,3 +35,12 @@ func (s *supervisor) clearGatewayPid(pid int) {
 		_ = s.saveStateLocked()
 	}
 }
+
+func (s *supervisor) clearTunnelPid(pid int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tunnel != nil && s.tunnel.pid == pid {
+		s.tunnel = nil
+		_ = s.saveStateLocked()
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailerity/devrun/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,4 +57,23 @@ func TestReap_DoesNotClearASuccessor(t *testing.T) {
 	defer s.mu.Unlock()
 	require.NotNil(t, s.gateway)
 	assert.Equal(t, 424242, s.gateway.pid)
+}
+
+func TestClearTunnelPid(t *testing.T) {
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	s.mu.Lock()
+	s.tunnel = &tunnelChild{pid: 424242, kind: KindQuick, cfg: config.TunnelConfig{}}
+	s.mu.Unlock()
+
+	s.clearTunnelPid(999999)
+	s.mu.Lock()
+	assert.NotNil(t, s.tunnel, "a different pid is not this tunnel")
+	s.mu.Unlock()
+
+	s.clearTunnelPid(424242)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assert.Nil(t, s.tunnel)
 }
