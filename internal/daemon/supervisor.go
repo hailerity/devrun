@@ -645,6 +645,8 @@ func (s *supervisor) handleList() *ipc.Response {
 		group     string
 		startedAt *time.Time
 	}
+	var gw *ipc.GatewayStatusPayload
+	var urls map[string]string
 
 	s.mu.Lock()
 	if s.reconcileActiveTargetsLocked() {
@@ -670,6 +672,12 @@ func (s *supervisor) handleList() *ipc.Response {
 		}
 		snaps = append(snaps, snap)
 	}
+	// Both under the same acquisition as the service snapshot, so a service
+	// and the address reported for it always describe one moment.
+	if st := s.gatewayStatusLocked(); st.Running {
+		gw = &st
+	}
+	urls = s.serviceAddressesLocked()
 	s.mu.Unlock()
 
 	// Append registry-only services (never started, so not in s.services).
@@ -706,11 +714,14 @@ func (s *supervisor) handleList() *ipc.Response {
 			info.CPUPct, _ = process.CPUPercent(*snap.pid)
 			info.MemBytes, _ = process.MemBytes(*snap.pid)
 		}
+		info.URL = urls[snap.name]
 		services = append(services, info)
 	}
 
 	sort.Strings(activeTargets)
-	payload, _ := json.Marshal(ipc.ListResponsePayload{Services: services, ActiveTargets: activeTargets})
+	payload, _ := json.Marshal(ipc.ListResponsePayload{
+		Services: services, ActiveTargets: activeTargets, Gateway: gw,
+	})
 	return &ipc.Response{OK: true, Payload: json.RawMessage(payload)}
 }
 
