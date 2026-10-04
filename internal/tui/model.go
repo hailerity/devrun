@@ -1611,6 +1611,14 @@ func (m *model) toggleExposed() tea.Cmd {
 		m.footerC.showToast("could not save: " + err.Error())
 		return nil
 	}
+	// The in-memory registry has to move with the file, or a second press
+	// reads the pre-save answer and computes the same direction again.
+	if m.registry != nil {
+		if m.registry.Gateway == nil {
+			m.registry.Gateway = &config.GatewayConfig{}
+		}
+		m.registry.Gateway.SetExposed([]string{name}, want)
+	}
 	if m.gateway == nil || !m.gateway.Running {
 		// Recorded for next time; there is no gateway to tell.
 		m.footerC.showToast(describeExposed(name, want) + " (gateway is not running)")
@@ -1634,12 +1642,21 @@ func (m *model) toggleExposed() tea.Cmd {
 	}
 }
 
-// isExposed reports whether the daemon currently lets this service leave.
+// isExposed reports whether this service may currently leave the machine.
+//
+// A running gateway is the authority when there is one. With none, the config
+// file is — and it is the file the save writes to, so reading anything else
+// makes the toggle one-way: a service the file already exposes would read as
+// not exposed, every press would compute "expose", and there would be no way
+// to withhold it from the TUI without the daemon up.
 func (m model) isExposed(name string) bool {
-	if m.gateway == nil {
-		return false
+	if m.gateway != nil && m.gateway.Running {
+		return slices.Contains(m.gateway.Exposed, name)
 	}
-	return slices.Contains(m.gateway.Exposed, name)
+	if m.registry != nil && m.registry.Gateway != nil {
+		return slices.Contains(m.registry.Gateway.ExposedSet(), name)
+	}
+	return false
 }
 
 func describeExposed(name string, exposed bool) string {
