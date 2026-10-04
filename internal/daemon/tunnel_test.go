@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,12 +109,10 @@ func TestAdoptTunnel(t *testing.T) {
 	log := quietSupervisor(t).logger
 
 	t.Run("takes back a running cloudflared", func(t *testing.T) {
-		cmd := exec.Command("sh", "-c", ": cloudflared; sleep 30")
-		require.NoError(t, cmd.Start())
-		t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+		pid := standIn(t, cloudflared.Binary)
 
 		got := adoptTunnel(&config.TunnelState{
-			PID: cmd.Process.Pid, Kind: KindQuick,
+			PID: pid, Kind: KindQuick,
 			PublicURL: "https://odd-mountain-4821.trycloudflare.com",
 		}, log)
 		require.NotNil(t, got)
@@ -288,12 +287,8 @@ func TestGatewayUp_DoesNotMoveATunnelAlreadyOnThatOrigin(t *testing.T) {
 // Origin survives the restart, or a re-adopted tunnel looks moved on the next
 // gateway up.
 func TestAdoptTunnel_KeepsTheOrigin(t *testing.T) {
-	cmd := exec.Command("sh", "-c", ": cloudflared; sleep 30")
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
-
 	got := adoptTunnel(&config.TunnelState{
-		PID: cmd.Process.Pid, Kind: KindQuick,
+		PID: standIn(t, cloudflared.Binary), Kind: KindQuick,
 		Origin: "http://127.0.0.1:7788", PublicURL: "https://x.trycloudflare.com",
 	}, quietSupervisor(t).logger)
 
