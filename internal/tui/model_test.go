@@ -699,3 +699,32 @@ func TestDaemonResp_CarriesTheGateway(t *testing.T) {
 	}})
 	assert.Equal(t, config.PosturePublished, updated.(model).gateway.Posture)
 }
+
+// toggleExposed sets a toast through a pointer receiver, so the returned
+// model has to carry it. `return m, m.toggleExposed()` left the evaluation of
+// m unordered against the call, and the message could be lost — which is the
+// worst case here, since the toast is how a failed save is reported at all.
+func TestExposeKey_ToastSurvivesOnTheReturnedModel(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devrun.yaml"),
+		[]byte("services:\n  web:\n    command: sleep 30\n"), 0o644))
+
+	reg := &config.Registry{Services: map[string]*config.ServiceConfig{
+		"web": {Name: "web", Command: "sleep 30"},
+	}}
+	src := config.Source{Local: filepath.Join(dir, "devrun.yaml"), Dir: dir}
+	m := newModel("", reg, src, t.TempDir(), clipboard{})
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "web", State: "stopped"}}, nil)
+
+	// No gateway running: the save still happens and the toast says so.
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	assert.Contains(t, out.(model).footerC.toast, "may now leave this machine",
+		"the toast set through the pointer receiver must reach the returned model")
+
+	// And it was persisted, not only announced.
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	require.NotNil(t, proj.Gateway)
+	assert.Equal(t, []string{"web"}, proj.Gateway.Expose,
+		"the allowlist has to outlive the running gateway")
+}
