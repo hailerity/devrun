@@ -6,6 +6,7 @@ import (
 
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func svc(name string, status config.ServiceStatus, detected, declared int) *managedService {
@@ -145,4 +146,34 @@ func TestServiceEnv_ExplicitEntryWins(t *testing.T) {
 func TestAddressablePort_NilSafe(t *testing.T) {
 	assert.Zero(t, addressablePort(nil))
 	assert.Zero(t, addressablePort(&managedService{}))
+}
+
+// The name mapping is not injective — '-', '.' and '_' all become '_' — so
+// two services can claim one variable. Letting the last range iteration win
+// means a service calls a sibling it was never pointed at, and differently on
+// different calls, since Go randomises map order.
+func TestServiceURLs_CollidingNamesYieldNoVariable(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["a-b"] = svc("a-b", config.StatusRunning, 3000, 0)
+	s.services["a.b"] = svc("a.b", config.StatusRunning, 9999, 0)
+	s.services["other"] = svc("other", config.StatusRunning, 4200, 0)
+
+	// Repeated, because the bug this guards was intermittent: the same call
+	// returned different answers in one process.
+	for i := 0; i < 50; i++ {
+		urls := s.serviceURLsLocked()
+		require.NotContainsf(t, urls, "DEVRUN_URL_A_B",
+			"call %d: neither claimant may win; empty breaks visibly, wrong does not", i)
+		require.Equal(t, "http://localhost:4200", urls["DEVRUN_URL_OTHER"],
+			"an uncontested name is unaffected")
+	}
+}
+
+// One service owning a name is the ordinary case and must still work, even
+// when that name contains the characters that make collisions possible.
+func TestServiceURLs_PunctuatedNameAlone(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["a-b"] = svc("a-b", config.StatusRunning, 3000, 0)
+
+	assert.Equal(t, "http://localhost:3000", s.serviceURLsLocked()["DEVRUN_URL_A_B"])
 }

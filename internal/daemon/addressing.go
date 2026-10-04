@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"os"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -46,9 +48,16 @@ func URLVarName(service string) string {
 // absent variable expands to empty, which is a visibly broken URL at the
 // first request — better than a plausible one pointing at the wrong port.
 func (s *supervisor) serviceURLsLocked() map[string]string {
-	out := map[string]string{}
 	published := s.publishedBaseLocked()
 
+	// Collected by variable name first, because the mapping is not injective:
+	// '-', '.' and '_' all become '_', so "a-b" and "a.b" both want
+	// DEVRUN_URL_A_B. Writing them straight into one map would let whichever
+	// the range happened to reach last win — differently on different calls,
+	// since Go randomises map order — and a service would call a sibling it
+	// was never pointed at.
+	claims := map[string][]string{}
+	urls := map[string]string{}
 	for name, svc := range s.services {
 		var url string
 		if published != nil {
@@ -56,9 +65,26 @@ func (s *supervisor) serviceURLsLocked() map[string]string {
 		} else if port := addressablePort(svc); port > 0 {
 			url = "http://localhost:" + strconv.Itoa(port)
 		}
-		if url != "" {
-			out[URLVarName(name)] = url
+		if url == "" {
+			continue
 		}
+		v := URLVarName(name)
+		claims[v] = append(claims[v], name)
+		urls[v] = url
+	}
+
+	out := make(map[string]string, len(urls))
+	for v, names := range claims {
+		if len(names) > 1 {
+			// Neither, rather than a coin toss. An absent variable expands to
+			// empty and breaks visibly at the first request; a wrong one that
+			// changes between restarts is the harder bug by far.
+			sort.Strings(names)
+			s.logger.Warn("services share one address variable, so none is set",
+				"variable", v, "services", strings.Join(names, ", "))
+			continue
+		}
+		out[v] = urls[v]
 	}
 	return out
 }
@@ -86,7 +112,7 @@ func (s *supervisor) publishedBaseLocked() func(string) string {
 	return func(name string) string {
 		// Published means the allowlist applies, so a service that may not
 		// leave the machine has no public address to advertise.
-		if !containsString(exposed, name) {
+		if !slices.Contains(exposed, name) {
 			return ""
 		}
 		if template != "" {
@@ -145,13 +171,4 @@ func (s *supervisor) serviceEnvLocked(cfg *config.ServiceConfig) map[string]stri
 		out[k] = v
 	}
 	return out
-}
-
-func containsString(haystack []string, needle string) bool {
-	for _, h := range haystack {
-		if h == needle {
-			return true
-		}
-	}
-	return false
 }

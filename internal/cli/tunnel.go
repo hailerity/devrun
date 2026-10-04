@@ -224,15 +224,29 @@ func restartExposed(names []string) {
 	if len(names) == 0 {
 		return
 	}
+	// Resolved once. Inside the loop this is a getwd and a full config read
+	// per service, and a failure would print the same message once per name.
+	reg, src, err := activeRegistry()
+	if err != nil {
+		fmt.Println(styleYellow.Render("cannot restart published services: " + err.Error()))
+		return
+	}
+
 	fmt.Println()
 	fmt.Println(styleLabel.Render("restarting published services so they see the new addresses"))
 	for _, name := range names {
-		cfg, err := inlineConfigFor(name)
+		cfg, err := inlineConfigFor(reg, src, name)
 		if err != nil {
 			fmt.Printf("    %-16s %s\n", name, styleYellow.Render(err.Error()))
 			continue
 		}
-		if _, err := ops.Stop(name); err != nil && !errors.Is(err, ops.ErrNoDaemon) {
+		if _, err := ops.Stop(name); err != nil {
+			if errors.Is(err, ops.ErrNoDaemon) {
+				// Nothing is running, so there is nothing to restart and
+				// starting would fail for every remaining name in turn.
+				fmt.Println(styleYellow.Render("    no daemon running; nothing to restart"))
+				return
+			}
 			fmt.Printf("    %-16s %s\n", name, styleYellow.Render("stop: "+err.Error()))
 			continue
 		}
@@ -248,11 +262,7 @@ func restartExposed(names []string) {
 // service needs because the daemon cannot read a devrun.yaml. A service the
 // active config does not define is one this command has no business
 // restarting.
-func inlineConfigFor(name string) (*config.ServiceConfig, error) {
-	reg, src, err := activeRegistry()
-	if err != nil {
-		return nil, err
-	}
+func inlineConfigFor(reg *config.Registry, src config.Source, name string) (*config.ServiceConfig, error) {
 	if reg == nil || reg.Services[name] == nil {
 		return nil, errors.New("not defined in the active config")
 	}
