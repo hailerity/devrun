@@ -176,7 +176,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case exposedMsg:
 		if msg.err != nil {
-			m.footerC.showToast("expose failed: " + msg.err.Error())
+			// The config was written before the daemon was asked, so "failed"
+			// alone would be false — and dangerously so when hiding, where
+			// the running gateway may still be serving what the file now
+			// withholds.
+			m.footerC.showToastLong(exposeMismatch(msg.name, msg.exposed, msg.err))
 			return m, nil
 		}
 		// Said plainly, because this is the moment a service becomes
@@ -1643,4 +1647,21 @@ func describeExposed(name string, exposed bool) string {
 		return name + " may now leave this machine"
 	}
 	return name + " may no longer leave this machine"
+}
+
+// exposeMismatch describes the state when the config was written but the
+// running gateway could not be told — which half took effect, and what that
+// leaves reachable.
+//
+// The two directions are not symmetric. Failing to publish is harmless: the
+// file says yes, nothing is serving it, and the next `gateway up` catches
+// up. Failing to *withhold* leaves a service the file no longer allows still
+// reachable from outside, and the reader has to know that.
+func exposeMismatch(name string, exposed bool, err error) string {
+	if exposed {
+		return name + ": saved, but the gateway was not told (" + err.Error() +
+			") — it is not published yet"
+	}
+	return name + ": saved, but the gateway was not told (" + err.Error() +
+		") — it MAY STILL BE PUBLISHED; run devrun gateway down"
 }
