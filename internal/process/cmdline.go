@@ -27,7 +27,10 @@ func CommandLine(pid int) string {
 	if runtime.GOOS == "darwin" {
 		// As with lsof and ps elsewhere here, read the output rather than trust
 		// the status: ps exits non-zero for a pid that has just gone.
-		out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+		// -ww: without it ps may cut the line to the terminal width, and a
+		// truncated argv reads as a different process to anything matching on
+		// it.
+		out, err := exec.Command("ps", "-ww", "-p", strconv.Itoa(pid), "-o", "command=").Output()
 		if err != nil {
 			return ""
 		}
