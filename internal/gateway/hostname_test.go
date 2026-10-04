@@ -1,0 +1,144 @@
+package gateway
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// The three shapes a published hostname can take, and what each costs, are the
+// whole point of the template: a Cloudflare Universal SSL certificate covers
+// one wildcard level, so the nested shape needs a paid certificate and the
+// other two do not.
+func TestHostTemplate_RoundTrip(t *testing.T) {
+	for name, tc := range map[string]struct {
+		template, service, host string
+	}{
+		"namespaced": {"{service}-devrun.example.com", "web", "web-devrun.example.com"},
+		"flat":       {"{service}.example.com", "web", "web.example.com"},
+		"nested":     {"{service}.devrun.example.com", "web", "web.devrun.example.com"},
+		// Service names carry hyphens of their own; the suffix is anchored at
+		// the end, so there is nothing to confuse.
+		"hyphenated service": {"{service}-devrun.example.com", "pimatix-web", "pimatix-web-devrun.example.com"},
+		// And a name that ends in the suffix's own word still round-trips.
+		"service named like the suffix": {"{service}-devrun.example.com", "foo-devrun", "foo-devrun-devrun.example.com"},
+	} {
+		s := server(t, Config{PublicHostname: tc.template}, Snapshot{})
+		h, ok := s.hostTemplate()
+		require.Truef(t, ok, "%s: template did not parse", name)
+
+		assert.Equalf(t, tc.host, h.hostFor(tc.service), "%s: outbound", name)
+
+		got, ok := h.serviceIn(tc.host)
+		require.Truef(t, ok, "%s: inbound did not match", name)
+		assert.Equalf(t, tc.service, got, "%s: inbound", name)
+	}
+}
+
+func TestHostTemplate_RejectsWhatItDidNotProduce(t *testing.T) {
+	s := server(t, Config{PublicHostname: "{service}-devrun.example.com"}, Snapshot{})
+	h, ok := s.hostTemplate()
+	require.True(t, ok)
+
+	for _, host := range []string{
+		"-devrun.example.com",       // both affixes, no service between them
+		"devrun.example.com",        // the index's own hostname
+		"web-devrun.example.net",    // another domain
+		"web.example.com",           // the suffix is not there
+		"example.com",               // shorter than the affixes
+		"",                          // no Host at all
+		"web-devrun.example.com.ev", // suffix must be anchored at the end
+	} {
+		_, ok := h.serviceIn(host)
+		assert.Falsef(t, ok, "%q should not name a service", host)
+	}
+}
+
+// Hostnames are case-insensitive, but a service name is matched against the
+// route table as written.
+func TestHostTemplate_MatchesHostCaseInsensitively(t *testing.T) {
+	s := server(t, Config{PublicHostname: "{service}-devrun.Example.COM"}, Snapshot{})
+	h, _ := s.hostTemplate()
+
+	got, ok := h.serviceIn("web-DEVRUN.example.com:443")
+	require.True(t, ok, "the domain's case must not matter, nor the port")
+	assert.Equal(t, "web", got)
+}
+
+// The reason the template is consulted before the first-label rule: that rule
+// would read "web-devrun" out of the Host and find no such service.
+func TestResolve_TemplateBeatsTheFirstLabelRule(t *testing.T) {
+	// Exposed, because a Host the gateway does not recognise as itself means
+	// the request came from off the machine: the allowlist applies.
+	s := server(t, Config{PublicHostname: "{service}-devrun.example.com"},
+		Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	target, outcome := s.Resolve(get("web-devrun.example.com", "/assets/app.js"))
+	require.Equal(t, OK, outcome)
+	assert.Equal(t, "web", target.Service)
+	assert.Empty(t, target.Prefix, "a hostname is the whole address; nothing is stripped")
+}
+
+// The gateway's own hostname must stay the index, not become a 404.
+func TestResolve_TheBareDomainIsStillTheIndex(t *testing.T) {
+	s := server(t, Config{PublicHostname: "{service}-devrun.example.com"},
+		Snapshot{Routes: []Route{running("web", 4200)}})
+
+	_, outcome := s.Resolve(get("devrun.example.com", "/"))
+	assert.Equal(t, NoSuchRoute, outcome, "which ServeHTTP renders as the index")
+}
+
+// Both URL shapes stay acceptable, as they already did: a template adds an
+// address, it does not remove the path one.
+func TestResolve_PathStillWorksAlongsideATemplate(t *testing.T) {
+	s := server(t, Config{PublicHostname: "{service}-devrun.example.com"},
+		Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	target, outcome := s.Resolve(get("devrun.example.com", "/web/assets/app.js"))
+	require.Equal(t, OK, outcome)
+	assert.Equal(t, "web", target.Service)
+	assert.Equal(t, "/web", target.Prefix)
+}
+
+// Locally the template must stay out of the way: browsing at localhost should
+// link to localhost, not to a public name that only resolves through a tunnel.
+func TestServiceHost_TemplateOnlyAppliesOnceOffThisMachine(t *testing.T) {
+	cfg := Config{Bind: "127.0.0.1:7788", PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}})
+
+	assert.Equal(t, "web.localhost:7788", s.serviceHost("localhost:7788", "web"),
+		"reached at itself: the prepend, which is what *.localhost needs")
+	assert.Equal(t, "web-devrun.example.com", s.serviceHost("devrun.example.com", "web"),
+		"reached from off the machine: the template")
+}
+
+// Unset, nothing about today's behaviour changes.
+func TestServiceHost_WithoutATemplate(t *testing.T) {
+	s := server(t, Config{Bind: "127.0.0.1:7788"}, Snapshot{Routes: []Route{running("web", 4200)}})
+
+	assert.Equal(t, "web.localhost:7788", s.serviceHost("localhost:7788", "web"))
+	// A label in front of an IP resolves nowhere, so there is no hostname.
+	assert.Empty(t, s.serviceHost("127.0.0.1:7788", "web"))
+}
+
+// A template gives every service a hostname, so an IP-reached gateway is no
+// longer forced into path links — that was only ever true of the prepend.
+func TestIndex_TemplateLinksSurviveBeingReachedByIP(t *testing.T) {
+	cfg := Config{Bind: "0.0.0.0:7788", PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	out := body(t, s, get("203.0.113.9:7788", "/"))
+	assert.Contains(t, out, "web-devrun.example.com")
+	assert.NotContains(t, out, `href="/web/"`, "a path link would be the degraded shape")
+}
+
+func TestIndex_LinksAndRowsAgreeOnTheHostname(t *testing.T) {
+	cfg := Config{Bind: "127.0.0.1:7788", PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	out := body(t, s, get("devrun.example.com", "/"))
+	assert.Contains(t, out, `href="https://web-devrun.example.com/`,
+		"published, so https — the scheme the tunnel terminates")
+	assert.Contains(t, out, ">web-devrun.example.com<", "the row names the same host it links to")
+}
