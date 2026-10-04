@@ -166,6 +166,12 @@ func runServiceInfo(name string) error {
 			styleValue.Render(svc.Group),
 		)
 	}
+	if url := serviceURL(name); url != "" {
+		fmt.Printf("  %s  %s\n",
+			styleLabel.Render("url"),
+			styleAccent.Render(url),
+		)
+	}
 	if svc.Desc != "" {
 		fmt.Printf("  %s  %s\n",
 			styleLabel.Render("desc"),
@@ -205,4 +211,24 @@ func isDaemonRunning(socketPath string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// serviceURL is where this service can be opened, when the gateway is up and
+// serving it. Empty otherwise, and empty on any failure: `devrun info` must
+// still describe a service when the daemon is down.
+func serviceURL(name string) string {
+	reg, _, err := activeRegistry()
+	if err != nil {
+		return ""
+	}
+	res, err := ops.List(&ops.Resolved{Registry: reg})
+	if err != nil || res.Offline {
+		return ""
+	}
+	for _, svc := range res.Services {
+		if svc.Name == name {
+			return svc.URL
+		}
+	}
+	return ""
 }

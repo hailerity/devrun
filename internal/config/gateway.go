@@ -332,3 +332,20 @@ func SaveGatewayExpose(src Source, names []string, exposed bool) error {
 	}
 	return SaveRegistry(path, reg)
 }
+
+// DisplayHost turns a listen address into one a person can open.
+//
+// A wildcard bind is announced as 0.0.0.0:<port>, which is where the gateway
+// listens but not somewhere to go. Only presentation uses this: Posture reads
+// the real address, and rewriting it there would report a wildcard bind as
+// local.
+func DisplayHost(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && ip.IsUnspecified() {
+		return net.JoinHostPort("localhost", port)
+	}
+	return addr
+}

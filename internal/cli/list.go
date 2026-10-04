@@ -36,10 +36,41 @@ func runList(_ *cobra.Command, _ []string) error {
 		fmt.Fprintln(os.Stderr, "(daemon not running — showing last known state)")
 	}
 	printServiceTable(res.Services)
+	printGatewayLine(res.Gateway)
 	return nil
 }
 
+// printGatewayLine says where the table's URLs lead, and — the part that
+// matters — whether anything can reach them from off this machine. A list of
+// public addresses with no word about the posture would read as harmless.
+func printGatewayLine(gw *ipc.GatewayStatusPayload) {
+	if gw == nil || !gw.Running {
+		return
+	}
+	fmt.Println()
+	where := "http://" + config.DisplayHost(gw.Addr) + "/"
+	if gw.Tunnel != nil && gw.Tunnel.Running && gw.Tunnel.PublicURL != "" {
+		where = gw.Tunnel.PublicURL
+	}
+	posture := styleGreen.Render("local")
+	if gw.Posture == config.PosturePublished {
+		posture = styleYellow.Render("published")
+	}
+	fmt.Printf("%s  %s  %s\n", styleLabel.Render("gateway"), styleAccent.Render(where), posture)
+}
+
 var listHeaders = []string{"NAME", "GROUP", "STATE", "PID", "PORT", "UPTIME", "CPU%", "MEM"}
+
+// listHeadersFor adds a URL column only when there is one to show. URLs are
+// long, and a column of dashes would cost every local user width for nothing.
+func listHeadersFor(svcs []ipc.ServiceInfo) []string {
+	for _, s := range svcs {
+		if s.URL != "" {
+			return append(append([]string{}, listHeaders...), "URL")
+		}
+	}
+	return listHeaders
+}
 
 func serviceRowCells(svc ipc.ServiceInfo) []string {
 	pid := "-"
@@ -66,17 +97,32 @@ func serviceRowCells(svc ipc.ServiceInfo) []string {
 	return []string{svc.Name, group, svc.State, pid, port, uptime, cpu, mem}
 }
 
+// serviceRowCellsFor is serviceRowCells plus the URL column, when the table
+// has one.
+func serviceRowCellsFor(svc ipc.ServiceInfo, headers []string) []string {
+	cells := serviceRowCells(svc)
+	if len(headers) == len(listHeaders) {
+		return cells
+	}
+	url := svc.URL
+	if url == "" {
+		url = "-"
+	}
+	return append(cells, url)
+}
+
 func printServiceTable(svcs []ipc.ServiceInfo) {
 	const gap = "  "
+	headers := listHeadersFor(svcs)
 
 	// Collect raw cell values and compute column widths.
 	rows := make([][]string, len(svcs))
-	widths := make([]int, len(listHeaders))
-	for i, h := range listHeaders {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
 		widths[i] = len(h)
 	}
 	for i, svc := range svcs {
-		rows[i] = serviceRowCells(svc)
+		rows[i] = serviceRowCellsFor(svc, headers)
 		for j, cell := range rows[i] {
 			if len(cell) > widths[j] {
 				widths[j] = len(cell)
@@ -84,9 +130,15 @@ func printServiceTable(svcs []ipc.ServiceInfo) {
 		}
 	}
 
-	// Header row.
-	parts := make([]string, len(listHeaders))
-	for i, h := range listHeaders {
+	// Header row. The last column takes no trailing pad, as its data cells do
+	// not — otherwise every header line ends in as much whitespace as the
+	// widest value under it, which the URL column made plain.
+	parts := make([]string, len(headers))
+	for i, h := range headers {
+		if i == len(headers)-1 {
+			parts[i] = styleLabel.Render(h)
+			continue
+		}
 		parts[i] = styleLabel.Render(fmt.Sprintf("%-*s", widths[i], h))
 	}
 	fmt.Fprintln(os.Stdout, strings.Join(parts, gap))
@@ -100,7 +152,7 @@ func printServiceTable(svcs []ipc.ServiceInfo) {
 				parts[i] = styleBold.Render(fmt.Sprintf("%-*s", pad, cell))
 			case 2: // STATE
 				parts[i] = stateStyle(svcs[ri].State).Render(fmt.Sprintf("%-*s", pad, cell))
-			case len(row) - 1: // MEM — last column, no trailing pad
+			case len(row) - 1: // the last column takes no trailing pad
 				if cell == "-" {
 					parts[i] = styleLabel.Render(cell)
 				} else {
