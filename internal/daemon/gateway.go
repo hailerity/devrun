@@ -159,9 +159,12 @@ func (s *supervisor) followGateway(cfg config.TunnelConfig, addr string) error {
 		return fmt.Errorf("the gateway moved to %s but the tunnel could not follow: %w", addr, err)
 	}
 	s.mu.Lock()
-	s.tunnel = child
+	live := recordLive(&s.tunnel, child, child.pid)
 	_ = s.saveStateLocked()
 	s.mu.Unlock()
+	if !live {
+		return fmt.Errorf("the tunnel exited immediately after following the gateway to %s", addr)
+	}
 	return nil
 }
 
@@ -219,10 +222,13 @@ func (s *supervisor) handleGatewayExpose(raw json.RawMessage) *ipc.Response {
 	}
 
 	s.mu.Lock()
-	s.gateway = child
+	live := recordLive(&s.gateway, child, child.pid)
 	_ = s.saveStateLocked()
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
+	if !live {
+		return errResp("the gateway exited immediately after restarting; see the daemon log")
+	}
 	return okResp(resp)
 }
 

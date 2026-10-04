@@ -50,3 +50,24 @@ func (s *supervisor) clearTunnelPid(pid int) {
 		_ = s.saveStateLocked()
 	}
 }
+
+// recordLive stores a freshly spawned child's handle, reporting whether it was
+// still there to store.
+//
+// The reaper starts the instant the process does, which is before the caller
+// can assign the handle. A child that dies in that window has its clear() run
+// against a handle not yet set — a no-op — and the assignment that follows
+// would then record a dead pid as the live one, leaving status claiming a
+// gateway or a tunnel that is gone. Re-checking under the same lock that made
+// the assignment closes the window: the pid is reaped by then, so the probe
+// gives ESRCH.
+//
+// Callers hold s.mu.
+func recordLive[T any](slot **T, child *T, pid int) bool {
+	*slot = child
+	if pidAlive(pid) {
+		return true
+	}
+	*slot = nil
+	return false
+}
