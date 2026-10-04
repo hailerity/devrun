@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -727,4 +728,32 @@ func TestExposeKey_ToastSurvivesOnTheReturnedModel(t *testing.T) {
 	require.NotNil(t, proj.Gateway)
 	assert.Equal(t, []string{"web"}, proj.Gateway.Expose,
 		"the allowlist has to outlive the running gateway")
+}
+
+// The config is written before the daemon is asked, so a daemon failure is
+// not "nothing happened". The two directions are not symmetric: failing to
+// publish is harmless, failing to withhold leaves a service the file no
+// longer allows still reachable from outside.
+func TestExposeMismatch(t *testing.T) {
+	boom := errors.New("connection refused")
+
+	publishing := exposeMismatch("web", true, boom)
+	assert.Contains(t, publishing, "saved")
+	assert.Contains(t, publishing, "not published yet")
+
+	withholding := exposeMismatch("web", false, boom)
+	assert.Contains(t, withholding, "saved")
+	assert.Contains(t, withholding, "MAY STILL BE PUBLISHED",
+		"the dangerous direction has to be unmissable")
+	assert.Contains(t, withholding, "gateway down", "and say what to do")
+}
+
+// The toast must never read as though nothing was written.
+func TestExposedMsg_FailureDoesNotClaimNothingHappened(t *testing.T) {
+	m := newModel("", &config.Registry{Services: map[string]*config.ServiceConfig{}}, config.Source{}, t.TempDir(), clipboard{})
+
+	out, _ := m.Update(exposedMsg{name: "web", exposed: false, err: errors.New("connection refused")})
+	toast := out.(model).footerC.toast
+	assert.Contains(t, toast, "saved")
+	assert.NotContains(t, toast, "expose failed")
 }
