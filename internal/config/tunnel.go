@@ -71,10 +71,14 @@ func (t *TunnelConfig) Validate() error {
 			"devrun cannot look the hostname up, and without it there is no URL to print", t.Name)
 	}
 
-	if err := ValidateName("tunnel", t.Name); err != nil {
+	// The hostname first. The tunnel name is often derived from it, so a
+	// mistyped hostname otherwise surfaces as a complaint about a name the
+	// user never typed — "invalid tunnel name \"https://x\"" for a hostname
+	// of "https://x.example.com".
+	if err := validateHostname(t.Hostname); err != nil {
 		return err
 	}
-	return validateHostname(t.Hostname)
+	return ValidateName("tunnel", t.Name)
 }
 
 // validateHostname rejects what is plainly not a hostname. As with
