@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -13,6 +16,8 @@ import (
 
 	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/gateway"
+	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/process"
 )
 
@@ -232,4 +237,150 @@ func originURL(addr string) string {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port)
+}
+
+// handleTunnelUp publishes the gateway, starting it first if it is not up.
+//
+// Lifecycle flows one way: the dangerous command may imply the safe one, so
+// `tunnel up` starts a gateway, while `gateway up` never starts a tunnel.
+func (s *supervisor) handleTunnelUp(raw json.RawMessage) *ipc.Response {
+	var p ipc.TunnelUpPayload
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return errResp(fmt.Sprintf("bad payload: %v", err))
+		}
+	}
+	if err := p.Config.Validate(); err != nil {
+		return errResp(err.Error())
+	}
+	if err := p.Gateway.Validate(); err != nil {
+		return errResp(err.Error())
+	}
+	cfg := p.Config.Defaults()
+	gwCfg := p.Gateway.Defaults()
+	// Naming a service here is what makes it publishable, so the allowlist is
+	// widened before anything can be reached rather than after.
+	gwCfg.SetExposed(p.Expose, true)
+
+	// The same lock the gateway's lifecycle takes: these two cascade, so one
+	// order for both and no pair to deadlock.
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
+	gw, err := s.ensureGateway(gwCfg)
+	if err != nil {
+		return errResp(err.Error())
+	}
+
+	s.mu.Lock()
+	// Already publishing the same way: idempotent, so this is safe to repeat.
+	if s.tunnel != nil && sameTunnelConfig(s.tunnel.cfg, cfg) &&
+		s.tunnel.origin == originURL(gw.addr) && pidAlive(s.tunnel.pid) {
+		resp := s.gatewayStatusLocked()
+		s.mu.Unlock()
+		return okResp(resp)
+	}
+	s.stopTunnelLocked()
+	_ = s.saveStateLocked()
+	s.mu.Unlock()
+
+	child, err := s.spawnTunnel(cfg, originURL(gw.addr))
+	if err != nil {
+		return errResp(err.Error())
+	}
+
+	s.mu.Lock()
+	live := recordLive(&s.tunnel, child, child.pid)
+	_ = s.saveStateLocked()
+	resp := s.gatewayStatusLocked()
+	s.mu.Unlock()
+	if !live {
+		return errResp("cloudflared exited immediately after starting; see " + TunnelLogPath())
+	}
+	return okResp(resp)
+}
+
+func (s *supervisor) handleTunnelDown() *ipc.Response {
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Only the tunnel. Teardown cascades downward — a gateway without a
+	// tunnel is the ordinary local case, so there is nothing to take with it.
+	s.stopTunnelLocked()
+	_ = s.saveStateLocked()
+	return &ipc.Response{OK: true}
+}
+
+// handleTunnelList answers with the account's tunnel names so the CLI can
+// catch a typo before cloudflared does. Knowing cloudflared lives here rather
+// than in the CLI, which keeps that knowledge in one package.
+func (s *supervisor) handleTunnelList() *ipc.Response {
+	bin, err := cloudflared.Find()
+	if err != nil {
+		// Not installed is a legitimate answer to "which tunnels exist", not
+		// an error: the caller degrades to unverified either way.
+		return okResp(ipc.TunnelListPayload{Known: false})
+	}
+	names, err := cloudflared.List(context.Background(), bin)
+	if err != nil {
+		s.logger.Info("tunnel list unavailable", "err", err)
+		return okResp(ipc.TunnelListPayload{Known: false})
+	}
+	return okResp(ipc.TunnelListPayload{Names: names, Known: true})
+}
+
+// ensureGateway returns the running gateway, starting it if needed. Caller
+// holds gatewayOps.
+func (s *supervisor) ensureGateway(cfg config.GatewayConfig) (*gatewayChild, error) {
+	s.mu.Lock()
+	if s.gateway != nil && sameGatewayConfig(s.gateway.cfg, cfg) && pidAlive(s.gateway.pid) {
+		gw := s.gateway
+		s.mu.Unlock()
+		return gw, nil
+	}
+	token := ""
+	if s.gateway != nil {
+		token = s.gateway.token
+		s.stopGatewayLocked()
+	}
+	if token == "" {
+		token = gateway.NewToken()
+	}
+	s.mu.Unlock()
+
+	child, err := s.spawnGateway(cfg, token)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !recordLive(&s.gateway, child, child.pid) {
+		_ = s.saveStateLocked()
+		return nil, errors.New("the gateway exited immediately after starting; see the daemon log")
+	}
+	_ = s.saveStateLocked()
+	return child, nil
+}
+
+// tunnelStatusLocked builds the tunnel half of the status. Caller holds s.mu.
+func (s *supervisor) tunnelStatusLocked() *ipc.TunnelStatusPayload {
+	if s.tunnel == nil || !pidAlive(s.tunnel.pid) {
+		return nil
+	}
+	pid := s.tunnel.pid
+	return &ipc.TunnelStatusPayload{
+		Running:   true,
+		Kind:      s.tunnel.kind,
+		Name:      s.tunnel.cfg.Name,
+		PublicURL: s.tunnel.publicURL,
+		PID:       &pid,
+	}
+}
+
+func sameTunnelConfig(a, b config.TunnelConfig) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(x) == string(y)
 }
