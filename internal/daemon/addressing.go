@@ -14,7 +14,7 @@ import (
 const URLVarPrefix = "DEVRUN_URL_"
 
 // URLVarName is the environment variable carrying a service's address:
-// "pimatix-web" becomes DEVRUN_URL_PIMATIX_WEB.
+// "shop-web" becomes DEVRUN_URL_SHOP_WEB.
 //
 // Anything a service name may contain but an environment variable may not —
 // '-', '.' — becomes '_'. Names are validated elsewhere to letters, digits,

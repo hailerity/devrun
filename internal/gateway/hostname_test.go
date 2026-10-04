@@ -20,7 +20,7 @@ func TestHostTemplate_RoundTrip(t *testing.T) {
 		"nested":     {"{service}.devrun.example.com", "web", "web.devrun.example.com"},
 		// Service names carry hyphens of their own; the suffix is anchored at
 		// the end, so there is nothing to confuse.
-		"hyphenated service": {"{service}-devrun.example.com", "pimatix-web", "pimatix-web-devrun.example.com"},
+		"hyphenated service": {"{service}-devrun.example.com", "shop-web", "shop-web-devrun.example.com"},
 		// And a name that ends in the suffix's own word still round-trips.
 		"service named like the suffix": {"{service}-devrun.example.com", "foo-devrun", "foo-devrun-devrun.example.com"},
 	} {
