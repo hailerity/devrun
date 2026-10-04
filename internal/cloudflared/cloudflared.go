@@ -75,7 +75,7 @@ func List(ctx context.Context, bin string) ([]string, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("cloudflared tunnel list: %s", firstLine(string(ee.Stderr)))
+			return nil, fmt.Errorf("cloudflared tunnel list: %s", FirstLine(string(ee.Stderr)))
 		}
 		return nil, fmt.Errorf("cloudflared tunnel list: %w", err)
 	}
@@ -115,7 +115,10 @@ func HasTunnel(ctx context.Context, bin, name string) (found, known bool) {
 	return false, true
 }
 
-func firstLine(s string) string {
+// FirstLine is the opening non-blank line of some output — where a failing
+// process says why, ahead of any stack or fallout. Shared because the daemon
+// reads cloudflared's log and the gateway child's stderr the same way.
+func FirstLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		if l := strings.TrimSpace(line); l != "" {
 			return l

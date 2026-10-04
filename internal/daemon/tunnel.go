@@ -166,10 +166,8 @@ func readLogFrom(path string, from int64) string {
 // firstLogLine is the opening of what this run wrote, which is where
 // cloudflared says why it could not start.
 func firstLogLine(path string, from int64) string {
-	for _, line := range strings.Split(readLogFrom(path, from), "\n") {
-		if l := strings.TrimSpace(line); l != "" {
-			return l
-		}
+	if l := cloudflared.FirstLine(readLogFrom(path, from)); l != "" {
+		return l
 	}
 	return "nothing was logged"
 }
