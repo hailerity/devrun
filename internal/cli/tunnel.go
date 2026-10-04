@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -23,7 +24,39 @@ var tunnelCmd = &cobra.Command{
 var tunnelUpCmd = &cobra.Command{
 	Use:   "up [service...]",
 	Short: "Publish the named services (or whatever is already exposed)",
-	RunE:  runTunnelUp,
+	Long: `Publish the named services (or whatever is already exposed).
+
+A quick tunnel needs nothing — no account, no login, no DNS — and its URL
+changes every run:
+
+    devrun tunnel up web api --quick
+
+A named tunnel needs three things on your Cloudflare account. devrun creates
+none of them: writing to your zone needs access it has no business holding.
+
+    cloudflared tunnel login
+    cloudflared tunnel create devrun
+    cloudflared tunnel route dns devrun devrun.example.com
+
+That last hostname is the tunnel's own, where the service index is served. In
+path mode it is the only record there is, and services hang off it as paths:
+https://devrun.example.com/web/.
+
+Giving each service a hostname of its own adds one record per published
+service, on top of the tunnel's:
+
+    gateway:
+      public_hostname: "{service}-devrun.example.com"
+
+    cloudflared tunnel route dns devrun web-devrun.example.com
+
+Keep those one label under the apex. Cloudflare's Universal SSL covers the
+apex and one wildcard level, so web.devrun.example.com is refused at the TLS
+handshake.
+
+Once the tunnel is up, devrun resolves every hostname it expects and prints
+the exact command for any that is missing.`,
+	RunE: runTunnelUp,
 }
 
 var tunnelDownCmd = &cobra.Command{
@@ -341,9 +374,13 @@ func printPublished(s ipc.GatewayStatusPayload, cfg config.TunnelConfig) {
 	warnMissingDNS(s, cfg)
 }
 
-// KindQuick mirrors the daemon's constant without importing it, the CLI and
-// the daemon being separate processes that only share the IPC payloads.
-const KindQuick = "quick"
+// KindQuick and KindNamed mirror the daemon's constants without importing
+// them, the CLI and the daemon being separate processes that only share the
+// IPC payloads.
+const (
+	KindQuick = "quick"
+	KindNamed = "named"
+)
 
 // serviceURLFor is where a published service is reached, which depends on
 // whether the gateway addresses services by hostname or by path.
@@ -377,19 +414,15 @@ func publicHostFor(s ipc.GatewayStatusPayload, name string) string {
 // only the name is absent. A resolver lookup needs no credentials, so the gap
 // is at least named.
 func warnMissingDNS(s ipc.GatewayStatusPayload, cfg config.TunnelConfig) {
-	if s.Tunnel == nil || s.Tunnel.Kind != "named" || s.PublicHostname == "" {
-		return // a quick tunnel owns its hostname; path mode needs no per-service record
+	if s.Tunnel == nil || s.Tunnel.Kind != KindNamed {
+		return // a quick tunnel is handed its hostname; there is no record to create
 	}
 	tunnelName := s.Tunnel.Name
 	if tunnelName == "" {
 		tunnelName = cfg.Name
 	}
 	var missing []string
-	for _, name := range s.Exposed {
-		host := publicHostFor(s, name)
-		if host == "" {
-			continue
-		}
+	for _, host := range expectedHosts(s) {
 		if _, err := net.LookupHost(host); err != nil {
 			missing = append(missing, host)
 		}
@@ -411,6 +444,49 @@ func warnMissingDNS(s ipc.GatewayStatusPayload, cfg config.TunnelConfig) {
 	for _, host := range missing {
 		fmt.Printf("    cloudflared tunnel route dns %s %s\n", tunnelName, host)
 	}
+}
+
+// expectedHosts is every name that must resolve for a named tunnel, the
+// tunnel's own first.
+//
+// That one was missing until it was asked about. It is where the index page
+// is served, and in path mode it is the only record there is — so the one
+// mandatory name went unchecked while the optional per-service ones were
+// verified, which is exactly backwards.
+func expectedHosts(s ipc.GatewayStatusPayload) []string {
+	var hosts []string
+	seen := map[string]bool{}
+	add := func(host string) {
+		if host == "" || seen[host] {
+			return
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+
+	add(tunnelHost(s))
+	// Without a template services are addressed by path, so they share the
+	// tunnel's record and have none of their own.
+	if s.PublicHostname != "" {
+		for _, name := range s.Exposed {
+			add(publicHostFor(s, name))
+		}
+	}
+	return hosts
+}
+
+// tunnelHost is the hostname DNS must point at the tunnel. A named tunnel's
+// public URL is built from it, so this reads it back out rather than carrying
+// the same string twice through the IPC payload.
+func tunnelHost(s ipc.GatewayStatusPayload) string {
+	if s.Tunnel == nil {
+		return ""
+	}
+	u, err := url.Parse(s.Tunnel.PublicURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 func plural(n int, one, many string) string {

@@ -331,6 +331,18 @@ Off a terminal it never asks — an agent or a script gets a quick tunnel and a
 printed note. A quick tunnel needs no account, no DNS and no login, and its
 URL changes every run.
 
+A named one needs three things on your Cloudflare account first, none of which
+devrun creates:
+
+```sh
+cloudflared tunnel login
+cloudflared tunnel create devrun
+cloudflared tunnel route dns devrun devrun.example.com
+```
+
+That third hostname is the tunnel's own — where the service index is served,
+and in path mode the only record there is.
+
 ### What a published subdomain costs
 
 Each service needs a hostname, and **a certificate that covers it**. Cloudflare's
@@ -347,7 +359,10 @@ gateway:
 | `{service}-devrun.example.com` | one CNAME per service | free |
 | `{service}.example.com` | one CNAME per service, or `*.example.com` | free |
 | `{service}.devrun.example.com` | `*.devrun.example.com` | needs Advanced Certificate Manager |
-| *unset* — path mode | one CNAME | free |
+| *unset* — path mode | none beyond the tunnel's own | free |
+
+Each of those is **on top of** the tunnel's own record, which stays needed in
+every shape.
 
 The namespaced form is the one to reach for on a domain you use for anything
 else: without the suffix, a service called `api` quietly claims
@@ -357,7 +372,8 @@ devrun does not write DNS records — that needs write access to your zone it ha
 no business holding — but it prints the command for any that are missing:
 
 ```
-2 hostnames do not resolve yet:
+3 hostnames do not resolve yet:
+    cloudflared tunnel route dns devrun devrun.example.com
     cloudflared tunnel route dns devrun web-devrun.example.com
     cloudflared tunnel route dns devrun api-devrun.example.com
 ```

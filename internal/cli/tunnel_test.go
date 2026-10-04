@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/hailerity/devrun/internal/config"
@@ -116,25 +117,69 @@ func TestServiceURLFor(t *testing.T) {
 // devrun explains why, so the command devrun will not run for itself is at
 // least printed.
 func TestWarnMissingDNS_OnlyWhenItCanHelp(t *testing.T) {
-	out := func(s ipc.GatewayStatusPayload) string {
-		var buf bytes.Buffer
-		printTo(&buf, func() { warnMissingDNS(s, config.TunnelConfig{}) })
-		return buf.String()
-	}
-
 	// A quick tunnel owns its hostname; there is no record to create.
 	quick := ipc.GatewayStatusPayload{
 		Exposed: []string{"web"},
 		Tunnel:  &ipc.TunnelStatusPayload{Running: true, Kind: "quick", PublicURL: "https://x.trycloudflare.com"},
 	}
-	assert.Empty(t, out(quick))
+	assert.Empty(t, warned(t, quick))
+}
 
-	// Path mode needs no per-service record either.
-	pathMode := ipc.GatewayStatusPayload{
+// Path mode needs no per-service record, but it does need the tunnel's own:
+// it is the only way in, and every service is a path under it. devrun used to
+// check the optional names and skip the mandatory one.
+func TestWarnMissingDNS_PathModeStillNeedsTheTunnelHostname(t *testing.T) {
+	out := warned(t, ipc.GatewayStatusPayload{
 		Exposed: []string{"web"},
-		Tunnel:  &ipc.TunnelStatusPayload{Running: true, Kind: "named", Name: "devrun"},
-	}
-	assert.Empty(t, out(pathMode))
+		Tunnel: &ipc.TunnelStatusPayload{
+			Running: true, Kind: "named", Name: "devrun",
+			PublicURL: "https://devrun.invalid",
+		},
+	})
+	assert.Contains(t, out, "cloudflared tunnel route dns devrun devrun.invalid")
+	assert.NotContains(t, out, "web", "a service addressed by path has no record of its own")
+}
+
+// With a template both are needed: one per service, plus the tunnel's own for
+// the index page. The tunnel's comes first — it is the one that is forgotten.
+func TestWarnMissingDNS_SubdomainModeAlsoNeedsTheTunnelHostname(t *testing.T) {
+	out := warned(t, ipc.GatewayStatusPayload{
+		Exposed:        []string{"web", "api"},
+		PublicHostname: "{service}-devrun.invalid",
+		Tunnel: &ipc.TunnelStatusPayload{
+			Running: true, Kind: "named", Name: "devrun",
+			PublicURL: "https://devrun.invalid",
+		},
+	})
+	assert.Contains(t, out, "3 hostnames do not resolve yet")
+	assert.Contains(t, out, "cloudflared tunnel route dns devrun web-devrun.invalid")
+	assert.Contains(t, out, "cloudflared tunnel route dns devrun api-devrun.invalid")
+	assert.Less(t, strings.Index(out, "dns devrun devrun.invalid"), strings.Index(out, "web-devrun.invalid"))
+}
+
+// A template with no {service} in it resolves to the same name for every
+// service. That is a misconfiguration, but printing one command four times is
+// not how to report it.
+func TestWarnMissingDNS_NamesEachHostOnce(t *testing.T) {
+	out := warned(t, ipc.GatewayStatusPayload{
+		Exposed:        []string{"web", "api"},
+		PublicHostname: "devrun.invalid",
+		Tunnel: &ipc.TunnelStatusPayload{
+			Running: true, Kind: "named", Name: "devrun",
+			PublicURL: "https://devrun.invalid",
+		},
+	})
+	assert.Contains(t, out, "1 hostname does not resolve yet")
+	assert.Equal(t, 1, strings.Count(out, "route dns"))
+}
+
+// warned captures what warnMissingDNS printed. The hostnames are all .invalid,
+// which no resolver will answer, so every one of them counts as missing.
+func warned(t *testing.T, s ipc.GatewayStatusPayload) string {
+	t.Helper()
+	var buf bytes.Buffer
+	printTo(&buf, func() { warnMissingDNS(s, config.TunnelConfig{}) })
+	return buf.String()
 }
 
 // printTo captures what fn writes to stdout. These commands print there
