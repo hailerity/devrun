@@ -172,3 +172,41 @@ func (s *supervisor) serviceEnvLocked(cfg *config.ServiceConfig) map[string]stri
 	}
 	return out
 }
+
+// serviceAddressesLocked is where each service can be opened, keyed by
+// service name. Caller holds s.mu.
+//
+// Distinct from serviceURLsLocked, which answers "what should this service be
+// told about its siblings" and falls back to a direct localhost port. This one
+// answers "where can a person click", which only the gateway can provide:
+// without it there is no single place to send someone.
+//
+// Locally the service goes on the path, whatever the gateway's mode. Resolve
+// accepts both shapes regardless of Mode — Mode governs only which the index
+// advertises — so a path URL always reaches the service, and this avoids
+// re-deciding host-versus-path in a second place. internal/gateway's
+// pathLinks is the one place that decision is made, and it stays that way.
+func (s *supervisor) serviceAddressesLocked() map[string]string {
+	if s.gateway == nil || !pidAlive(s.gateway.pid) {
+		return nil
+	}
+	local := "http://" + config.DisplayHost(s.gateway.addr) + "/"
+	published := s.publishedBaseLocked()
+
+	out := map[string]string{}
+	for name, svc := range s.services {
+		if addressablePort(svc) == 0 {
+			// Nowhere to proxy to, so the gateway would answer 503. A row
+			// with no URL says that more honestly than a link that fails.
+			continue
+		}
+		if published != nil {
+			if url := published(name); url != "" {
+				out[name] = url
+			}
+			continue
+		}
+		out[name] = local + name + "/"
+	}
+	return out
+}

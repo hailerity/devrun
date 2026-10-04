@@ -22,6 +22,10 @@ type ListResult struct {
 	// Offline is true when the daemon could not be reached and Services was
 	// read from the last-saved state file instead.
 	Offline bool
+	// Gateway is the running gateway, or nil. Carried here so a caller can
+	// say where services are reachable without a second round trip, and so
+	// every caller reads the same answer about what absence means.
+	Gateway *ipc.GatewayStatusPayload
 }
 
 // List reports every service in the resolved scope with its live state. It
@@ -53,7 +57,11 @@ func List(r *Resolved) (*ListResult, error) {
 	for _, n := range payload.ActiveTargets {
 		active[n] = true
 	}
-	return &ListResult{Services: ScopeToRegistry(payload.Services, r.Registry), ActiveTargets: active}, nil
+	return &ListResult{
+		Services:      ScopeToRegistry(payload.Services, r.Registry),
+		ActiveTargets: active,
+		Gateway:       payload.Gateway,
+	}, nil
 }
 
 // ScopeToRegistry filters daemon-reported services down to the names present in
