@@ -125,7 +125,7 @@ func TestTools_ListedWithSchemasAndAnnotations(t *testing.T) {
 	for _, tool := range res.Tools {
 		byName[tool.Name] = tool
 	}
-	for _, name := range []string{"list_services", "service_status", "logs"} {
+	for _, name := range []string{"list_services", "service_status", "gateway_status", "logs"} {
 		tool := byName[name]
 		require.NotNil(t, tool, name)
 		assert.NotEmpty(t, tool.Description, name)
