@@ -70,13 +70,15 @@ func (s *supervisor) loadState() error {
 	if err != nil {
 		return err
 	}
-	config.ReAdoptServices(state.Services)
 
 	reg, err := config.LoadRegistry(config.RegistryPath())
 	if err != nil {
 		return err
 	}
 	s.registry = reg
+	// After the registry, because recognising a service means comparing the
+	// live argv against the command the registry records for it.
+	config.ReAdoptServices(state.Services, recogniseService(reg))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

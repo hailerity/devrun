@@ -143,21 +143,31 @@ func SaveState(path string, s *State) error {
 	return nil
 }
 
-// ReAdoptServices checks each service's PID to determine if it is still alive.
-// Alive → StatusRunning + ReAdopted=true. Dead → StatusCrashed, PID cleared.
-// Modifies the map in place. Only checks services that have a non-nil PID.
-func ReAdoptServices(services map[string]*ServiceState) {
-	for _, svc := range services {
+// ReAdoptServices decides, for each service with a recorded pid, whether that
+// process is still the one devrun started. Alive and recognised →
+// StatusRunning with ReAdopted set; anything else → StatusCrashed with the
+// pid cleared. Modifies the map in place.
+//
+// recognise is asked only about pids that are alive, and a nil recognise
+// keeps the liveness-only behaviour. It must answer true whenever it cannot
+// tell: see the daemon's recogniseService for why a false negative is the
+// more expensive mistake.
+//
+// The liveness probe treats EPERM as dead, unlike the one used for devrun's
+// own children. That is deliberate here. EPERM means the process belongs to
+// another user, which a service devrun spawned never does — so it is a
+// stranger who inherited the pid, and refusing to adopt it is the point.
+func ReAdoptServices(services map[string]*ServiceState, recognise func(name string, pid int) bool) {
+	for name, svc := range services {
 		if svc.PID == nil {
 			continue
 		}
-		err := syscall.Kill(*svc.PID, 0)
-		if err == nil {
+		if syscall.Kill(*svc.PID, 0) == nil && (recognise == nil || recognise(name, *svc.PID)) {
 			svc.Status = StatusRunning
 			svc.ReAdopted = true
-		} else {
-			svc.Status = StatusCrashed
-			svc.PID = nil
+			continue
 		}
+		svc.Status = StatusCrashed
+		svc.PID = nil
 	}
 }
