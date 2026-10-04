@@ -81,12 +81,12 @@ type GatewayConfig struct {
 	// DefaultGatewayPort, 0 is "any free port, the kernel picks", and anything
 	// else is itself. Port 0 is how you run two projects at once without
 	// choosing numbers by hand.
-	Port       *int                    `yaml:"port,omitempty" json:"port,omitempty"`
-	Bind       string                  `yaml:"bind,omitempty" json:"bind,omitempty"`
-	Posture    string                  `yaml:"posture,omitempty" json:"posture,omitempty"`
-	Mode       string                  `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Auth       string                  `yaml:"auth,omitempty" json:"auth,omitempty"`
-	HostHeader string                  `yaml:"host_header,omitempty" json:"host_header,omitempty"`
+	Port       *int   `yaml:"port,omitempty" json:"port,omitempty"`
+	Bind       string `yaml:"bind,omitempty" json:"bind,omitempty"`
+	Posture    string `yaml:"posture,omitempty" json:"posture,omitempty"`
+	Mode       string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Auth       string `yaml:"auth,omitempty" json:"auth,omitempty"`
+	HostHeader string `yaml:"host_header,omitempty" json:"host_header,omitempty"`
 	// PublicHostname is how a published service is addressed, as a template
 	// with one {service} placeholder — "{service}-devrun.example.com". Unset,
 	// the gateway puts the service's name in front of whatever host it was
@@ -98,9 +98,9 @@ type GatewayConfig struct {
 	// web.devrun.example.com produces a name no certificate covers — the TLS
 	// handshake is refused outright, not merely distrusted. A template lets
 	// the service names live wherever the certificate reaches.
-	PublicHostname string `yaml:"public_hostname,omitempty" json:"public_hostname,omitempty"`
-	Expose     []string                `yaml:"expose,omitempty" json:"expose,omitempty"`
-	Routes     map[string]GatewayRoute `yaml:"routes,omitempty" json:"routes,omitempty"`
+	PublicHostname string                  `yaml:"public_hostname,omitempty" json:"public_hostname,omitempty"`
+	Expose         []string                `yaml:"expose,omitempty" json:"expose,omitempty"`
+	Routes         map[string]GatewayRoute `yaml:"routes,omitempty" json:"routes,omitempty"`
 }
 
 // Defaults returns a copy with every unset field filled in. A nil receiver is
