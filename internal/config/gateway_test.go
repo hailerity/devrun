@@ -188,3 +188,30 @@ func TestGatewayConfig_DefaultsDoesNotMutateTheReceiver(t *testing.T) {
 	_ = g.Defaults()
 	assert.Nil(t, g.Port, "the receiver still says nothing about a port")
 }
+
+// The template's failure mode is remote: a bad one yields links that are wrong
+// only once published, by which point whoever is debugging them is not at this
+// machine. So it is rejected at load.
+func TestGatewayConfig_ValidatePublicHostname(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in      string
+		wantErr string
+	}{
+		"unset":             {"", ""},
+		"namespaced":        {"{service}-devrun.example.com", ""},
+		"flat":              {"{service}.example.com", ""},
+		"nested":            {"{service}.devrun.example.com", ""},
+		"no placeholder":    {"devrun.example.com", "has no {service}"},
+		"two placeholders":  {"{service}.{service}.example.com", "more than one"},
+		"a URL, not a host": {"https://{service}.example.com", "not a URL"},
+		"carries a port":    {"{service}.example.com:8080", "not a URL"},
+		"no domain":         {"{service}-devrun", "names no domain"},
+	} {
+		err := (&config.GatewayConfig{PublicHostname: tc.in}).Validate()
+		if tc.wantErr == "" {
+			assert.NoErrorf(t, err, "%s: %q", name, tc.in)
+			continue
+		}
+		assert.ErrorContainsf(t, err, tc.wantErr, "%s: %q", name, tc.in)
+	}
+}
