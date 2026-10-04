@@ -238,7 +238,11 @@ func (s *supervisor) startService(name string, inlineCfg *config.ServiceConfig) 
 		return errResp(fmt.Sprintf("%s is already running", name))
 	}
 
-	proc, err := process.Start(cfg.Command, cfg.CWD, cfg.Env)
+	// Built under the lock, because it depends on which services are up and
+	// whether anything is publishing — both of which this call is about to
+	// change.
+	env := s.serviceEnvLocked(cfg)
+	proc, err := process.Start(cfg.Command, cfg.CWD, env)
 	if err != nil {
 		s.mu.Unlock()
 		return errResp(fmt.Sprintf("start process: %v", err))
