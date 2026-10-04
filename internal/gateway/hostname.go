@@ -3,9 +3,16 @@ package gateway
 import "strings"
 
 // servicePlaceholder is what Config.PublicHostname substitutes a service name
-// for. Exactly one is allowed (config.validateHostnameTemplate enforces it),
-// which is what makes the reverse direction a plain prefix and suffix strip
-// with nothing to disambiguate.
+// for. Exactly one is allowed, which is what makes the reverse direction a
+// plain prefix and suffix strip with nothing to disambiguate.
+//
+// It is spelled again here rather than imported: this package does not depend
+// on internal/config — ops.GatewayServerConfig is what translates between the
+// two — so the literal has to exist on both sides of that boundary. Nothing in
+// the compiler holds them equal, so TestServicePlaceholderSurvivesConfigToGateway in
+// internal/ops does, that being the one package importing both. Were they to
+// drift, config would accept a template this package cannot split, and every
+// published link would quietly fall back to the prepend.
 const servicePlaceholder = "{service}"
 
 // hostTemplate is Config.PublicHostname split around its placeholder. It runs
