@@ -30,6 +30,19 @@ type ServiceInfo struct {
 	CPUPct   float64  `json:"cpu_pct,omitempty"`
 	MemBytes int64    `json:"mem_bytes,omitempty"`
 	Targets  []string `json:"targets,omitempty" jsonschema:"Targets this service belongs to."`
+	URL      string   `json:"url,omitempty" jsonschema:"Where this service can be opened, when the gateway is serving it. Absent means it has no address: no gateway, no detected port, or it is withheld from publishing."`
+}
+
+// GatewayInfo is what the gateway is doing, and — the part that matters —
+// whether anything off this machine can reach it.
+type GatewayInfo struct {
+	Running    bool     `json:"running"`
+	Addr       string   `json:"addr,omitempty" jsonschema:"The address it listens on."`
+	Posture    string   `json:"posture,omitempty" jsonschema:"local means loopback only, every running service served, no token. published means the allowlist and token apply because something off this machine can reach it."`
+	Mode       string   `json:"mode,omitempty" jsonschema:"subdomain or path: which URL shape the index advertises."`
+	Exposed    []string `json:"exposed,omitempty" jsonschema:"Services that may leave this machine. Empty means none may."`
+	PublicURL  string   `json:"public_url,omitempty" jsonschema:"The tunnel's public address, when devrun is running one."`
+	TunnelKind string   `json:"tunnel_kind,omitempty" jsonschema:"named or quick. A quick tunnel's URL changes every run."`
 }
 
 // TargetInfo is one target and whether it is active.
@@ -48,6 +61,7 @@ type ListOutput struct {
 	DaemonRunning bool          `json:"daemon_running" jsonschema:"False when the state shown is the last saved one because the daemon could not be reached."`
 	Services      []ServiceInfo `json:"services"`
 	Targets       []TargetInfo  `json:"targets"`
+	Gateway       *GatewayInfo  `json:"gateway,omitempty" jsonschema:"Absent when the gateway is not running, so no service has a URL."`
 }
 
 type StatusInput struct {
@@ -98,6 +112,13 @@ func registerReadTools(s *mcp.Server, h *handlers) {
 	}, h.status)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name:        "gateway_status",
+		Title:       "Gateway status",
+		Description: "What the local HTTP gateway is doing: the address it serves on, whether anything off this machine can reach it, which services may leave the machine, and the public URL when devrun is running a tunnel. Read-only — it never starts, stops or publishes anything.",
+		Annotations: read,
+	}, h.gatewayStatus)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "logs",
 		Title:       "Read service logs",
 		Description: "Return the last lines of a service's output as plain text — 100 by default, at most 1000 and 64 KB — optionally only lines containing some text. This is a snapshot: call it again to see new output.",
@@ -125,6 +146,36 @@ func (h *handlers) list(_ context.Context, _ *mcp.CallToolRequest, in ListInput)
 			members = []string{}
 		}
 		out.Targets = append(out.Targets, TargetInfo{Name: name, Members: members, Active: res.ActiveTargets[name]})
+	}
+	out.Gateway = gatewayInfo(res.Gateway)
+	return nil, out, nil
+}
+
+// GatewayStatusInput takes a scope and nothing else: this reads, it does not
+// publish. A tool that could publish would need OpenWorldHint and must never
+// be auto-approvable.
+type GatewayStatusInput struct {
+	Scoped
+}
+
+// GatewayStatusOutput is the gateway, or Running false when there is none.
+type GatewayStatusOutput struct {
+	Origin
+	Gateway GatewayInfo `json:"gateway"`
+}
+
+func (h *handlers) gatewayStatus(_ context.Context, _ *mcp.CallToolRequest, in GatewayStatusInput) (*mcp.CallToolResult, GatewayStatusOutput, error) {
+	r, err := h.resolve(in.Scoped)
+	if err != nil {
+		return nil, GatewayStatusOutput{}, err
+	}
+	res, err := ops.List(r)
+	if err != nil {
+		return nil, GatewayStatusOutput{}, err
+	}
+	out := GatewayStatusOutput{Origin: sourceOf(r)}
+	if gw := gatewayInfo(res.Gateway); gw != nil {
+		out.Gateway = *gw
 	}
 	return nil, out, nil
 }
@@ -209,8 +260,31 @@ func (h *handlers) service(in Scoped, name string) (*ops.Resolved, *config.Servi
 func serviceInfo(s ipc.ServiceInfo, targets []string) ServiceInfo {
 	return ServiceInfo{
 		Name: s.Name, State: s.State, PID: s.PID, Port: s.Port,
-		UptimeS: s.UptimeSec, CPUPct: s.CPUPct, MemBytes: s.MemBytes, Targets: targets,
+		UptimeS: s.UptimeSec, CPUPct: s.CPUPct, MemBytes: s.MemBytes,
+		Targets: targets, URL: s.URL,
 	}
+}
+
+// gatewayInfo converts the daemon's gateway status, or nil when none is
+// running. The token is deliberately absent: an agent has no use for it, and
+// a read tool handing out the key to everything published would make a
+// transcript enough to reach the services.
+func gatewayInfo(gw *ipc.GatewayStatusPayload) *GatewayInfo {
+	if gw == nil || !gw.Running {
+		return nil
+	}
+	out := &GatewayInfo{
+		Running: true,
+		Addr:    gw.Addr,
+		Posture: gw.Posture,
+		Mode:    gw.Mode,
+		Exposed: gw.Exposed,
+	}
+	if gw.Tunnel != nil && gw.Tunnel.Running {
+		out.PublicURL = gw.Tunnel.PublicURL
+		out.TunnelKind = gw.Tunnel.Kind
+	}
+	return out
 }
 
 // targetsByService inverts the target map: service name → targets it is in.
