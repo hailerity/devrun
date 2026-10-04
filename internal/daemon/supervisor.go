@@ -49,6 +49,10 @@ type supervisor struct {
 	// waits for the child to announce its address, and holding mu that long
 	// would block every list.
 	gatewayOps sync.Mutex
+	// tunnel is the cloudflared child, guarded by mu and serialised by
+	// gatewayOps — the two lifecycles cascade (gateway down stops the tunnel),
+	// so one lock orders both and there is no pair to deadlock.
+	tunnel *tunnelChild
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -89,6 +93,7 @@ func (s *supervisor) loadState() error {
 		s.activeTargets = state.ActiveTargets
 	}
 	s.gateway = adoptGateway(state.Gateway, s.logger)
+	s.tunnel = adoptTunnel(state.Tunnel, s.logger)
 	s.reconcileActiveTargetsLocked()
 	return s.saveStateLocked()
 }
@@ -101,6 +106,14 @@ func (s *supervisor) saveStateLocked() error {
 	}
 	for name, svc := range s.services {
 		state.Services[name] = svc.state
+	}
+	if s.tunnel != nil {
+		state.Tunnel = &config.TunnelState{
+			PID:       s.tunnel.pid,
+			Kind:      s.tunnel.kind,
+			PublicURL: s.tunnel.publicURL,
+			Config:    s.tunnel.cfg,
+		}
 	}
 	if s.gateway != nil {
 		state.Gateway = &config.GatewayState{
@@ -710,8 +723,10 @@ func (s *supervisor) shutdown() {
 	defer s.gatewayOps.Unlock()
 
 	s.mu.Lock()
-	// The gateway goes too: publishing an origin whose services are being
-	// stopped is worse than not publishing.
+	// Both children go too, tunnel first: publishing an origin whose services
+	// are being stopped is worse than not publishing, and stopping the gateway
+	// first would leave cloudflared briefly serving a dead address.
+	s.stopTunnelLocked()
 	s.stopGatewayLocked()
 	var targets []target
 	for name, svc := range s.services {
