@@ -116,23 +116,25 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	// the common case and not worth a question.
 	suggested := firstLabel(hostname)
 	name := suggested
-	if names, known, err := ops.TunnelNames(config.SocketPath()); err == nil && known {
-		if !contains(names, suggested) {
-			if len(names) > 0 {
-				fmt.Printf("  (tunnels on this account: %s)\n", strings.Join(names, ", "))
-			}
-			name, err = ask(in, fmt.Sprintf("  cloudflared tunnel [%s]: ", suggested), suggested)
-			if err != nil {
-				return config.TunnelConfig{}, err
-			}
+
+	// Flattened out of an if/else whose initialiser shadowed err: both
+	// branches assigned to the shadowed copy, which was correct only because
+	// each checked it on the next line. One moved check would have dropped
+	// the error silently, and the linter does not catch it.
+	names, known, listErr := ops.TunnelNames(config.SocketPath())
+	// Unverifiable — no daemon, no login, no network — means the name goes
+	// through unchecked rather than blocking; cloudflared will say if it is
+	// wrong. Known and present means there is nothing to ask about.
+	mustAsk := listErr != nil || !known || !contains(names, suggested)
+	if mustAsk {
+		if known && len(names) > 0 {
+			fmt.Printf("  (tunnels on this account: %s)\n", strings.Join(names, ", "))
 		}
-	} else {
-		// Unverifiable, so the name goes through unchecked rather than
-		// blocking; cloudflared will say if it is wrong.
-		name, err = ask(in, fmt.Sprintf("  cloudflared tunnel [%s]: ", suggested), suggested)
+		answer, err := ask(in, fmt.Sprintf("  cloudflared tunnel [%s]: ", suggested), suggested)
 		if err != nil {
 			return config.TunnelConfig{}, err
 		}
+		name = answer
 	}
 
 	cfg := config.TunnelConfig{Provider: config.ProviderCloudflare, Name: name, Hostname: hostname}
