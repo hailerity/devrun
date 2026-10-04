@@ -757,3 +757,56 @@ func TestExposedMsg_FailureDoesNotClaimNothingHappened(t *testing.T) {
 	assert.Contains(t, toast, "saved")
 	assert.NotContains(t, toast, "expose failed")
 }
+
+// With no gateway running the config file is the only record of what may
+// leave the machine — and it is the file the save writes to. Reading only
+// the daemon made the key one-way: a service the file already exposed read
+// as not exposed, so every press re-exposed it and nothing could be
+// withheld without the daemon up.
+func TestIsExposed_FallsBackToTheConfigWithNoGateway(t *testing.T) {
+	reg := &config.Registry{Gateway: &config.GatewayConfig{Expose: []string{"web"}}}
+	m := model{registry: reg}
+
+	assert.True(t, m.isExposed("web"), "the file says it may leave")
+	assert.False(t, m.isExposed("admin"))
+
+	// A running gateway outranks the file: it is what is actually serving.
+	m.gateway = &ipc.GatewayStatusPayload{Running: true, Exposed: []string{"admin"}}
+	assert.False(t, m.isExposed("web"))
+	assert.True(t, m.isExposed("admin"))
+}
+
+// Pressing p twice with the gateway down has to end where it started.
+func TestExposeKey_TogglesBothWaysWithGatewayDown(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devrun.yaml"),
+		[]byte("services:\n  web:\n    command: sleep 30\ngateway:\n  expose: [web]\n"), 0o644))
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	reg := &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "sleep 30"}},
+		Gateway:  proj.Gateway,
+	}
+	src := config.Source{Local: filepath.Join(dir, "devrun.yaml"), Dir: dir}
+	m := newModel("", reg, src, t.TempDir(), clipboard{})
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "web", State: "stopped"}}, nil)
+	require.True(t, m.isExposed("web"), "starts exposed, per the file")
+
+	press := func(m model) model {
+		out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+		return out.(model)
+	}
+
+	m = press(m)
+	assert.False(t, m.isExposed("web"), "first press withholds it")
+	saved, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.NotContains(t, saved.Gateway.ExposedSet(), "web", "and the file agrees")
+
+	m = press(m)
+	assert.True(t, m.isExposed("web"), "second press puts it back")
+	saved, err = config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Contains(t, saved.Gateway.ExposedSet(), "web")
+}
