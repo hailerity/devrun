@@ -143,4 +143,40 @@ type GatewayStatusPayload struct {
 	Token   string   `json:"token,omitempty"`
 	Exposed []string `json:"exposed,omitempty"`
 	PID     *int     `json:"pid,omitempty"`
+	// Tunnel is nil when nothing devrun manages is publishing this gateway.
+	// Nil does not mean unpublished: someone may be fronting it with ngrok or
+	// a Caddy devrun knows nothing about, which is what posture reports.
+	Tunnel *TunnelStatusPayload `json:"tunnel,omitempty"`
+}
+
+// TunnelUpPayload starts the tunnel, and the gateway under it if needed. Both
+// configs travel inline, as a project service's does: the daemon cannot read
+// the devrun.yaml the CLI resolved. By the time this is sent the CLI has
+// already resolved flags, config and any prompt into a complete TunnelConfig.
+type TunnelUpPayload struct {
+	Config  *config.TunnelConfig  `json:"config,omitempty"`
+	Gateway *config.GatewayConfig `json:"gateway,omitempty"`
+	// Expose names services that may leave this machine, added to the
+	// allowlist before anything is published.
+	Expose []string `json:"expose,omitempty"`
+}
+
+// TunnelStatusPayload is the tunnel's runtime state. A zero value means devrun
+// is not running one.
+type TunnelStatusPayload struct {
+	Running bool   `json:"running"`
+	Kind    string `json:"kind,omitempty"` // "named" | "quick"
+	Name    string `json:"name,omitempty"`
+	// PublicURL may be empty for a running quick tunnel whose banner could not
+	// be read. The tunnel works; devrun just cannot print the address.
+	PublicURL string `json:"public_url,omitempty"`
+	PID       *int   `json:"cloudflared_pid,omitempty"`
+}
+
+// TunnelListPayload carries the account's tunnel names. Known is false when
+// cloudflared could not be asked — no login, no network — which callers must
+// not read as "the name does not exist".
+type TunnelListPayload struct {
+	Names []string `json:"names"`
+	Known bool     `json:"known"`
 }
