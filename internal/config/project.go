@@ -31,6 +31,9 @@ type ProjectConfig struct {
 	Targets map[string][]string `yaml:"targets,omitempty"`
 	// Gateway configures the local HTTP gateway for this project.
 	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
+	// Tunnel configures publishing. Absent means cloudflared is never looked
+	// for; publishing is optional, and so is the dependency.
+	Tunnel *TunnelConfig `yaml:"tunnel,omitempty"`
 }
 
 // LoadProject reads devrun.yaml from dir.
