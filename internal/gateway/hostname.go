@@ -79,8 +79,13 @@ func (s *Server) resolveTemplate(reqHost string) (Target, bool) {
 // than by a hostname of their own. It is the one place that decision is made,
 // so the links, the per-row hostname and the caveat cannot disagree.
 func (s *Server) pathLinks(reqHost string) bool {
-	if len(s.cfg.Rules) > 0 {
-		// An explicit routes table is already a set of paths.
+	// Asked for, so honoured — ahead of the template, which would otherwise
+	// override a setting the user wrote down and say nothing about it. Nothing
+	// is lost by obeying: Mode has only ever governed which shape the index
+	// advertises, and Resolve still accepts a templated hostname inbound.
+	// linkMode is Path for an explicit routes table too, that being a set of
+	// paths already.
+	if s.linkMode() == Path {
 		return true
 	}
 	// A template carries its own domain, so it works however the gateway was
@@ -90,7 +95,7 @@ func (s *Server) pathLinks(reqHost string) bool {
 	if _, ok := s.hostTemplate(); ok && !hostIsSelf(reqHost, s.cfg.Bind) {
 		return false
 	}
-	return s.linkMode() == Path || !canSubdomain(reqHost)
+	return !canSubdomain(reqHost)
 }
 
 // serviceHost is the hostname a service is reached at, or "" when it is
@@ -113,9 +118,15 @@ func (s *Server) serviceHost(reqHost, name string) string {
 // breaks a frontend's root-absolute asset URLs. A caveat that does not name
 // the cause leaves the reader to guess which of several things went wrong.
 func (s *Server) pathExplain(reqHost string) (reason, fix string) {
+	// The order matches pathLinks. A configured reason is the reason, even
+	// when the request also arrived somewhere that would have forced paths
+	// anyway — reporting the accident over the setting would send the reader
+	// to change the wrong thing.
 	switch {
 	case len(s.cfg.Rules) > 0:
 		return "an explicit routes table is in use", ""
+	case s.cfg.Mode == Path:
+		return "mode: path is configured", ""
 	case !canSubdomain(reqHost):
 		host := hostOnly(reqHost)
 		if host == "" {
@@ -125,6 +136,6 @@ func (s *Server) pathExplain(reqHost string) (reason, fix string) {
 				", and a label cannot be put in front of an IP address",
 			"Opening it by name instead gives each service its own origin."
 	default:
-		return "mode: path is configured", ""
+		return "no hostname could be formed for a service", ""
 	}
 }

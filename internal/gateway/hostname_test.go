@@ -193,3 +193,44 @@ func TestIndex_NoCaveatWithATemplate(t *testing.T) {
 	out := body(t, s, get("devrun.example.com", "/"))
 	assert.NotContains(t, out, "addressed by path")
 }
+
+// A setting the user wrote down must not be silently overridden. Before this,
+// a template plus mode: path gave hostname links off-machine and said nothing,
+// which is the failure Validate is otherwise careful to avoid — its comment
+// warns that a typo must not "fall back to a weaker setting than the user
+// asked for".
+func TestPathLinks_ConfiguredModeBeatsTheTemplate(t *testing.T) {
+	cfg := Config{Bind: "127.0.0.1:7788", Mode: Path, PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	assert.True(t, s.pathLinks("devrun.example.com"), "mode: path was asked for")
+	assert.Empty(t, s.serviceHost("devrun.example.com", "web"), "so there is no hostname to show")
+
+	out := body(t, s, get("devrun.example.com", "/"))
+	assert.Contains(t, out, `href="/web/"`)
+	assert.NotContains(t, out, "web-devrun.example.com", "the template must not appear in a link")
+	assert.Contains(t, out, "mode: path is configured", "and the caveat names the real reason")
+}
+
+// Honouring the mode costs nothing inbound: Mode has only ever governed which
+// shape the index advertises, and both still resolve.
+func TestResolve_TemplateStillRoutesUnderModePath(t *testing.T) {
+	cfg := Config{Bind: "127.0.0.1:7788", Mode: Path, PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	target, outcome := s.Resolve(get("web-devrun.example.com", "/assets/app.js"))
+	require.Equal(t, OK, outcome, "a templated hostname still reaches its service")
+	assert.Equal(t, "web", target.Service)
+}
+
+// A configured reason outranks an accidental one: told it was reached at an IP,
+// a reader would go and change the URL rather than the setting that decided it.
+func TestPathExplain_ReportsTheSettingOverTheAccident(t *testing.T) {
+	s := server(t, Config{Mode: Path}, Snapshot{})
+	reason, _ := s.pathExplain("127.0.0.1:7788")
+	assert.Contains(t, reason, "mode: path is configured")
+
+	table := server(t, Config{Mode: Path, Rules: map[string]Rule{"/": {Service: "web"}}}, Snapshot{})
+	reason, _ = table.pathExplain("127.0.0.1:7788")
+	assert.Contains(t, reason, "routes table", "the table is more specific still")
+}
