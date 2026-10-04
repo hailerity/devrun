@@ -88,9 +88,9 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	// Configuration changed, so the child has to be replaced — it reads its
 	// config once at startup. Keep the token: a link already shared must
 	// keep working.
-	token, previousAddr := "", ""
+	token := ""
 	if s.gateway != nil {
-		token, previousAddr = s.gateway.token, s.gateway.addr
+		token = s.gateway.token
 		s.stopGatewayLocked()
 	}
 	if token == "" {
@@ -108,7 +108,11 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 
 	s.mu.Lock()
 	s.gateway = child
-	moved := s.tunnel != nil && child.addr != previousAddr
+	// Against the origin the tunnel actually holds, not against whatever the
+	// gateway's address was before. With no gateway running, "before" is the
+	// empty string and every up would look like a move — tearing down a
+	// working tunnel and handing a quick one a new URL for nothing.
+	moved := s.tunnel != nil && s.tunnel.origin != originURL(child.addr)
 	tunnelCfg := config.TunnelConfig{}
 	if moved {
 		tunnelCfg = s.tunnel.cfg

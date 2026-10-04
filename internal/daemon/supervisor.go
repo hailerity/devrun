@@ -111,6 +111,7 @@ func (s *supervisor) saveStateLocked() error {
 		state.Tunnel = &config.TunnelState{
 			PID:       s.tunnel.pid,
 			Kind:      s.tunnel.kind,
+			Origin:    s.tunnel.origin,
 			PublicURL: s.tunnel.publicURL,
 			Config:    s.tunnel.cfg,
 		}

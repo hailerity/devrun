@@ -69,8 +69,11 @@ type GatewayState struct {
 // SIGTERM, so without a record a replacement daemon could neither see it nor
 // stop it, while it went on publishing.
 type TunnelState struct {
-	PID       int          `json:"pid"`
-	Kind      string       `json:"kind"` // "named" | "quick"
+	PID  int    `json:"pid"`
+	Kind string `json:"kind"` // "named" | "quick"
+	// Origin is the gateway address cloudflared was pointed at, so a new
+	// gateway can tell whether it has actually moved.
+	Origin    string       `json:"origin"`
 	PublicURL string       `json:"public_url"`
 	Config    TunnelConfig `json:"config"`
 }
