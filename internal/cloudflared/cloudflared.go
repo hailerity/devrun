@@ -80,15 +80,9 @@ func List(ctx context.Context, bin string) ([]string, error) {
 		return nil, fmt.Errorf("cloudflared tunnel list: %w", err)
 	}
 
-	// cloudflared writes log lines to stderr, but has been known to prefix
-	// stdout too; find the array rather than assuming the first byte is '['.
-	blob := out
-	if i := bytes.IndexByte(out, '['); i > 0 {
-		blob = out[i:]
-	}
-	var rows []tunnelRow
-	if err := json.Unmarshal(blob, &rows); err != nil {
-		return nil, fmt.Errorf("cloudflared tunnel list: unreadable output: %w", err)
+	rows, err := parseTunnelRows(out)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflared tunnel list: %w", err)
 	}
 	names := make([]string, 0, len(rows))
 	for _, r := range rows {
@@ -97,6 +91,37 @@ func List(ctx context.Context, bin string) ([]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// parseTunnelRows reads the tunnel array out of what cloudflared printed.
+//
+// The whole output first, because that is what the real binary gives:
+// --output json puts the array on stdout and its logs on stderr, and Output()
+// captures stdout alone. The fallback is for a release that prefixes it
+// anyway, and is line-oriented on purpose — scanning for the first '[' byte
+// would happily start inside a bracket in a log line and then fail to parse,
+// which is the case the tolerance exists for.
+func parseTunnelRows(out []byte) ([]tunnelRow, error) {
+	var rows []tunnelRow
+	if err := json.Unmarshal(out, &rows); err == nil {
+		return rows, nil
+	}
+	// The offset is carried, not searched for. Looking the line up with
+	// bytes.Index would find its first occurrence — and a one-character line
+	// of "[" occurs inside "[core]" in the preamble, which is the very bug
+	// this fallback replaced.
+	offset := 0
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		if bytes.HasPrefix(bytes.TrimSpace(line), []byte("[")) {
+			start := offset + bytes.IndexByte(line, '[')
+			if err := json.Unmarshal(out[start:], &rows); err == nil {
+				return rows, nil
+			}
+			break
+		}
+		offset += len(line) + 1 // the newline Split consumed
+	}
+	return nil, errors.New("unreadable output")
 }
 
 // HasTunnel reports whether name is one of the account's tunnels, and whether

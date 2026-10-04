@@ -115,3 +115,19 @@ func TestFind_OnPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(dir, Binary), got)
 }
+
+// Tolerance for a preamble has to survive a bracket in it. Scanning for the
+// first '[' byte would start inside the log line and fail to parse, which is
+// the case the tolerance exists for.
+func TestList_PreambleContainingBrackets(t *testing.T) {
+	noisy := "2026-10-04T00:00:00Z INF [core] starting up [v2026.8.3]\n" + listJSON
+	names, err := List(context.Background(), fake(t, noisy, "", 0))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+}
+
+// And genuinely unreadable output is still an error, not an empty list.
+func TestList_BracketsButNoArray(t *testing.T) {
+	_, err := List(context.Background(), fake(t, "INF [core] nothing to report", "", 0))
+	assert.ErrorContains(t, err, "unreadable output")
+}
