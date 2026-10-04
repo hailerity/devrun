@@ -41,15 +41,18 @@ var tunnelStatusCmd = &cobra.Command{
 }
 
 var tunnelUpFlags struct {
-	hostname string
-	name     string
-	quick    bool
+	hostname       string
+	name           string
+	quick          bool
+	restartExposed bool
 }
 
 func init() {
 	tunnelUpCmd.Flags().StringVar(&tunnelUpFlags.hostname, "hostname", "", "Public hostname DNS points at the tunnel")
 	tunnelUpCmd.Flags().StringVar(&tunnelUpFlags.name, "name", "", "cloudflared tunnel to run")
 	tunnelUpCmd.Flags().BoolVar(&tunnelUpFlags.quick, "quick", false, "Throwaway trycloudflare.com URL; needs no account or DNS")
+	tunnelUpCmd.Flags().BoolVar(&tunnelUpFlags.restartExposed, "restart-exposed", false,
+		"Restart published services so they pick up the new DEVRUN_URL_* values")
 
 	tunnelCmd.AddCommand(tunnelUpCmd, tunnelDownCmd, tunnelStatusCmd)
 }
@@ -203,7 +206,61 @@ func runTunnelUp(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	printPublished(status, tcfg)
+	if tunnelUpFlags.restartExposed {
+		restartExposed(status.Exposed)
+	}
 	return nil
+}
+
+// restartExposed brings published services back so they see the addresses
+// they are now reachable at.
+//
+// Dev servers read their environment once, at startup, so a service running
+// from before the tunnel started still holds the local DEVRUN_URL_* values —
+// and a frontend that baked one into its bundle is calling localhost from
+// someone else's browser. Restarting is the only way to refresh them, and it
+// is opt-in because it drops in-flight work and loses HMR state.
+func restartExposed(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(styleLabel.Render("restarting published services so they see the new addresses"))
+	for _, name := range names {
+		cfg, err := inlineConfigFor(name)
+		if err != nil {
+			fmt.Printf("    %-16s %s\n", name, styleYellow.Render(err.Error()))
+			continue
+		}
+		if _, err := ops.Stop(name); err != nil && !errors.Is(err, ops.ErrNoDaemon) {
+			fmt.Printf("    %-16s %s\n", name, styleYellow.Render("stop: "+err.Error()))
+			continue
+		}
+		if _, err := ops.Start(name, cfg); err != nil {
+			fmt.Printf("    %-16s %s\n", name, styleRed.Render("start: "+err.Error()))
+			continue
+		}
+		fmt.Printf("    %-16s %s\n", name, styleGreen.Render("restarted"))
+	}
+}
+
+// inlineConfigFor is the definition to ship with a start, which a project
+// service needs because the daemon cannot read a devrun.yaml. A service the
+// active config does not define is one this command has no business
+// restarting.
+func inlineConfigFor(name string) (*config.ServiceConfig, error) {
+	reg, src, err := activeRegistry()
+	if err != nil {
+		return nil, err
+	}
+	if reg == nil || reg.Services[name] == nil {
+		return nil, errors.New("not defined in the active config")
+	}
+	if !src.IsLocal() {
+		// A global service: the daemon resolves it from services.yaml itself.
+		return nil, nil
+	}
+	return reg.Services[name], nil
 }
 
 func runTunnelDown(cmd *cobra.Command, args []string) error {
