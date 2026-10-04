@@ -22,8 +22,14 @@ import (
 // its own session, never waited on, stopped by process group, recorded in
 // state.json and re-adopted by pid with its argv checked.
 type tunnelChild struct {
-	pid       int
-	kind      string // KindNamed | KindQuick
+	pid  int
+	kind string // KindNamed | KindQuick
+	// origin is the gateway address this cloudflared was pointed at, fixed
+	// when it started. It is what decides whether a gateway that just came up
+	// has actually moved: comparing against "wherever the gateway was before"
+	// calls it a move when there was no gateway before, and needlessly
+	// restarts a working tunnel.
+	origin    string
 	publicURL string
 	cfg       config.TunnelConfig
 }
@@ -35,6 +41,11 @@ const (
 	KindNamed = "named"
 	KindQuick = "quick"
 )
+
+// namedSettle is how long a named tunnel is given to fail before it is
+// called started. Long enough for an immediate exit — bad credentials, an
+// unknown name — to have happened, short enough not to be felt.
+var namedSettle = 750 * time.Millisecond
 
 // quickURLTimeout bounds the wait for a quick tunnel to report its hostname.
 // Generous: cloudflared has to reach the edge and register before it knows.
@@ -107,18 +118,24 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 	pid := proc.Pid
 	s.reap(proc, "tunnel", s.clearTunnelPid)
 
-	child := &tunnelChild{pid: pid, kind: kind, cfg: cfg}
+	child := &tunnelChild{pid: pid, kind: kind, origin: origin, cfg: cfg}
 	if kind == KindNamed {
 		child.publicURL = "https://" + cfg.Hostname
-		s.logger.Info("tunnel started", "pid", pid, "kind", kind, "url", child.publicURL)
-		return child, nil
+		// Nothing in a named tunnel's output is parsed, so there is no wait
+		// that would incidentally notice it failing. The common failures —
+		// missing credentials, an unknown tunnel name — happen at once, so a
+		// short settle catches them instead of reporting a URL for a process
+		// that is already gone.
+		time.Sleep(namedSettle)
+	} else {
+		child.publicURL = waitForQuickURL(TunnelLogPath(), from, pid)
 	}
 
-	child.publicURL = waitForQuickURL(TunnelLogPath(), from, pid)
-	if child.publicURL == "" && !pidAlive(pid) {
-		// It died rather than went quiet, so there is a cause to report.
-		return nil, fmt.Errorf("cloudflared exited before publishing: %s",
-			firstLogLine(TunnelLogPath(), from))
+	// Liveness regardless of what it managed to print. A tunnel that exited is
+	// a failure even if it announced a hostname on the way out: recording that
+	// URL would have status claiming devrun publishes somewhere it does not.
+	if !pidAlive(pid) {
+		return nil, fmt.Errorf("cloudflared exited: %s", firstLogLine(TunnelLogPath(), from))
 	}
 	s.logger.Info("tunnel started", "pid", pid, "kind", kind, "url", child.publicURL)
 	return child, nil
@@ -201,7 +218,7 @@ func adoptTunnel(ts *config.TunnelState, log *slog.Logger) *tunnelChild {
 		return nil
 	}
 	log.Info("tunnel re-adopted", "pid", ts.PID, "url", ts.PublicURL)
-	return &tunnelChild{pid: ts.PID, kind: ts.Kind, publicURL: ts.PublicURL, cfg: ts.Config}
+	return &tunnelChild{pid: ts.PID, kind: ts.Kind, origin: ts.Origin, publicURL: ts.PublicURL, cfg: ts.Config}
 }
 
 // originURL is the gateway as cloudflared should reach it. A wildcard bind is
