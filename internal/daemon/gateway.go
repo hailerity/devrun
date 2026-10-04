@@ -107,7 +107,11 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	}
 
 	s.mu.Lock()
-	s.gateway = child
+	if !recordLive(&s.gateway, child, child.pid) {
+		_ = s.saveStateLocked()
+		s.mu.Unlock()
+		return errResp("the gateway exited immediately after starting; see the daemon log")
+	}
 	// Against the origin the tunnel actually holds, not against whatever the
 	// gateway's address was before. With no gateway running, "before" is the
 	// empty string and every up would look like a move — tearing down a
