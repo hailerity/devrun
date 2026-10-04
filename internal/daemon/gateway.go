@@ -13,7 +13,6 @@ import (
 
 	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
-	"github.com/hailerity/devrun/internal/gateway"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/process"
 )
@@ -77,41 +76,12 @@ func (s *supervisor) handleGatewayUp(raw json.RawMessage) *ipc.Response {
 	s.gatewayOps.Lock()
 	defer s.gatewayOps.Unlock()
 
-	s.mu.Lock()
-	// Already up with the same configuration: idempotent, so `tunnel up` can
-	// call this without caring whether the gateway is running.
-	if s.gateway != nil && sameGatewayConfig(s.gateway.cfg, cfg) && pidAlive(s.gateway.pid) {
-		resp := s.gatewayStatusLocked()
-		s.mu.Unlock()
-		return okResp(resp)
-	}
-	// Configuration changed, so the child has to be replaced — it reads its
-	// config once at startup. Keep the token: a link already shared must
-	// keep working.
-	token := ""
-	if s.gateway != nil {
-		token = s.gateway.token
-		s.stopGatewayLocked()
-	}
-	if token == "" {
-		// Minted here, not in the child: the daemon is what reports it to the
-		// CLI, and what must hand the same one back on every restart so a link
-		// already shared keeps working.
-		token = gateway.NewToken()
-	}
-	s.mu.Unlock()
-
-	child, err := s.spawnGateway(cfg, token)
+	child, err := s.ensureGateway(cfg)
 	if err != nil {
 		return errResp(err.Error())
 	}
 
 	s.mu.Lock()
-	if !recordLive(&s.gateway, child, child.pid) {
-		_ = s.saveStateLocked()
-		s.mu.Unlock()
-		return errResp("the gateway exited immediately after starting; see the daemon log")
-	}
 	// Against the origin the tunnel actually holds, not against whatever the
 	// gateway's address was before. With no gateway running, "before" is the
 	// empty string and every up would look like a move — tearing down a
@@ -463,6 +433,7 @@ func (s *supervisor) gatewayStatusLocked() ipc.GatewayStatusPayload {
 		Token:   s.gateway.token,
 		Exposed: s.gateway.cfg.ExposedSet(),
 		PID:     &pid,
+		Tunnel:  s.tunnelStatusLocked(),
 	}
 }
 
