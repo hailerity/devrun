@@ -22,7 +22,7 @@ func svc(name string, status config.ServiceStatus, detected, declared int) *mana
 func TestURLVarName(t *testing.T) {
 	for in, want := range map[string]string{
 		"api":         "DEVRUN_URL_API",
-		"pimatix-web": "DEVRUN_URL_PIMATIX_WEB",
+		"shop-web": "DEVRUN_URL_SHOP_WEB",
 		"a.b-c":       "DEVRUN_URL_A_B_C",
 		"web2":        "DEVRUN_URL_WEB2",
 	} {

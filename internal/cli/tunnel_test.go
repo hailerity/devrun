@@ -178,9 +178,9 @@ func TestWarnMissingDNS_NamesEachHostOnce(t *testing.T) {
 func TestSetupSteps(t *testing.T) {
 	assert.Equal(t, []string{
 		"cloudflared tunnel login",
-		"cloudflared tunnel create pimatix",
-		"cloudflared tunnel route dns pimatix devrun.thesys.link",
-	}, setupSteps(config.TunnelConfig{Name: "pimatix", Hostname: "devrun.thesys.link"}),
+		"cloudflared tunnel create shop",
+		"cloudflared tunnel route dns shop dev.example.net",
+	}, setupSteps(config.TunnelConfig{Name: "shop", Hostname: "dev.example.net"}),
 		"the name and the hostname are separate arguments, and route takes both")
 }
 

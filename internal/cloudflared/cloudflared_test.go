@@ -34,14 +34,14 @@ func fake(t *testing.T, stdout, stderr string, code int) string {
 }
 
 const listJSON = `[
-  {"id":"1ca7edfd-5206-4888-8f01-c419ffb2270e","name":"anydea","connections":[]},
-  {"id":"11f84736-3e49-40b4-b4df-066bddc198f2","name":"pimatix","connections":[]}
+  {"id":"1ca7edfd-5206-4888-8f01-c419ffb2270e","name":"shop","connections":[]},
+  {"id":"11f84736-3e49-40b4-b4df-066bddc198f2","name":"docs","connections":[]}
 ]`
 
 func TestList(t *testing.T) {
 	names, err := List(context.Background(), fake(t, listJSON, "", 0))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+	assert.Equal(t, []string{"shop", "docs"}, names)
 }
 
 // cloudflared logs to stderr and has been known to put a line on stdout ahead
@@ -50,7 +50,7 @@ func TestList_IgnoresNoiseBeforeTheJSON(t *testing.T) {
 	noisy := "2026-10-04T00:00:00Z INF some banner\n" + listJSON
 	names, err := List(context.Background(), fake(t, noisy, "", 0))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+	assert.Equal(t, []string{"shop", "docs"}, names)
 }
 
 func TestList_EmptyAccount(t *testing.T) {
@@ -82,7 +82,7 @@ func TestList_MissingBinary(t *testing.T) {
 func TestHasTunnel(t *testing.T) {
 	bin := fake(t, listJSON, "", 0)
 
-	found, known := HasTunnel(context.Background(), bin, "pimatix")
+	found, known := HasTunnel(context.Background(), bin, "docs")
 	assert.True(t, found)
 	assert.True(t, known)
 
@@ -90,7 +90,7 @@ func TestHasTunnel(t *testing.T) {
 	assert.False(t, found)
 	assert.True(t, known, "the account was readable; this name is genuinely absent")
 
-	found, known = HasTunnel(context.Background(), fake(t, "", "not logged in", 1), "pimatix")
+	found, known = HasTunnel(context.Background(), fake(t, "", "not logged in", 1), "docs")
 	assert.False(t, found)
 	assert.False(t, known, "unverifiable, which callers must not read as absent")
 }
@@ -123,7 +123,7 @@ func TestList_PreambleContainingBrackets(t *testing.T) {
 	noisy := "2026-10-04T00:00:00Z INF [core] starting up [v2026.8.3]\n" + listJSON
 	names, err := List(context.Background(), fake(t, noisy, "", 0))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+	assert.Equal(t, []string{"shop", "docs"}, names)
 }
 
 // And genuinely unreadable output is still an error, not an empty list.
@@ -138,5 +138,5 @@ func TestList_BracketStartingLineBeforeTheArray(t *testing.T) {
 	noisy := "[core] starting up\n[warn] something\n" + listJSON
 	names, err := List(context.Background(), fake(t, noisy, "", 0))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"anydea", "pimatix"}, names)
+	assert.Equal(t, []string{"shop", "docs"}, names)
 }
