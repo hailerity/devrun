@@ -142,3 +142,54 @@ func TestIndex_LinksAndRowsAgreeOnTheHostname(t *testing.T) {
 		"published, so https — the scheme the tunnel terminates")
 	assert.Contains(t, out, ">web-devrun.example.com<", "the row names the same host it links to")
 }
+
+// The commonest way into path mode is not configuring it — opening the gateway
+// at an IP silently selects the one shape that breaks root-absolute asset
+// URLs. A caveat that does not name the cause leaves the reader guessing which
+// of several things went wrong.
+func TestPathExplain(t *testing.T) {
+	t.Run("reached by IP", func(t *testing.T) {
+		s := server(t, Config{Mode: Subdomain}, Snapshot{})
+		reason, fix := s.pathExplain("127.0.0.1:7788")
+		assert.Contains(t, reason, "reached at 127.0.0.1")
+		assert.Contains(t, reason, "cannot be put in front of an IP")
+		assert.NotEmpty(t, fix, "this one has a specific remedy: open it by name")
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		s := server(t, Config{Mode: Path}, Snapshot{})
+		reason, _ := s.pathExplain("localhost:7788")
+		assert.Contains(t, reason, "mode: path")
+	})
+
+	t.Run("routes table", func(t *testing.T) {
+		s := server(t, Config{Rules: map[string]Rule{"/": {Service: "web"}}}, Snapshot{})
+		reason, _ := s.pathExplain("localhost:7788")
+		assert.Contains(t, reason, "routes table")
+	})
+
+	t.Run("no Host at all", func(t *testing.T) {
+		s := server(t, Config{Mode: Subdomain}, Snapshot{})
+		reason, _ := s.pathExplain("")
+		assert.Contains(t, reason, "no Host header")
+	})
+}
+
+// The caveat must name a fix that exists. "Set a base path" named none, which
+// is how a reader ends up debugging the proxy instead of their mount point.
+func TestIndex_CaveatNamesTheRoutesFix(t *testing.T) {
+	s := server(t, Config{Mode: Path}, Snapshot{Routes: []Route{running("web", 4200)}})
+
+	out := body(t, s, get("localhost:7788", "/"))
+	assert.Contains(t, out, "/@vite/client", "the symptom, so it is searchable")
+	assert.Contains(t, out, `routes: {"/": name}`, "the config that fixes it")
+}
+
+// And no caveat at all when services have hostnames of their own.
+func TestIndex_NoCaveatWithATemplate(t *testing.T) {
+	cfg := Config{Bind: "127.0.0.1:7788", PublicHostname: "{service}-devrun.example.com"}
+	s := server(t, cfg, Snapshot{Routes: []Route{running("web", 4200)}, Exposed: []string{"web"}})
+
+	out := body(t, s, get("devrun.example.com", "/"))
+	assert.NotContains(t, out, "addressed by path")
+}

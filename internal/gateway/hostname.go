@@ -97,3 +97,27 @@ func (s *Server) serviceHost(reqHost, name string) string {
 	}
 	return subdomainHost(reqHost, name)
 }
+
+// pathExplain says why services are addressed by path, and what to do about
+// it when there is something specific to do.
+//
+// It exists because the commonest way to end up here is not configuring it:
+// opening the gateway at an IP address silently selects the one shape that
+// breaks a frontend's root-absolute asset URLs. A caveat that does not name
+// the cause leaves the reader to guess which of several things went wrong.
+func (s *Server) pathExplain(reqHost string) (reason, fix string) {
+	switch {
+	case len(s.cfg.Rules) > 0:
+		return "an explicit routes table is in use", ""
+	case !canSubdomain(reqHost):
+		host := hostOnly(reqHost)
+		if host == "" {
+			return "this request carried no Host header", ""
+		}
+		return "this gateway was reached at " + host +
+				", and a label cannot be put in front of an IP address",
+			"Opening it by name instead gives each service its own origin."
+	default:
+		return "mode: path is configured", ""
+	}
+}
