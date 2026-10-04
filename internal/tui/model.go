@@ -472,11 +472,19 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.Stop):
 		return m, m.doStop()
 
+	// p is a config change and nothing more: it never starts a tunnel.
+	// Assigned before the return, because toggleExposed takes a pointer
+	// receiver and sets a toast — in `return m, m.toggleExposed()` the Go
+	// spec leaves the evaluation of the operand m unordered against the call,
+	// so the copy could be taken before the toast was set and the message
+	// lost. Every neighbouring do* helper has a value receiver and mutates
+	// nothing, which is why only this one needs the care.
+	case key.Matches(msg, keys.Expose):
+		cmd := m.toggleExposed()
+		return m, cmd
+
 	// r restarts the selected service; on one that is not running it is simply
 	// a start, so there is no wrong state to press it in.
-	case key.Matches(msg, keys.Expose):
-		return m, m.toggleExposed()
-
 	case key.Matches(msg, keys.Restart):
 		cmd := m.doRestart()
 		if cmd != nil {
