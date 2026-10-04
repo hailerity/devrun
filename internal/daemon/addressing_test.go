@@ -1,0 +1,148 @@
+package daemon
+
+import (
+	"os"
+	"testing"
+
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/stretchr/testify/assert"
+)
+
+func svc(name string, status config.ServiceStatus, detected, declared int) *managedService {
+	cfg := &config.ServiceConfig{Name: name, Command: "x", Port: declared}
+	st := &config.ServiceState{Status: status}
+	if detected > 0 {
+		p := detected
+		st.Port = &p
+	}
+	return &managedService{cfg: cfg, state: st}
+}
+
+func TestURLVarName(t *testing.T) {
+	for in, want := range map[string]string{
+		"api":         "DEVRUN_URL_API",
+		"pimatix-web": "DEVRUN_URL_PIMATIX_WEB",
+		"a.b-c":       "DEVRUN_URL_A_B_C",
+		"web2":        "DEVRUN_URL_WEB2",
+	} {
+		assert.Equalf(t, want, URLVarName(in), "%q", in)
+	}
+}
+
+// Locally a service is reached at its own port, which is what makes the
+// variable useful at all: switching back to plain localhost is the default.
+func TestServiceURLs_Local(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	s.services["web"] = svc("web", config.StatusRunning, 0, 4200) // declared
+
+	urls := s.serviceURLsLocked()
+	assert.Equal(t, "http://localhost:3000", urls["DEVRUN_URL_API"])
+	assert.Equal(t, "http://localhost:4200", urls["DEVRUN_URL_WEB"], "a declared port counts")
+}
+
+// ServiceState.Port outlives the process that was listening on it, so a
+// stopped service would otherwise advertise an address nothing answers on.
+func TestServiceURLs_StoppedServiceWithAStalePort(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusStopped, 3000, 0)
+	s.services["web"] = svc("web", config.StatusStopped, 0, 4200)
+
+	urls := s.serviceURLsLocked()
+	assert.NotContains(t, urls, "DEVRUN_URL_API", "a detected port is only true while it is up")
+	assert.Equal(t, "http://localhost:4200", urls["DEVRUN_URL_WEB"],
+		"a declared port is config, true whether or not it is running")
+}
+
+func TestServiceURLs_NoPortMeansNoVariable(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["tauri"] = svc("tauri", config.StatusRunning, 0, 0)
+
+	assert.NotContains(t, s.serviceURLsLocked(), "DEVRUN_URL_TAURI",
+		"an absent variable beats a guessed port")
+}
+
+// Published, the same variable has to name the public address — that is the
+// whole point of it resolving in both worlds.
+func TestServiceURLs_PublishedWithAHostnameTemplate(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	s.services["admin"] = svc("admin", config.StatusRunning, 9000, 0)
+	s.gateway = &gatewayChild{pid: os.Getpid(), addr: "127.0.0.1:7788", cfg: config.GatewayConfig{
+		PublicHostname: "{service}-devrun.example.com",
+		Expose:         []string{"api"},
+	}}
+	s.tunnel = &tunnelChild{pid: os.Getpid(), kind: KindNamed, publicURL: "https://devrun.example.com"}
+
+	urls := s.serviceURLsLocked()
+	assert.Equal(t, "https://api-devrun.example.com", urls["DEVRUN_URL_API"])
+	assert.NotContains(t, urls, "DEVRUN_URL_ADMIN",
+		"published means the allowlist applies; a withheld service has no public address")
+}
+
+// Without a template, services hang off the tunnel's one hostname as paths.
+func TestServiceURLs_PublishedByPath(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	s.gateway = &gatewayChild{pid: os.Getpid(), cfg: config.GatewayConfig{Expose: []string{"api"}}}
+	s.tunnel = &tunnelChild{pid: os.Getpid(), kind: KindQuick, publicURL: "https://odd-mountain.trycloudflare.com"}
+
+	assert.Equal(t, "https://odd-mountain.trycloudflare.com/api/",
+		s.serviceURLsLocked()["DEVRUN_URL_API"])
+}
+
+// A tunnel whose URL could not be read is publishing, but devrun cannot say
+// where — so it hands out nothing rather than a wrong address.
+func TestServiceURLs_PublishedButURLUnknown(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	s.gateway = &gatewayChild{pid: os.Getpid(), cfg: config.GatewayConfig{Expose: []string{"api"}}}
+	s.tunnel = &tunnelChild{pid: os.Getpid(), kind: KindQuick, publicURL: ""}
+
+	assert.Equal(t, "http://localhost:3000", s.serviceURLsLocked()["DEVRUN_URL_API"],
+		"it falls back to the local address the app can still reach")
+}
+
+// The case the whole group exists for: Vite only exposes VITE_-prefixed
+// variables to client code, so the bridge has to happen in config.
+func TestServiceEnv_BridgesIntoAFrameworkPrefix(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	web := svc("web", config.StatusRunning, 0, 4200)
+	web.cfg.Env = map[string]string{"VITE_API_URL": "${DEVRUN_URL_API}"}
+	s.services["web"] = web
+
+	env := s.serviceEnvLocked(web.cfg)
+	assert.Equal(t, "http://localhost:3000", env["VITE_API_URL"])
+	assert.Equal(t, "http://localhost:3000", env["DEVRUN_URL_API"],
+		"the raw variable is there too, for frameworks that do not filter")
+	assert.Equal(t, "${DEVRUN_URL_API}", web.cfg.Env["VITE_API_URL"],
+		"the config itself is unchanged, so a restart re-expands from the template")
+}
+
+// An env value may reference the inherited environment too, not only what
+// devrun injects.
+func TestServiceEnv_FallsBackToTheInheritedEnvironment(t *testing.T) {
+	t.Setenv("DEVRUN_TEST_TOKEN", "sekrit")
+	s := quietSupervisor(t)
+	cfg := &config.ServiceConfig{Name: "web", Command: "x",
+		Env: map[string]string{"TOKEN": "${DEVRUN_TEST_TOKEN}"}}
+
+	assert.Equal(t, "sekrit", s.serviceEnvLocked(cfg)["TOKEN"])
+}
+
+// A service's own entry wins over an injected one of the same name, so an
+// explicit override is possible.
+func TestServiceEnv_ExplicitEntryWins(t *testing.T) {
+	s := quietSupervisor(t)
+	s.services["api"] = svc("api", config.StatusRunning, 3000, 0)
+	cfg := &config.ServiceConfig{Name: "web", Command: "x",
+		Env: map[string]string{"DEVRUN_URL_API": "http://somewhere-else"}}
+
+	assert.Equal(t, "http://somewhere-else", s.serviceEnvLocked(cfg)["DEVRUN_URL_API"])
+}
+
+func TestAddressablePort_NilSafe(t *testing.T) {
+	assert.Zero(t, addressablePort(nil))
+	assert.Zero(t, addressablePort(&managedService{}))
+}
