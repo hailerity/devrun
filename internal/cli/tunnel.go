@@ -188,30 +188,33 @@ func promptTunnel(cmd *cobra.Command, src config.Source) (config.TunnelConfig, e
 	}
 	fmt.Println()
 	fmt.Printf("Saved tunnel.name and tunnel.hostname to %s\n", path)
-	printSetupSteps(setupSteps(cfg.Name, names, known))
+	printSetupSteps(setupSteps(cfg, names, known))
 	return cfg, nil
 }
 
-// setupSteps is the account-level work devrun will not do, for a tunnel it
-// has just been told to use.
+// setupSteps is the Cloudflare-side work devrun will not do, for a tunnel it
+// has just been told to use: the whole sequence, in the order it must be run.
 //
-// Only what is known to be outstanding. An account that already has this
-// tunnel needs neither command, and telling someone to create what exists
-// teaches them to skim the next one. Unverifiable — no login, no daemon, no
-// cloudflared — lists both: unable to check is not the same as satisfied.
+// The two account-level commands are given only when they are outstanding. An
+// account that already has this tunnel needs neither, and telling someone to
+// create what exists teaches them to skim the next line. Unverifiable — no
+// login, no daemon, no cloudflared — lists both, because unable to check is
+// not the same as satisfied.
 //
-// DNS is deliberately absent. warnMissingDNS resolves each name after the
-// tunnel is up and prints only the records that are actually missing, and a
-// command worth printing is one worth running.
-func setupSteps(name string, names []string, known bool) []string {
+// The route always appears. It is per hostname, not per tunnel, so an
+// existing tunnel being reused under a new name still needs one, and this is
+// the first moment devrun knows the hostname. warnMissingDNS checks it for
+// real once the tunnel is up — here nothing is resolved, because a hostname
+// typed one line ago has had no chance to exist.
+func setupSteps(cfg config.TunnelConfig, names []string, known bool) []string {
 	var steps []string
 	if !known {
 		steps = append(steps, "cloudflared tunnel login")
 	}
-	if !contains(names, name) {
-		steps = append(steps, "cloudflared tunnel create "+name)
+	if !contains(names, cfg.Name) {
+		steps = append(steps, "cloudflared tunnel create "+cfg.Name)
 	}
-	return steps
+	return append(steps, "cloudflared tunnel route dns "+cfg.Name+" "+cfg.Hostname)
 }
 
 func printSetupSteps(steps []string) {
@@ -219,15 +222,17 @@ func printSetupSteps(steps []string) {
 		return
 	}
 	fmt.Println()
-	fmt.Println("The tunnel has to exist on your Cloudflare account before it can run.")
-	fmt.Println("devrun does not create it — that needs access to your account it has no")
-	fmt.Println("business holding:")
+	fmt.Println("Before this tunnel can serve, on your Cloudflare account. devrun does none")
+	fmt.Println("of it — that needs access to your account it has no business holding:")
 	fmt.Println()
 	for _, step := range steps {
 		fmt.Println("    " + step)
 	}
 	fmt.Println()
-	fmt.Println("Once it is up, devrun resolves each hostname and names any that is missing.")
+	fmt.Println("That hostname is the tunnel's own, where the service index is served, and")
+	fmt.Println("in path mode the only record there is. Giving each service a hostname adds")
+	fmt.Println("one record per published service; devrun resolves them all once the tunnel")
+	fmt.Println("is up and names any that is missing.")
 }
 
 func ask(in *bufio.Reader, prompt, fallback string) (string, error) {
