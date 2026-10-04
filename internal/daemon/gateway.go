@@ -426,14 +426,15 @@ func (s *supervisor) gatewayStatusLocked() ipc.GatewayStatusPayload {
 	}
 	pid := s.gateway.pid
 	return ipc.GatewayStatusPayload{
-		Running: true,
-		Addr:    s.gateway.addr,
-		Posture: s.gateway.cfg.Posture,
-		Mode:    s.gateway.cfg.Mode,
-		Token:   s.gateway.token,
-		Exposed: s.gateway.cfg.ExposedSet(),
-		PID:     &pid,
-		Tunnel:  s.tunnelStatusLocked(),
+		Running:        true,
+		Addr:           s.gateway.addr,
+		Posture:        s.gateway.cfg.Posture,
+		Mode:           s.gateway.cfg.Mode,
+		Token:          s.gateway.token,
+		Exposed:        s.gateway.cfg.ExposedSet(),
+		PID:            &pid,
+		PublicHostname: s.gateway.cfg.PublicHostname,
+		Tunnel:         s.tunnelStatusLocked(),
 	}
 }
 
