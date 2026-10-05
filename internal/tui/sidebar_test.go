@@ -157,15 +157,39 @@ func TestSidebar_CursorFollowsServiceThatCrashes(t *testing.T) {
 }
 
 func TestServiceRow_ShowsPortStateAndCPU(t *testing.T) {
-	running := plain(serviceRow(30, ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080), CPUPct: 2.14}, false))
+	running := plain(serviceRow(30, ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080), CPUPct: 2.14}, false, false))
 	assert.Contains(t, running, "● api")
 	assert.Contains(t, running, ":8080")
 	assert.Contains(t, running, "2.1%")
 
-	crashed := plain(serviceRow(30, ipc.ServiceInfo{Name: "chat", State: "crashed", CPUPct: 9}, false))
+	crashed := plain(serviceRow(30, ipc.ServiceInfo{Name: "chat", State: "crashed", CPUPct: 9}, false, false))
 	assert.Contains(t, crashed, "✖ chat")
 	assert.Contains(t, crashed, "crashed")
 	assert.NotContains(t, crashed, "%", "a service that is not running has no CPU figure")
+}
+
+// Toggling exposure with `p` wrote the allowlist and said so in a toast that
+// then vanished, leaving nothing on screen that said which services could
+// leave the machine.
+func TestServiceRow_MarksAnExposedService(t *testing.T) {
+	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080)}
+	assert.Contains(t, plain(serviceRow(30, svc, false, true)), "⇡")
+	assert.NotContains(t, plain(serviceRow(30, svc, false, false)), "⇡")
+}
+
+// The mark holds one column whether or not it is used, so it lines up down
+// the list — which is the whole reason it is a column and not a glyph tacked
+// onto the name.
+func TestServiceRow_ExposedMarkKeepsItsColumn(t *testing.T) {
+	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080)}
+	// By display column, not byte offset: "⇡" is three bytes where the unused
+	// mark is one space, so indexes differ by two while the column does not.
+	col := func(row string) int {
+		return lipgloss.Width(row[:strings.Index(row, ":8080")])
+	}
+	assert.Equal(t, col(plain(serviceRow(30, svc, false, true))),
+		col(plain(serviceRow(30, svc, false, false))),
+		"the state column does not shift when a row gains its mark")
 }
 
 // Every row — selected or not, any state — must be exactly the pane width, or
@@ -183,7 +207,7 @@ func TestServiceRow_AlwaysExactlyWidth(t *testing.T) {
 	for _, w := range []int{8, 17, 18, 25, 26, 30, 44} {
 		for _, svc := range svcs {
 			for _, sel := range []bool{false, true} {
-				assert.Equal(t, w, lipgloss.Width(serviceRow(w, svc, sel)), "width %d, %s, selected=%v", w, svc.Name, sel)
+				assert.Equal(t, w, lipgloss.Width(serviceRow(w, svc, sel, false)), "width %d, %s, selected=%v", w, svc.Name, sel)
 			}
 		}
 	}
@@ -191,13 +215,13 @@ func TestServiceRow_AlwaysExactlyWidth(t *testing.T) {
 
 func TestServiceRow_NarrowDropsCPUThenState(t *testing.T) {
 	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080), CPUPct: 12.5}
-	assert.Contains(t, plain(serviceRow(rowMinWForCPU, svc, false)), "12.5%")
+	assert.Contains(t, plain(serviceRow(rowMinWForCPU, svc, false, false)), "12.5%")
 
-	noCPU := plain(serviceRow(rowMinWForCPU-1, svc, false))
+	noCPU := plain(serviceRow(rowMinWForCPU-1, svc, false, false))
 	assert.NotContains(t, noCPU, "12.5%")
 	assert.Contains(t, noCPU, ":8080")
 
-	assert.NotContains(t, plain(serviceRow(rowMinWForState-1, svc, false)), ":8080")
+	assert.NotContains(t, plain(serviceRow(rowMinWForState-1, svc, false, false)), ":8080")
 }
 
 func TestCPUColor_OnlyBusyIsColoured(t *testing.T) {

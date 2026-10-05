@@ -30,6 +30,11 @@ type sidebar struct {
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
 
+	// exposed names the services that may leave this machine. Held here, not
+	// read off ipc.ServiceInfo, because the allowlist belongs to the gateway
+	// and applies to services whether or not one is running.
+	exposed map[string]bool
+
 	loaded bool // true once the first daemon poll has resolved (response or error)
 }
 
@@ -307,7 +312,8 @@ func (s *sidebar) render(width int) string {
 	first, last := s.window()
 	rows := make([]string, 0, last-first)
 	for i := first; i < last; i++ {
-		rows = append(rows, serviceRow(width, s.services[i], i == s.selected))
+		svc := s.services[i]
+		rows = append(rows, serviceRow(width, svc, i == s.selected, s.exposed[svc.Name]))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -321,10 +327,15 @@ func (s *sidebar) window() (first, last int) {
 	return first, min(len(s.services), first+s.rows)
 }
 
-// Column widths of a service row: " ● name  :8080   2.1%".
+// Column widths of a service row: " ● name  ⇡  :8080   2.1%".
 const (
 	rowStateW = 9 // "detecting" / "stopping" — the longest state token
 	rowCPUW   = 6 // "100.0%"
+	// A column of its own rather than a glyph beside the name: the mark stays
+	// aligned down the list, so "which of these can leave the machine" is one
+	// glance rather than a read. It costs its two columns on every row,
+	// including when nothing is exposed, which is the price of that alignment.
+	rowExposedW = 1
 	// Below these row widths the CPU column, then the state column, is dropped
 	// so the name keeps a usable share of a narrow sidebar.
 	rowMinWForCPU   = 27
@@ -335,7 +346,7 @@ const (
 // state, CPU — exactly `width` columns wide. Every segment of a selected row
 // carries the selection background itself, so an SGR reset inside one styled
 // segment cannot punch a hole in the highlight.
-func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
+func serviceRow(width int, svc ipc.ServiceInfo, selected, exposed bool) string {
 	base := lipgloss.NewStyle()
 	if selected {
 		base = base.Background(colorSelSidebar)
@@ -344,6 +355,7 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
 	showCPU := width >= rowMinWForCPU
 
 	nameW := width - 3 // margin + glyph + space
+	nameW -= 1 + rowExposedW
 	if showState {
 		nameW -= 1 + rowStateW
 	}
@@ -355,6 +367,15 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected bool) string {
 	glyph, glyphFg := stateGlyph(svc.State)
 	row := base.Foreground(glyphFg).Render(" "+glyph) +
 		base.Foreground(colorText).Render(" "+padRight(truncateName(svc.Name, nameW), nameW))
+
+	// Amber, as the header's published chip is: the two say the same thing at
+	// different scales, and a reader should not have to learn two colours for
+	// "can leave this machine".
+	mark := " "
+	if exposed {
+		mark = "⇡"
+	}
+	row += base.Foreground(colorYellow).Render(" " + mark)
 
 	if showState {
 		// A running service shows where to reach it; any other state is named,

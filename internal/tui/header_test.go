@@ -70,3 +70,36 @@ func TestHeader_GatewayIndicator(t *testing.T) {
 	}, 80))
 	assert.Contains(t, tunnelled, "tunnelled")
 }
+
+// The bug this guards: the header read the *configured* posture, which
+// `devrun tunnel up` does not change — the gateway decides it is published at
+// request time from Snapshot().Tunnelled. So a tunnel on a default-posture
+// gateway drew the quiet local label while the services were on the internet.
+func TestGatewayLabel_ATunnelIsPublishedWhateverThePostureSays(t *testing.T) {
+	got := plain(gatewayLabel(&ipc.GatewayStatusPayload{
+		Running: true,
+		Posture: config.PostureAuto,
+		Exposed: []string{"web", "api"},
+		Tunnel:  &ipc.TunnelStatusPayload{Running: true, Kind: "named"},
+	}))
+	assert.Contains(t, got, "tunnelled")
+	assert.Contains(t, got, "2", "how much is behind the open door")
+}
+
+// Nothing exposed is the state a first tunnel lands in, and it looks like a
+// broken tunnel: every service answers 404. The count has to say zero rather
+// than go quiet.
+func TestGatewayLabel_CountsZeroOutLoud(t *testing.T) {
+	got := plain(gatewayLabel(&ipc.GatewayStatusPayload{
+		Running: true,
+		Tunnel:  &ipc.TunnelStatusPayload{Running: true, Kind: "quick"},
+	}))
+	assert.Contains(t, got, "tunnelled 0")
+}
+
+// A running gateway is something that is on, and grey reads as off.
+func TestGatewayLabel_LocalIsGreenNotGrey(t *testing.T) {
+	got := gatewayLabel(&ipc.GatewayStatusPayload{Running: true, Posture: config.PostureAuto})
+	assert.Equal(t, styleGreen.Render("◎ gateway"), got)
+	assert.NotEqual(t, styleMuted.Render("◎ gateway"), got)
+}
