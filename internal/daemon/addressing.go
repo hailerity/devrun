@@ -181,16 +181,18 @@ func (s *supervisor) serviceEnvLocked(cfg *config.ServiceConfig) map[string]stri
 // answers "where can a person click", which only the gateway can provide:
 // without it there is no single place to send someone.
 //
-// Locally the service goes on the path, whatever the gateway's mode. Resolve
-// accepts both shapes regardless of Mode — Mode governs only which the index
-// advertises — so a path URL always reaches the service, and this avoids
-// re-deciding host-versus-path in a second place. internal/gateway's
-// pathLinks is the one place that decision is made, and it stays that way.
+// Locally the shape follows the gateway's own: a subdomain where it would
+// link to one, a path otherwise. Both reach the service — Resolve accepts
+// either regardless of Mode — but they are not interchangeable to a browser.
+// A path prefix breaks root-absolute asset URLs, so handing out the path form
+// for a gateway that would have offered a hostname gives a link that arrives
+// at a broken page.
 func (s *supervisor) serviceAddressesLocked() map[string]string {
 	if s.gateway == nil || !pidAlive(s.gateway.pid) {
 		return nil
 	}
-	local := "http://" + config.DisplayHost(s.gateway.addr) + "/"
+	host := config.DisplayHost(s.gateway.addr)
+	byPath := s.gateway.cfg.LocalLinksByPath(host)
 	published := s.publishedBaseLocked()
 
 	out := map[string]string{}
@@ -206,7 +208,11 @@ func (s *supervisor) serviceAddressesLocked() map[string]string {
 			}
 			continue
 		}
-		out[name] = local + name + "/"
+		if byPath {
+			out[name] = "http://" + host + "/" + name + "/"
+			continue
+		}
+		out[name] = "http://" + name + "." + host + "/"
 	}
 	return out
 }

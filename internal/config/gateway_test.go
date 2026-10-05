@@ -219,15 +219,41 @@ func TestGatewayConfig_ValidatePublicHostname(t *testing.T) {
 // A wildcard bind is where the gateway listens, not somewhere a person can
 // go. Only presentation rewrites it: Posture reads the real address, and
 // changing it there would report a wildcard bind as local.
+// A loopback address becomes localhost, not only a wildcard one.
+//
+// This is not cosmetic. A label cannot be put in front of an IP, so the
+// gateway serves path links to anyone who arrives at 127.0.0.1 — the one
+// shape that breaks a frontend's root-absolute asset URLs, selected silently
+// and in spite of mode: subdomain being the default. Printing the IP handed
+// people that URL and then explained, on the page it opened, that they should
+// have opened it by name.
 func TestDisplayHost(t *testing.T) {
 	for addr, want := range map[string]string{
 		"0.0.0.0:7788":   "localhost:7788",
 		"[::]:7788":      "localhost:7788",
-		"127.0.0.1:7788": "127.0.0.1:7788",
-		"192.168.1.8:80": "192.168.1.8:80",
+		"127.0.0.1:7788": "localhost:7788",
+		"[::1]:7788":     "localhost:7788",
+		"192.168.1.8:80": "192.168.1.8:80", // a LAN address names this machine to others
 		"localhost:7788": "localhost:7788",
 		"garbage":        "garbage",
 	} {
 		assert.Equalf(t, want, config.DisplayHost(addr), "%q", addr)
 	}
+}
+
+func TestLocalLinksByPath(t *testing.T) {
+	subdomain := config.GatewayConfig{Mode: config.ModeSubdomain}
+	assert.False(t, subdomain.LocalLinksByPath("localhost:7788"))
+	assert.True(t, subdomain.LocalLinksByPath("127.0.0.1:7788"),
+		"web.127.0.0.1 resolves nowhere, so there is no hostname to offer")
+
+	assert.True(t, config.GatewayConfig{Mode: config.ModePath}.LocalLinksByPath("localhost:7788"),
+		"asked for, so honoured")
+
+	withRoutes := config.GatewayConfig{
+		Mode:   config.ModeSubdomain,
+		Routes: map[string]config.GatewayRoute{"/": {Service: "web"}},
+	}
+	assert.True(t, withRoutes.LocalLinksByPath("localhost:7788"),
+		"an explicit routes table is a set of paths already")
 }

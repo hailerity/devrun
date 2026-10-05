@@ -2,6 +2,7 @@ package ops
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/hailerity/devrun/internal/config"
@@ -41,4 +42,50 @@ func TestServicePlaceholderSurvivesConfigToGateway(t *testing.T) {
 	require.Equal(t, gateway.OK, outcome,
 		"the gateway must split the same template config just validated")
 	assert.Equal(t, "web", target.Service)
+}
+
+// config.GatewayConfig.LocalLinksByPath decides the shape of the URLs devrun
+// prints — `gateway status`, `list`, the TUI's details pane. The gateway's own
+// pathLinks decides the shape of the links on its index page. They are in
+// packages that cannot import each other, so nothing in the compiler holds
+// them equal.
+//
+// Drift would not fail loudly. devrun would print a subdomain URL for a
+// gateway serving paths, or a path URL for one serving subdomains — both
+// reach the service, so nothing errors; the second just arrives at a page
+// whose root-absolute assets 404, which is the failure public_hostname and
+// mode exist to avoid.
+//
+// Asserted through the rendered index, since pathLinks is unexported: a
+// subdomain link carries the service's own host, a path link does not.
+func TestLocalLinksMatchTheGatewaysOwnChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.GatewayConfig
+		host string
+	}{
+		{"subdomain at a name", config.GatewayConfig{}, "localhost:7788"},
+		{"subdomain at an IP", config.GatewayConfig{}, "127.0.0.1:7788"},
+		{"mode path", config.GatewayConfig{Mode: config.ModePath}, "localhost:7788"},
+		{"routes table", config.GatewayConfig{
+			Routes: map[string]config.GatewayRoute{"/admin": {Service: "web"}},
+		}, "localhost:7788"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			full := tc.cfg.Defaults()
+			srv := gateway.New(GatewayServerConfig(full, "test"))
+			srv.SetSnapshot(gateway.Snapshot{
+				Routes: []gateway.Route{{Name: "web", State: "running", Port: 4200}},
+			})
+
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Host = tc.host
+			w := httptest.NewRecorder()
+			srv.ServeHTTP(w, r)
+
+			servedByPath := !strings.Contains(w.Body.String(), "web."+tc.host)
+			assert.Equal(t, servedByPath, full.LocalLinksByPath(tc.host),
+				"the URL devrun prints must have the shape the index links to")
+		})
+	}
 }

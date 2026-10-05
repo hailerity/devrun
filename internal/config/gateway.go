@@ -344,8 +344,38 @@ func DisplayHost(addr string) string {
 	if err != nil {
 		return addr
 	}
-	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && ip.IsUnspecified() {
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil && (ip.IsUnspecified() || ip.IsLoopback()) {
 		return net.JoinHostPort("localhost", port)
 	}
 	return addr
+}
+
+// LocalLinksByPath reports whether a service at this gateway is reached by a
+// path rather than a hostname of its own, for someone browsing from this
+// machine.
+//
+// It mirrors internal/gateway's pathLinks for the local case, where the
+// request always counts as coming from here and the public_hostname template
+// therefore never applies — that template names where a service lives when
+// published, which is not where it lives at localhost:7788.
+//
+// That package does not import this one, so nothing in the compiler holds the
+// two together. TestLocalLinksMatchTheGatewaysOwnChoice in internal/ops does,
+// that being the one package importing both.
+func (g GatewayConfig) LocalLinksByPath(host string) bool {
+	// An explicit routes table is a set of paths already.
+	if len(g.Routes) > 0 || g.Mode == ModePath {
+		return true
+	}
+	// A label cannot go in front of an IP address: web.127.0.0.1 resolves
+	// nowhere, so there is no hostname to offer.
+	return net.ParseIP(strings.Trim(hostOnly(host), "[]")) != nil
+}
+
+// hostOnly strips a port and IPv6 brackets, leaving the host.
+func hostOnly(hostport string) string {
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		return h
+	}
+	return hostport
 }
