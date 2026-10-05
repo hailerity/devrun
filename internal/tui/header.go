@@ -59,19 +59,33 @@ func (h headerBar) render(source string, total, running, crashed, frame int, spi
 // gatewayLabel is the header's word on the gateway, and empty when none runs.
 //
 // Published is amber, not green: it is the state worth noticing, because
-// something off this machine can reach the services. A tunnel says so with
-// the glyph, since "published" alone does not distinguish a tunnel devrun
-// runs from a proxy someone else put in front.
+// something off this machine can reach the services. A tunnel says so in the
+// word, since "published" alone does not distinguish a tunnel devrun runs
+// from a proxy someone else put in front.
+//
+// A running tunnel counts as published whatever the config says. The
+// gateway's own Posture() reaches that from Snapshot().Tunnelled, which is
+// what turns the allowlist and the token on; reading only the configured
+// posture showed a quiet "gateway" at the exact moment the services were
+// reachable from the internet.
 func gatewayLabel(gw *ipc.GatewayStatusPayload) string {
 	if gw == nil || !gw.Running {
 		return ""
 	}
-	if gw.Posture == config.PosturePublished {
-		word := "published"
-		if gw.Tunnel != nil && gw.Tunnel.Running {
-			word = "tunnelled"
-		}
-		return styleYellow.Render("◉ " + word)
+	word := ""
+	switch {
+	case gw.Tunnel != nil && gw.Tunnel.Running:
+		word = "tunnelled"
+	case gw.Posture == config.PosturePublished:
+		word = "published"
+	default:
+		// Green rather than muted: the gateway running is a thing that is on,
+		// and grey reads as off.
+		return styleGreen.Render("◎ gateway")
 	}
-	return styleMuted.Render("◎ gateway")
+	// The count is the question anyone reading this actually has — published
+	// says the door is open, and this says how much is behind it. Zero is
+	// worth printing loudest of all: a tunnel with nothing exposed serves 404
+	// to every service, which looks like a broken tunnel.
+	return styleYellow.Render(fmt.Sprintf("◉ %s %d", word, len(gw.Exposed)))
 }

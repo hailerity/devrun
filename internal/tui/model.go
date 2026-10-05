@@ -165,6 +165,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.gateway = msg.payload.Gateway
 		scoped := m.scopedServices(msg.payload.Services)
 		m.sidebarC.update(scoped, m.buildTargets())
+		// After m.gateway is set, so the marks and the header's count come
+		// from the same poll: a row saying a service is published while the
+		// header still says nothing is would be worse than either alone.
+		m.sidebarC.exposed = m.exposedSet(scoped)
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -1619,6 +1623,10 @@ func (m *model) toggleExposed() tea.Cmd {
 		}
 		m.registry.Gateway.SetExposed([]string{name}, want)
 	}
+	// Re-mark the rows now. With a gateway this reads the same answer the
+	// poll below will confirm; with none it is the only refresh there is,
+	// since that path returns without polling.
+	m.sidebarC.exposed = m.exposedSet(m.sidebarC.services)
 	if m.gateway == nil || !m.gateway.Running {
 		// Recorded for next time; there is no gateway to tell.
 		m.footerC.showToast(describeExposed(name, want) + " (gateway is not running)")
@@ -1649,6 +1657,18 @@ func (m *model) toggleExposed() tea.Cmd {
 // makes the toggle one-way: a service the file already exposes would read as
 // not exposed, every press would compute "expose", and there would be no way
 // to withhold it from the TUI without the daemon up.
+// exposedSet answers isExposed for a whole list at once, which is what the
+// sidebar needs to mark its rows.
+func (m model) exposedSet(svcs []ipc.ServiceInfo) map[string]bool {
+	out := make(map[string]bool, len(svcs))
+	for _, svc := range svcs {
+		if m.isExposed(svc.Name) {
+			out[svc.Name] = true
+		}
+	}
+	return out
+}
+
 func (m model) isExposed(name string) bool {
 	if m.gateway != nil && m.gateway.Running {
 		return slices.Contains(m.gateway.Exposed, name)
