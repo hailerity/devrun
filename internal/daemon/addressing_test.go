@@ -193,22 +193,37 @@ func TestServiceAddresses_LocalAndPublicTogether(t *testing.T) {
 	assert.Equal(t, "https://web-devrun.example.com", got["web"].public)
 }
 
-// The other half of the same question, and the answer is no: once a tunnel
-// runs the gateway applies the allowlist to requests from this machine too,
-// so a withheld service has no working address at all. Measured — a local
-// request for one is a 404, not a 200.
-func TestServiceAddresses_WithheldServiceHasNoLocalURLUnderATunnel(t *testing.T) {
+// Publishing takes a withheld service off the internet, not off this
+// machine: the gateway judges a request by its Host, and a browser at
+// localhost is not the tunnel. So db keeps its local address throughout, and
+// never gains a public one.
+//
+// This is the assertion an earlier version of this test had backwards, from
+// measuring a gateway with Snapshot.Tunnelled set — which nothing outside a
+// test ever does.
+func TestServiceAddresses_AWithheldServiceKeepsItsLocalURL(t *testing.T) {
 	cfg := config.GatewayConfig{Mode: config.ModeSubdomain, Expose: []string{"web"}}
 
 	withTunnel := addressSupervisor(t, cfg, true).serviceAddressesLocked()
-	_, listed := withTunnel["db"]
-	assert.False(t, listed, "a link that 404s is worse than no link")
+	assert.Equal(t, "http://db.localhost:7788/", withTunnel["db"].local)
+	assert.Empty(t, withTunnel["db"].public, "not exposed, so nowhere public to point")
 
-	// Without one, nothing is withheld and both services have an address.
 	noTunnel := addressSupervisor(t, cfg, false).serviceAddressesLocked()
 	assert.Equal(t, "http://db.localhost:7788/", noTunnel["db"].local)
-	assert.Empty(t, noTunnel["db"].public)
 	assert.Empty(t, noTunnel["web"].public, "no tunnel, nothing published")
+}
+
+// Binding off loopback is the case that does withhold locally: the gateway
+// treats every request as published, because the machine itself is reachable
+// from elsewhere.
+func TestServiceAddresses_ALANBindWithholdsLocallyToo(t *testing.T) {
+	got := addressSupervisor(t, config.GatewayConfig{
+		Bind: "0.0.0.0", Mode: config.ModeSubdomain, Expose: []string{"web"},
+	}, false).serviceAddressesLocked()
+
+	_, listed := got["db"]
+	assert.False(t, listed, "the gateway would 404 it, so there is no address to give")
+	assert.NotEmpty(t, got["web"].local)
 }
 
 // addressSupervisor is a supervisor with a live gateway and two services, one

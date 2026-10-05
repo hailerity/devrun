@@ -375,18 +375,22 @@ func (g GatewayConfig) LocalLinksByPath(host string) bool {
 // LocalAllowlistApplies reports whether the gateway withholds a service from
 // a request made on this machine.
 //
-// It does so as soon as anything may be publishing it, which is the point:
-// the allowlist cannot be relaxed for "local" requests when the thing that
-// might be lying about being local is the proxy in front. A tunnel is enough
-// on its own, whatever the configured posture.
+// Notably a running tunnel does not: a request arriving through one carries
+// the public hostname, which fails the gateway's own hostIsSelf check and is
+// treated as published on that evidence, while a browser at localhost is
+// not. So publishing takes a withheld service off the internet without taking
+// it off your own machine.
 //
-// The consequence worth knowing is that starting a tunnel takes a withheld
-// service off your *own* browser too, so devrun has no local address to offer
-// for it. internal/gateway's Posture is where this is really decided;
+// gateway.Snapshot has a Tunnelled field that would force published for every
+// request, and it would do exactly that — but nothing sets it outside tests
+// (internal/ops/gateway.go builds the only production snapshot). Writing this
+// rule to match it would have withheld local addresses the gateway serves.
+//
+// internal/gateway's Posture is where this is really decided;
 // TestLocalAllowlistMatchesTheGatewaysPosture in internal/ops holds the two
 // together.
-func (g GatewayConfig) LocalAllowlistApplies(tunnelled bool) bool {
-	return tunnelled || g.Posture == PosturePublished || !bindIsLoopback(g.Bind)
+func (g GatewayConfig) LocalAllowlistApplies() bool {
+	return g.Posture == PosturePublished || !bindIsLoopback(g.Bind)
 }
 
 // bindIsLoopback reports whether the listen address reaches only this machine.

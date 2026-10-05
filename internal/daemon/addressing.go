@@ -194,10 +194,10 @@ func (s *supervisor) serviceAddressesLocked() map[string]serviceAddress {
 	host := config.DisplayHost(s.gateway.addr)
 	byPath := s.gateway.cfg.LocalLinksByPath(host)
 	published := s.publishedBaseLocked()
-	// Withheld locally too, once anything may be publishing this gateway —
-	// see GatewayConfig.LocalAllowlistApplies. Measured: with a tunnel up, a
-	// request from this machine to a service not on the allowlist is a 404.
-	filtered := s.gateway.cfg.LocalAllowlistApplies(s.tunnel != nil && pidAlive(s.tunnel.pid))
+	// A tunnel is deliberately absent from this: it publishes a service
+	// without withholding it from this machine, so a local address stays
+	// worth printing. See GatewayConfig.LocalAllowlistApplies.
+	filtered := s.gateway.cfg.LocalAllowlistApplies()
 	exposed := s.gateway.cfg.ExposedSet()
 
 	out := map[string]serviceAddress{}
