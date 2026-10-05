@@ -286,7 +286,9 @@ path        localhost:7788/web/         one origin for everything
 loopback with no setup, and it keeps a frontend's relative `/api/...` calls
 working through its own dev server's proxy, exactly as they do at
 `localhost:4200`. Reaching the gateway at an **IP** forces path links, because
-`web.127.0.0.1` resolves nowhere — so open it by name.
+`web.127.0.0.1` resolves nowhere — so open it by name. Every URL devrun prints
+for a loopback gateway uses `localhost` for that reason, and names each service
+the way the gateway would link to it.
 
 ### Path mode breaks root-absolute asset URLs
 
