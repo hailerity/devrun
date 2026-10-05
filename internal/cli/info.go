@@ -166,10 +166,19 @@ func runServiceInfo(name string) error {
 			styleValue.Render(svc.Group),
 		)
 	}
-	if url := serviceURL(name); url != "" {
+	local, public := serviceURLs(name)
+	if local != "" {
 		fmt.Printf("  %s  %s\n",
 			styleLabel.Render("url"),
-			styleAccent.Render(url),
+			styleAccent.Render(local),
+		)
+	}
+	if public != "" {
+		// Beside the local address, not instead of it: both work, and only
+		// one of them can be reached by anyone.
+		fmt.Printf("  %s  %s\n",
+			styleLabel.Render("public"),
+			styleYellow.Render(public),
 		)
 	}
 	if svc.Desc != "" {
@@ -213,22 +222,23 @@ func isDaemonRunning(socketPath string) bool {
 	return true
 }
 
-// serviceURL is where this service can be opened, when the gateway is up and
-// serving it. Empty otherwise, and empty on any failure: `devrun info` must
-// still describe a service when the daemon is down.
-func serviceURL(name string) string {
+// serviceURLs is where this service can be opened: from this machine, and
+// from anywhere when a tunnel publishes it. Either may be empty, and both are
+// on any failure: `devrun info` must still describe a service when the daemon
+// is down.
+func serviceURLs(name string) (local, public string) {
 	reg, _, err := activeRegistry()
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	res, err := ops.List(&ops.Resolved{Registry: reg})
 	if err != nil || res.Offline {
-		return ""
+		return "", ""
 	}
 	for _, svc := range res.Services {
 		if svc.Name == name {
-			return svc.URL
+			return svc.URL, svc.PublicURL
 		}
 	}
-	return ""
+	return "", ""
 }

@@ -89,3 +89,37 @@ func TestLocalLinksMatchTheGatewaysOwnChoice(t *testing.T) {
 		})
 	}
 }
+
+// Starting a tunnel makes the gateway withhold a non-exposed service from
+// requests on this machine too — Posture checks Snapshot().Tunnelled before
+// it looks at the request's Host. The daemon has to know that to decide
+// whether it has a local URL to offer, and it cannot ask the gateway, so
+// config.GatewayConfig.LocalAllowlistApplies says it a second time.
+//
+// Drift would hand out a local URL for a service the gateway 404s, which is
+// the worse direction: a link that looks fine and is not.
+func TestLocalAllowlistMatchesTheGatewaysPosture(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cfg       config.GatewayConfig
+		tunnelled bool
+	}{
+		{"plain local gateway", config.GatewayConfig{}, false},
+		{"tunnel running", config.GatewayConfig{}, true},
+		{"posture published", config.GatewayConfig{Posture: config.PosturePublished}, false},
+		{"bound to the LAN", config.GatewayConfig{Bind: "0.0.0.0"}, false},
+		{"bound to the LAN with a tunnel", config.GatewayConfig{Bind: "192.168.1.8"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			full := tc.cfg.Defaults()
+			srv := gateway.New(GatewayServerConfig(full, "test"))
+			srv.SetSnapshot(gateway.Snapshot{Tunnelled: tc.tunnelled})
+
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Host = "localhost:7788"
+			assert.Equal(t, srv.Posture(r) == gateway.Published,
+				full.LocalAllowlistApplies(tc.tunnelled),
+				"a local URL may only be offered when the gateway would serve it")
+		})
+	}
+}

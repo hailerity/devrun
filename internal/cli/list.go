@@ -65,7 +65,7 @@ var listHeaders = []string{"NAME", "GROUP", "STATE", "PID", "PORT", "UPTIME", "C
 // long, and a column of dashes would cost every local user width for nothing.
 func listHeadersFor(svcs []ipc.ServiceInfo) []string {
 	for _, s := range svcs {
-		if s.URL != "" {
+		if displayURL(s) != "" {
 			return append(append([]string{}, listHeaders...), "URL")
 		}
 	}
@@ -104,11 +104,21 @@ func serviceRowCellsFor(svc ipc.ServiceInfo, headers []string) []string {
 	if len(headers) == len(listHeaders) {
 		return cells
 	}
-	url := svc.URL
+	url := displayURL(svc)
 	if url == "" {
 		url = "-"
 	}
 	return append(cells, url)
+}
+
+// displayURL is the one address a single table column can hold. The public
+// one wins: that a service is reachable from anywhere is the more surprising
+// fact of the two, and `devrun info` has room for both.
+func displayURL(svc ipc.ServiceInfo) string {
+	if svc.PublicURL != "" {
+		return svc.PublicURL
+	}
+	return svc.URL
 }
 
 func printServiceTable(svcs []ipc.ServiceInfo) {

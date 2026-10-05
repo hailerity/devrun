@@ -77,6 +77,12 @@ func detailLines(svc *ipc.ServiceInfo, cfg *config.ServiceConfig) []detailLine {
 		// `y` puts the address on the clipboard ready to paste or share.
 		status = append(status, [3]string{"url", styleAccent.Render(svc.URL), svc.URL})
 	}
+	if svc.PublicURL != "" {
+		// Beside the local one, not instead of it. Amber, as every other
+		// "this can be reached from off the machine" marker is, so the row
+		// that matters is the one that stands out.
+		status = append(status, [3]string{"public", styleYellow.Render(svc.PublicURL), svc.PublicURL})
+	}
 	status = append(status, [][3]string{
 		{"uptime", formatUptimeFull(svc.UptimeSec), formatUptimeFull(svc.UptimeSec)},
 		{"cpu", renderCPUFull(svc.CPUPct), fmt.Sprintf("%.1f%%", svc.CPUPct)},
