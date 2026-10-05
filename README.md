@@ -143,6 +143,8 @@ except services another active target still holds.
 | `devrun logs <name>` | Print last 100 log lines |
 | `devrun logs <name> -f` | Follow log output (like `tail -f`) |
 | `devrun logs <name> -n 50` | Print last N lines |
+| `devrun info` | Version, daemon, gateway and tunnel state, and where every file lives |
+| `devrun info <name>` | One service: state, command, directory, env, URLs |
 
 ### Publishing
 
