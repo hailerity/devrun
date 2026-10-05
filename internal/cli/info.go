@@ -11,6 +11,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/daemon"
+	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/ops"
 )
 
@@ -52,6 +54,8 @@ func runSysInfo() error {
 		styleValue.Render(socketPath),
 	)
 
+	printChildInfo(socketPath)
+
 	fmt.Println(styleBold.Render("paths"))
 	if _, src, err := activeRegistry(); err == nil && src.IsLocal() {
 		fmt.Printf("  %s  %s  %s\n",
@@ -77,8 +81,102 @@ func runSysInfo() error {
 		styleLabel.Render("logs"),
 		styleValue.Render(filepath.Join(config.DataDir(), "logs")),
 	)
+	fmt.Printf("  %s  %s\n",
+		styleLabel.Render("tunnel"),
+		styleValue.Render(daemon.TunnelLogPath()),
+	)
+	// The gateway's stderr has no fixed home: it goes to a temp file that is
+	// read back only if the child fails and then removed. Naming the variable
+	// is the whole point of the line — it is the only way to keep that output,
+	// and nothing else in devrun mentions it.
+	gwLog := os.Getenv("DEVRUN_GATEWAY_LOG")
+	if gwLog == "" {
+		gwLog = "(a temp file; set DEVRUN_GATEWAY_LOG to keep it)"
+	}
+	fmt.Printf("  %s %s\n",
+		styleLabel.Render("gateway"),
+		styleValue.Render(gwLog),
+	)
 
 	return nil
+}
+
+// printChildInfo reports the two long-lived children devrun may run besides
+// the daemon: whether each is up, where, and under which pid.
+//
+// Deliberately not what they serve — that is `devrun gateway status` and
+// `devrun tunnel status`, which list services and their URLs. This answers
+// the question `info` already answers for the daemon, for the two processes
+// that can fail to start and leave nothing behind to look at.
+//
+// The token is omitted although the status payload carries it. `devrun info`
+// is the output people paste into a bug report, and a gateway token is a
+// credential; `gateway status` is where it belongs.
+func printChildInfo(socketPath string) {
+	st, err := ops.GatewayStatus(socketPath)
+	if err != nil {
+		// No daemon, or it could not answer. Either way nothing is running
+		// that this can describe, which the zero payload already says.
+		st = ipc.GatewayStatusPayload{}
+	}
+	for _, line := range childInfoLines(st) {
+		fmt.Println(line)
+	}
+}
+
+// childInfoLines renders the gateway and tunnel blocks. Separate from the
+// printing so a test can read them without a daemon — including the one
+// assertion that matters, that the token never appears.
+func childInfoLines(st ipc.GatewayStatusPayload) []string {
+	if !st.Running {
+		return []string{
+			fmt.Sprintf("%s  %s", styleBold.Render("gateway"), styleLabel.Render("not running")),
+			"",
+		}
+	}
+
+	out := []string{
+		fmt.Sprintf("%s  %s", styleBold.Render("gateway"), styleGreen.Render("running")),
+		field("url", styleAccent.Render("http://"+config.DisplayHost(st.Addr)+"/")),
+	}
+	if st.PID != nil {
+		out = append(out, field("pid", styleValue.Render(fmt.Sprintf("%d", *st.PID))))
+	}
+	out = append(out, field("mode", styleValue.Render(st.Mode)+styleLabel.Render("  posture: "+st.Posture)))
+	if st.PublicHostname != "" {
+		out = append(out, field("hosts", styleValue.Render(st.PublicHostname)))
+	}
+	out = append(out, "")
+
+	t := st.Tunnel
+	if t == nil || !t.Running {
+		return append(out,
+			fmt.Sprintf("%s   %s", styleBold.Render("tunnel"), styleLabel.Render("not running")),
+			"")
+	}
+	out = append(out, fmt.Sprintf("%s   %s", styleBold.Render("tunnel"), styleGreen.Render("running")))
+
+	where := styleAccent.Render(t.PublicURL)
+	if t.PublicURL == "" {
+		where = styleLabel.Render("unknown — cloudflared is up but its banner could not be read")
+	}
+	out = append(out, field("url", where))
+
+	kind := styleValue.Render(t.Kind)
+	if t.Name != "" {
+		kind += styleLabel.Render("  " + t.Name)
+	}
+	out = append(out, field("kind", kind))
+	if t.PID != nil {
+		out = append(out, field("pid", styleValue.Render(fmt.Sprintf("%d", *t.PID))))
+	}
+	return append(out, "")
+}
+
+// field is one indented label/value row, the label padded to the longest in
+// use here so values line up down both blocks.
+func field(label, value string) string {
+	return fmt.Sprintf("  %s  %s", styleLabel.Render(fmt.Sprintf("%-5s", label)), value)
 }
 
 func runServiceInfo(name string) error {
