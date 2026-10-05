@@ -177,3 +177,54 @@ func TestServiceURLs_PunctuatedNameAlone(t *testing.T) {
 
 	assert.Equal(t, "http://localhost:3000", s.serviceURLsLocked()["DEVRUN_URL_A_B"])
 }
+
+// A service is reachable locally and publicly at the same time, and devrun
+// used to report only the public address — taking away the one being
+// developed against the moment a tunnel started.
+func TestServiceAddresses_LocalAndPublicTogether(t *testing.T) {
+	s := addressSupervisor(t, config.GatewayConfig{
+		Mode:           config.ModeSubdomain,
+		PublicHostname: "{service}-devrun.example.com",
+		Expose:         []string{"web"},
+	}, true)
+
+	got := s.serviceAddressesLocked()
+	assert.Equal(t, "http://web.localhost:7788/", got["web"].local)
+	assert.Equal(t, "https://web-devrun.example.com", got["web"].public)
+}
+
+// The other half of the same question, and the answer is no: once a tunnel
+// runs the gateway applies the allowlist to requests from this machine too,
+// so a withheld service has no working address at all. Measured — a local
+// request for one is a 404, not a 200.
+func TestServiceAddresses_WithheldServiceHasNoLocalURLUnderATunnel(t *testing.T) {
+	cfg := config.GatewayConfig{Mode: config.ModeSubdomain, Expose: []string{"web"}}
+
+	withTunnel := addressSupervisor(t, cfg, true).serviceAddressesLocked()
+	_, listed := withTunnel["db"]
+	assert.False(t, listed, "a link that 404s is worse than no link")
+
+	// Without one, nothing is withheld and both services have an address.
+	noTunnel := addressSupervisor(t, cfg, false).serviceAddressesLocked()
+	assert.Equal(t, "http://db.localhost:7788/", noTunnel["db"].local)
+	assert.Empty(t, noTunnel["db"].public)
+	assert.Empty(t, noTunnel["web"].public, "no tunnel, nothing published")
+}
+
+// addressSupervisor is a supervisor with a live gateway and two services, one
+// exposed and one not, and optionally a tunnel over it. The pids are this
+// test process: serviceAddressesLocked checks they are alive, and nothing
+// here spawns anything.
+func addressSupervisor(t *testing.T, gcfg config.GatewayConfig, tunnelled bool) *supervisor {
+	t.Helper()
+	self := os.Getpid()
+	s := quietSupervisor(t)
+	s.gateway = &gatewayChild{pid: self, addr: "127.0.0.1:7788", cfg: gcfg.Defaults()}
+	for _, name := range []string{"web", "db"} {
+		s.services[name] = &managedService{cfg: &config.ServiceConfig{Port: 4200}}
+	}
+	if tunnelled {
+		s.tunnel = &tunnelChild{pid: self, kind: KindNamed, publicURL: "https://devrun.example.com"}
+	}
+	return s
+}

@@ -72,10 +72,17 @@ type ServiceInfo struct {
 	UptimeSec int64   `json:"uptime_s"`
 	CPUPct    float64 `json:"cpu_pct"`
 	MemBytes  int64   `json:"mem_bytes"`
-	// URL is where this service can be opened, when the gateway is up and
-	// serving it. Empty otherwise — a service with no port, or one withheld
-	// while published, has no address to give out.
+	// URL is where this service can be opened from this machine, when the
+	// gateway is up and serving it. Empty otherwise — a service with no port,
+	// or one withheld while published, has no address to give out. A running
+	// tunnel makes the gateway withhold from local requests too, so starting
+	// one empties this for every service not on the allowlist.
 	URL string `json:"url,omitempty"`
+	// PublicURL is where the same service can be opened from anywhere, and is
+	// set only for an exposed service under a devrun-managed tunnel. It sits
+	// beside URL rather than replacing it: both work, and the local one is
+	// the one being developed against.
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 type ListResponsePayload struct {

@@ -372,6 +372,39 @@ func (g GatewayConfig) LocalLinksByPath(host string) bool {
 	return net.ParseIP(strings.Trim(hostOnly(host), "[]")) != nil
 }
 
+// LocalAllowlistApplies reports whether the gateway withholds a service from
+// a request made on this machine.
+//
+// It does so as soon as anything may be publishing it, which is the point:
+// the allowlist cannot be relaxed for "local" requests when the thing that
+// might be lying about being local is the proxy in front. A tunnel is enough
+// on its own, whatever the configured posture.
+//
+// The consequence worth knowing is that starting a tunnel takes a withheld
+// service off your *own* browser too, so devrun has no local address to offer
+// for it. internal/gateway's Posture is where this is really decided;
+// TestLocalAllowlistMatchesTheGatewaysPosture in internal/ops holds the two
+// together.
+func (g GatewayConfig) LocalAllowlistApplies(tunnelled bool) bool {
+	return tunnelled || g.Posture == PosturePublished || !bindIsLoopback(g.Bind)
+}
+
+// bindIsLoopback reports whether the listen address reaches only this machine.
+// A wildcard or unparseable bind counts as not loopback: guessing wrong in
+// that direction only ever withholds more.
+func bindIsLoopback(bind string) bool {
+	h := hostOnly(bind)
+	if h == "" {
+		return false
+	}
+	ip := net.ParseIP(strings.Trim(h, "[]"))
+	if ip == nil {
+		return strings.EqualFold(h, "localhost") ||
+			strings.HasSuffix(strings.ToLower(h), ".localhost")
+	}
+	return ip.IsLoopback()
+}
+
 // hostOnly strips a port and IPv6 brackets, leaving the host.
 func hostOnly(hostport string) string {
 	if h, _, err := net.SplitHostPort(hostport); err == nil {

@@ -648,7 +648,7 @@ func (s *supervisor) handleList() *ipc.Response {
 		startedAt *time.Time
 	}
 	var gw *ipc.GatewayStatusPayload
-	var urls map[string]string
+	var urls map[string]serviceAddress
 
 	s.mu.Lock()
 	if s.reconcileActiveTargetsLocked() {
@@ -716,7 +716,7 @@ func (s *supervisor) handleList() *ipc.Response {
 			info.CPUPct, _ = process.CPUPercent(*snap.pid)
 			info.MemBytes, _ = process.MemBytes(*snap.pid)
 		}
-		info.URL = urls[snap.name]
+		info.URL, info.PublicURL = urls[snap.name].local, urls[snap.name].public
 		services = append(services, info)
 	}
 

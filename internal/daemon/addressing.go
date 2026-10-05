@@ -187,32 +187,47 @@ func (s *supervisor) serviceEnvLocked(cfg *config.ServiceConfig) map[string]stri
 // A path prefix breaks root-absolute asset URLs, so handing out the path form
 // for a gateway that would have offered a hostname gives a link that arrives
 // at a broken page.
-func (s *supervisor) serviceAddressesLocked() map[string]string {
+func (s *supervisor) serviceAddressesLocked() map[string]serviceAddress {
 	if s.gateway == nil || !pidAlive(s.gateway.pid) {
 		return nil
 	}
 	host := config.DisplayHost(s.gateway.addr)
 	byPath := s.gateway.cfg.LocalLinksByPath(host)
 	published := s.publishedBaseLocked()
+	// Withheld locally too, once anything may be publishing this gateway —
+	// see GatewayConfig.LocalAllowlistApplies. Measured: with a tunnel up, a
+	// request from this machine to a service not on the allowlist is a 404.
+	filtered := s.gateway.cfg.LocalAllowlistApplies(s.tunnel != nil && pidAlive(s.tunnel.pid))
+	exposed := s.gateway.cfg.ExposedSet()
 
-	out := map[string]string{}
+	out := map[string]serviceAddress{}
 	for name, svc := range s.services {
 		if addressablePort(svc) == 0 {
 			// Nowhere to proxy to, so the gateway would answer 503. A row
 			// with no URL says that more honestly than a link that fails.
 			continue
 		}
-		if published != nil {
-			if url := published(name); url != "" {
-				out[name] = url
+		var addr serviceAddress
+		if !filtered || slices.Contains(exposed, name) {
+			if byPath {
+				addr.local = "http://" + host + "/" + name + "/"
+			} else {
+				addr.local = "http://" + name + "." + host + "/"
 			}
+		}
+		if published != nil {
+			addr.public = published(name)
+		}
+		if addr.local == "" && addr.public == "" {
 			continue
 		}
-		if byPath {
-			out[name] = "http://" + host + "/" + name + "/"
-			continue
-		}
-		out[name] = "http://" + name + "." + host + "/"
+		out[name] = addr
 	}
 	return out
 }
+
+// serviceAddress is where one service can be opened. Both may be set at once:
+// an exposed service under a tunnel is reachable locally and publicly, and
+// the local address is the one being developed against — replacing it with
+// the public one, as devrun used to, took away the useful half.
+type serviceAddress struct{ local, public string }
