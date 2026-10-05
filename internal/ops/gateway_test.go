@@ -90,36 +90,43 @@ func TestLocalLinksMatchTheGatewaysOwnChoice(t *testing.T) {
 	}
 }
 
-// Starting a tunnel makes the gateway withhold a non-exposed service from
-// requests on this machine too — Posture checks Snapshot().Tunnelled before
-// it looks at the request's Host. The daemon has to know that to decide
-// whether it has a local URL to offer, and it cannot ask the gateway, so
-// config.GatewayConfig.LocalAllowlistApplies says it a second time.
+// config.GatewayConfig.LocalAllowlistApplies decides whether devrun has a
+// local address to offer for a service not on the allowlist. The gateway
+// decides the same thing in Posture, and cannot be asked — it does not import
+// internal/config.
 //
-// Drift would hand out a local URL for a service the gateway 404s, which is
-// the worse direction: a link that looks fine and is not.
+// The snapshot here is the one internal/ops/gateway.go builds in production:
+// Routes and Exposed, and nothing else. That matters. gateway.Snapshot also
+// has a Tunnelled field which forces published for every request including a
+// local one, and an earlier version of this test set it by hand and asserted
+// against the result — measuring a state the gateway is never in, and
+// producing a rule that withheld addresses the gateway serves.
+//
+// Drift in either direction is silent: a local URL for a service the gateway
+// 404s, or no URL for one it serves.
 func TestLocalAllowlistMatchesTheGatewaysPosture(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		cfg       config.GatewayConfig
-		tunnelled bool
+		name string
+		cfg  config.GatewayConfig
 	}{
-		{"plain local gateway", config.GatewayConfig{}, false},
-		{"tunnel running", config.GatewayConfig{}, true},
-		{"posture published", config.GatewayConfig{Posture: config.PosturePublished}, false},
-		{"bound to the LAN", config.GatewayConfig{Bind: "0.0.0.0"}, false},
-		{"bound to the LAN with a tunnel", config.GatewayConfig{Bind: "192.168.1.8"}, true},
+		{"plain local gateway", config.GatewayConfig{}},
+		{"posture published", config.GatewayConfig{Posture: config.PosturePublished}},
+		{"bound to the wildcard", config.GatewayConfig{Bind: "0.0.0.0"}},
+		{"bound to the LAN", config.GatewayConfig{Bind: "192.168.1.8"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			full := tc.cfg.Defaults()
 			srv := gateway.New(GatewayServerConfig(full, "test"))
-			srv.SetSnapshot(gateway.Snapshot{Tunnelled: tc.tunnelled})
+			srv.SetSnapshot(gateway.Snapshot{
+				Routes:  []gateway.Route{{Name: "web", State: "running", Port: 4200}},
+				Exposed: []string{"web"},
+			})
 
 			r := httptest.NewRequest("GET", "/", nil)
 			r.Host = "localhost:7788"
 			assert.Equal(t, srv.Posture(r) == gateway.Published,
-				full.LocalAllowlistApplies(tc.tunnelled),
-				"a local URL may only be offered when the gateway would serve it")
+				full.LocalAllowlistApplies(),
+				"a local URL may only be withheld when the gateway would withhold it")
 		})
 	}
 }
