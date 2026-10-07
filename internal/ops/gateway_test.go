@@ -97,10 +97,11 @@ func TestLocalLinksMatchTheGatewaysOwnChoice(t *testing.T) {
 //
 // The snapshot here is the one internal/ops/gateway.go builds in production:
 // Routes and Exposed, and nothing else. That matters. gateway.Snapshot also
-// has a Tunnelled field which forces published for every request including a
-// local one, and an earlier version of this test set it by hand and asserted
-// against the result — measuring a state the gateway is never in, and
-// producing a rule that withheld addresses the gateway serves.
+// once had a flag forcing published for every request including a local one,
+// and an earlier version of this test set it by hand and asserted against the
+// result — measuring a state the gateway was never in, and producing a rule
+// that withheld addresses the gateway serves. The flag is gone; the shape of
+// this test is what stops the mistake recurring.
 //
 // Drift in either direction is silent: a local URL for a service the gateway
 // 404s, or no URL for one it serves.

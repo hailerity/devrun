@@ -73,7 +73,7 @@ func TestHeader_GatewayIndicator(t *testing.T) {
 
 // The bug this guards: the header read the *configured* posture, which
 // `devrun tunnel up` does not change — the gateway decides it is published at
-// request time from Snapshot().Tunnelled. So a tunnel on a default-posture
+// request time from the request's own Host. So a tunnel on a default-posture
 // gateway drew the quiet local label while the services were on the internet.
 func TestGatewayLabel_ATunnelIsPublishedWhateverThePostureSays(t *testing.T) {
 	got := plain(gatewayLabel(&ipc.GatewayStatusPayload{

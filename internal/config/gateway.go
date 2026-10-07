@@ -381,10 +381,10 @@ func (g GatewayConfig) LocalLinksByPath(host string) bool {
 // not. So publishing takes a withheld service off the internet without taking
 // it off your own machine.
 //
-// gateway.Snapshot has a Tunnelled field that would force published for every
-// request, and it would do exactly that — but nothing sets it outside tests
-// (internal/ops/gateway.go builds the only production snapshot). Writing this
-// rule to match it would have withheld local addresses the gateway serves.
+// Snapshot used to carry a flag that forced published for every request once
+// devrun had started a tunnel. Writing this rule to match it withheld local
+// addresses the gateway serves; the flag was never set outside a test and has
+// since been deleted.
 //
 // internal/gateway's Posture is where this is really decided;
 // TestLocalAllowlistMatchesTheGatewaysPosture in internal/ops holds the two

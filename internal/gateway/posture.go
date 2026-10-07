@@ -9,21 +9,32 @@ import (
 // Posture reports whether this request must be treated as coming from off the
 // machine, which is what turns the allowlist and the token on.
 //
-// Deriving it from devrun's own state alone — "is a devrun-managed tunnel
-// running, is the bind non-loopback" — fails open: `ngrok http 7788` satisfies
-// neither, so the gateway would serve every running service unauthenticated
-// while ngrok published it. The request's own Host is the third signal. A Host
-// the gateway does not recognise as itself arrived through something, and that
-// something is not on this machine.
+// Deriving it from devrun's own state alone — "is the bind non-loopback" —
+// fails open: `ngrok http 7788` satisfies that test and nothing else, so the
+// gateway would serve every running service unauthenticated while ngrok
+// published it. The request's own Host is the second signal, and it is the one
+// that carries the weight. A Host the gateway does not recognise as itself
+// arrived through something, and that something is not on this machine.
 //
-// This is not airtight. A proxy configured to rewrite Host to localhost slips
-// past it, which is why Config.Posture can force Published outright — the
-// heuristic is the floor, not the guarantee.
+// A third signal used to sit above these: a flag on Snapshot saying devrun had
+// started a tunnel, which forced Published for every request. It was never set
+// by anything but a test, and it is gone rather than wired up, because the case
+// it guarded does not exist. devrun's tunnel never passes --http-host-header,
+// so a request through it carries the public hostname and fails hostIsSelf
+// here; and a Host spoofed to look local does not survive Cloudflare, which
+// routes by hostname and answers 403 before the tunnel sees it (measured
+// against a live named tunnel, 2026-10-07).
+//
+// Forcing Published for every request also withheld services from a browser on
+// this machine, which is not what publishing should mean.
+//
+// This is still not airtight. A proxy configured to rewrite Host to localhost
+// slips past it — and the flag could never have caught that either, since
+// devrun would not have started that proxy. Config.Posture forces Published
+// outright for exactly this case: the heuristic is the floor, not the
+// guarantee.
 func (s *Server) Posture(r *http.Request) Posture {
 	if s.cfg.Posture == PostureForced {
-		return Published
-	}
-	if s.Snapshot().Tunnelled {
 		return Published
 	}
 	if !bindIsLoopback(s.cfg.Bind) {

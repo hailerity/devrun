@@ -21,10 +21,10 @@ func svc(name string, status config.ServiceStatus, detected, declared int) *mana
 
 func TestURLVarName(t *testing.T) {
 	for in, want := range map[string]string{
-		"api":         "DEVRUN_URL_API",
+		"api":      "DEVRUN_URL_API",
 		"shop-web": "DEVRUN_URL_SHOP_WEB",
-		"a.b-c":       "DEVRUN_URL_A_B_C",
-		"web2":        "DEVRUN_URL_WEB2",
+		"a.b-c":    "DEVRUN_URL_A_B_C",
+		"web2":     "DEVRUN_URL_WEB2",
 	} {
 		assert.Equalf(t, want, URLVarName(in), "%q", in)
 	}
@@ -199,8 +199,8 @@ func TestServiceAddresses_LocalAndPublicTogether(t *testing.T) {
 // never gains a public one.
 //
 // This is the assertion an earlier version of this test had backwards, from
-// measuring a gateway with Snapshot.Tunnelled set — which nothing outside a
-// test ever does.
+// measuring a gateway with a since-deleted Snapshot flag set by hand — a
+// state no gateway was ever in.
 func TestServiceAddresses_AWithheldServiceKeepsItsLocalURL(t *testing.T) {
 	cfg := config.GatewayConfig{Mode: config.ModeSubdomain, Expose: []string{"web"}}
 
