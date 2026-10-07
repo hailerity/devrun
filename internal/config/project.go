@@ -18,15 +18,22 @@ type ProjectServiceConfig struct {
 	CWD     string            `yaml:"cwd,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 	Desc    string            `yaml:"desc,omitempty"`
+	// Port overrides detection; see ServiceConfig.Port.
+	Port int `yaml:"port,omitempty"`
 }
 
 // ProjectConfig is the top-level structure of devrun.yaml.
 type ProjectConfig struct {
-	Name     string                          `yaml:"name,omitempty"`
+	Name     string                           `yaml:"name,omitempty"`
 	Services map[string]*ProjectServiceConfig `yaml:"services"`
 	// Targets maps a target name to the service names it groups. See
 	// Registry.Targets — the semantics are identical for a project file.
 	Targets map[string][]string `yaml:"targets,omitempty"`
+	// Gateway configures the local HTTP gateway for this project.
+	Gateway *GatewayConfig `yaml:"gateway,omitempty"`
+	// Tunnel configures publishing. Absent means cloudflared is never looked
+	// for; publishing is optional, and so is the dependency.
+	Tunnel *TunnelConfig `yaml:"tunnel,omitempty"`
 }
 
 // LoadProject reads devrun.yaml from dir.
@@ -94,6 +101,7 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 			Group:   p.Name,
 			Env:     svc.Env,
 			Desc:    svc.Desc,
+			Port:    svc.Port,
 		}
 	}
 	return out

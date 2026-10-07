@@ -1,0 +1,297 @@
+package daemon
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hailerity/devrun/internal/cloudflared"
+	"github.com/hailerity/devrun/internal/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// fakeCloudflared puts a stand-in on PATH and points the data dir at a temp
+// directory, so no test here reaches the real binary — it publishes services
+// to the internet — or writes to the real log.
+func fakeCloudflared(t *testing.T, script string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in is a shell script")
+	}
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cloudflared"),
+		[]byte("#!/bin/sh\n"+script), 0o700))
+	// Prepended, not replaced: the script needs `cat` and `sleep`, and the
+	// stand-in still wins because dir comes first.
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// The banner cloudflared prints for a quick tunnel, boxed as it really is.
+const quickBanner = `2026-10-04T00:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...
+2026-10-04T00:00:01Z INF +----------------------------------------------------+
+2026-10-04T00:00:01Z INF |  Your quick Tunnel has been created! Visit it at:  |
+2026-10-04T00:00:01Z INF |  https://odd-mountain-4821.trycloudflare.com       |
+2026-10-04T00:00:01Z INF +----------------------------------------------------+`
+
+func TestSpawnTunnel_QuickScrapesTheAssignedURL(t *testing.T) {
+	fakeCloudflared(t, "cat <<'EOF'\n"+quickBanner+"\nEOF\nsleep 30\n")
+	s := quietSupervisor(t)
+
+	child, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+
+	assert.Equal(t, KindQuick, child.kind)
+	assert.Equal(t, "https://odd-mountain-4821.trycloudflare.com", child.publicURL)
+	assert.True(t, pidAlive(child.pid))
+}
+
+// A named tunnel's hostname is config, not output: nothing is scraped, so
+// cloudflared changing its banner cannot break it.
+func TestSpawnTunnel_NamedTakesItsURLFromConfig(t *testing.T) {
+	fakeCloudflared(t, "sleep 30\n")
+	namedSettleFast(t)
+	s := quietSupervisor(t)
+	cfg := config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"}
+
+	child, err := s.spawnTunnel(cfg, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+
+	assert.Equal(t, KindNamed, child.kind)
+	assert.Equal(t, "https://devrun.example.com", child.publicURL)
+}
+
+// cloudflared's output is not an API. A tunnel that is up but whose URL could
+// not be read still works, so it degrades rather than being torn down.
+func TestSpawnTunnel_RunningWithoutAReadableURL(t *testing.T) {
+	fakeCloudflared(t, "echo 'INF connection registered'\nsleep 30\n")
+	s := quietSupervisor(t)
+	quickURLFast(t)
+
+	child, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.NoError(t, err, "running but unreadable is not a failure")
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+
+	assert.Empty(t, child.publicURL)
+	assert.True(t, pidAlive(child.pid))
+}
+
+// Dying is a failure, and cloudflared said why.
+func TestSpawnTunnel_ReportsWhyItDied(t *testing.T) {
+	fakeCloudflared(t, "echo 'ERR tunnel credentials file not found' >&2\nexit 1\n")
+	s := quietSupervisor(t)
+
+	_, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credentials file not found")
+}
+
+func TestSpawnTunnel_MissingBinaryNamesBothForks(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	s := quietSupervisor(t)
+
+	_, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "posture: published")
+}
+
+// The tunnel outlives the daemon, so a replacement must be able to take it
+// back — and must not mistake a reused pid for it.
+func TestAdoptTunnel(t *testing.T) {
+	log := quietSupervisor(t).logger
+
+	t.Run("takes back a running cloudflared", func(t *testing.T) {
+		pid := standIn(t, cloudflared.Binary)
+
+		got := adoptTunnel(&config.TunnelState{
+			PID: pid, Kind: KindQuick,
+			PublicURL: "https://odd-mountain-4821.trycloudflare.com",
+		}, log)
+		require.NotNil(t, got)
+		assert.Equal(t, "https://odd-mountain-4821.trycloudflare.com", got.publicURL)
+	})
+
+	t.Run("refuses a live pid that is somebody else", func(t *testing.T) {
+		cmd := exec.Command("sleep", "30")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+
+		assert.Nil(t, adoptTunnel(&config.TunnelState{PID: cmd.Process.Pid}, log))
+	})
+
+	t.Run("nothing recorded", func(t *testing.T) {
+		assert.Nil(t, adoptTunnel(nil, log))
+	})
+}
+
+// A wildcard bind is where the gateway listens, not an address anything can
+// connect to.
+func TestOriginURL(t *testing.T) {
+	for addr, want := range map[string]string{
+		"127.0.0.1:7788": "http://127.0.0.1:7788",
+		"0.0.0.0:7788":   "http://127.0.0.1:7788",
+		"[::]:7788":      "http://127.0.0.1:7788",
+		"[::1]:7788":     "http://[::1]:7788",
+	} {
+		assert.Equalf(t, want, originURL(addr), "%s", addr)
+	}
+}
+
+func TestFirstLogLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tunnel.log")
+	require.NoError(t, os.WriteFile(path, []byte("older run\nERR the new failure\nstack\n"), 0o644))
+
+	// Only what this run wrote: the log is appended to across restarts.
+	assert.Equal(t, "ERR the new failure", firstLogLine(path, int64(len("older run\n"))))
+	assert.Equal(t, "nothing was logged", firstLogLine(path, 9999))
+}
+
+// Keep the no-URL case from waiting out the full timeout.
+func namedSettleFast(t *testing.T) {
+	t.Helper()
+	orig := namedSettle
+	namedSettle = 50 * time.Millisecond
+	t.Cleanup(func() { namedSettle = orig })
+}
+
+func quickURLFast(t *testing.T) {
+	t.Helper()
+	orig := quickURLTimeout
+	quickURLTimeout = 600 * time.Millisecond
+	t.Cleanup(func() { quickURLTimeout = orig })
+}
+
+var _ = strings.TrimSpace
+
+// Stopping the gateway stops the tunnel with it, and bringing the gateway
+// back does NOT start publishing again. That is the proposal's lifecycle
+// rule, not an accident: `gateway up` is the safe command, and a safe command
+// that silently puts services back on the internet is the inversion the
+// design rejects for `gateway expose`. Publishing takes the word "tunnel".
+func TestGatewayDownThenUp_LeavesPublishingOff(t *testing.T) {
+	fakeCloudflared(t, "cat <<'EOF'\n"+quickBanner+"\nEOF\nsleep 30\n")
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	child, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	s.mu.Lock()
+	s.tunnel = child
+	s.mu.Unlock()
+	pid := child.pid
+
+	require.True(t, s.handleGatewayDown().OK)
+
+	s.mu.Lock()
+	assert.Nil(t, s.tunnel, "teardown cascades")
+	s.mu.Unlock()
+	assert.Eventually(t, func() bool { return !pidAlive(pid) }, 5*time.Second, 50*time.Millisecond,
+		"and cloudflared is actually gone")
+
+	// A later gateway up must not resurrect it.
+	s.mu.Lock()
+	s.gateway = &gatewayChild{pid: os.Getpid(), addr: "127.0.0.1:9999"}
+	s.mu.Unlock()
+	s.mu.Lock()
+	tunnel := s.tunnel
+	s.mu.Unlock()
+	assert.Nil(t, tunnel, "publishing stays off until `devrun tunnel up` asks for it")
+}
+
+// The record must not describe a tunnel that has just been stopped.
+func TestGatewayDown_PersistsTheStop(t *testing.T) {
+	fakeCloudflared(t, "sleep 30\n")
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	child, err := s.spawnTunnel(config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"},
+		"http://127.0.0.1:7788")
+	require.NoError(t, err)
+	s.mu.Lock()
+	s.tunnel = child
+	require.NoError(t, s.saveStateLocked())
+	s.mu.Unlock()
+
+	saved, err := config.LoadState(s.statePath)
+	require.NoError(t, err)
+	require.NotNil(t, saved.Tunnel, "recorded while running")
+
+	require.True(t, s.handleGatewayDown().OK)
+
+	saved, err = config.LoadState(s.statePath)
+	require.NoError(t, err)
+	assert.Nil(t, saved.Tunnel, "and gone from the record once stopped")
+}
+
+// A tunnel that exited is a failure even if it announced a hostname on the
+// way out. Recording that URL would have status claiming devrun publishes
+// somewhere it does not.
+func TestSpawnTunnel_PrintedItsURLThenDied(t *testing.T) {
+	fakeCloudflared(t, "cat <<'EOF'\n"+quickBanner+"\nEOF\nexit 1\n")
+	s := quietSupervisor(t)
+
+	_, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.Error(t, err, "a URL does not make a dead process a running tunnel")
+	assert.Contains(t, err.Error(), "cloudflared exited")
+}
+
+// The same hole on the named side, where nothing is parsed and so nothing
+// would otherwise notice the process failing at once.
+func TestSpawnTunnel_NamedThatFailsImmediately(t *testing.T) {
+	fakeCloudflared(t, "echo 'ERR tunnel credentials file not found' >&2\nexit 1\n")
+	s := quietSupervisor(t)
+
+	_, err := s.spawnTunnel(config.TunnelConfig{Name: "devrun", Hostname: "devrun.example.com"},
+		"http://127.0.0.1:7788")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "credentials file not found")
+}
+
+// The tunnel's own origin decides whether the gateway moved. Comparing
+// against "wherever the gateway was before" calls it a move when there was no
+// gateway before — after a daemon restart that re-adopted the tunnel but not
+// the gateway — and a quick tunnel would get a new URL for nothing.
+func TestGatewayUp_DoesNotMoveATunnelAlreadyOnThatOrigin(t *testing.T) {
+	fakeCloudflared(t, "cat <<'EOF'\n"+quickBanner+"\nEOF\nsleep 30\n")
+	s := quietSupervisor(t)
+	s.statePath = t.TempDir() + "/state.json"
+
+	child, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+	require.Equal(t, "http://127.0.0.1:7788", child.origin)
+
+	// A gateway comes up at the address the tunnel already points at, with no
+	// gateway recorded before it.
+	s.mu.Lock()
+	s.tunnel = child
+	s.gateway = nil
+	moved := s.tunnel != nil && s.tunnel.origin != originURL("127.0.0.1:7788")
+	s.mu.Unlock()
+	assert.False(t, moved, "nothing moved, so the tunnel must be left alone")
+
+	s.mu.Lock()
+	elsewhere := s.tunnel.origin != originURL("127.0.0.1:9999")
+	s.mu.Unlock()
+	assert.True(t, elsewhere, "a genuinely different address is a move")
+}
+
+// Origin survives the restart, or a re-adopted tunnel looks moved on the next
+// gateway up.
+func TestAdoptTunnel_KeepsTheOrigin(t *testing.T) {
+	got := adoptTunnel(&config.TunnelState{
+		PID: standIn(t, cloudflared.Binary), Kind: KindQuick,
+		Origin: "http://127.0.0.1:7788", PublicURL: "https://x.trycloudflare.com",
+	}, quietSupervisor(t).logger)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "http://127.0.0.1:7788", got.origin)
+}

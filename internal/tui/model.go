@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -86,6 +87,11 @@ type model struct {
 	source     config.Source // where the registry was resolved from — the file service edits write back to
 	logDir     string
 
+	// gateway is what the last poll reported, or nil when none is running.
+	// Services carry their own URL, so this is only for the header and for
+	// knowing which services may currently leave the machine.
+	gateway *ipc.GatewayStatusPayload
+
 	spinFrame int
 	spinning  bool
 
@@ -156,8 +162,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonRespMsg:
 		m.spinning = false
+		m.gateway = msg.payload.Gateway
 		scoped := m.scopedServices(msg.payload.Services)
 		m.sidebarC.update(scoped, m.buildTargets())
+		// After m.gateway is set, so the marks and the header's count come
+		// from the same poll: a row saying a service is published while the
+		// header still says nothing is would be worse than either alone.
+		m.sidebarC.exposed = m.exposedSet(scoped)
 		// The sidebar auto-sizes to the longest service name, so a changed
 		// service list can shift the divider — re-flow the log panel.
 		m.relayout()
@@ -166,6 +177,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// keep the DETAILS cursor and window inside the new list.
 		m.detailsC.scrollToCursor(m.detailLines())
 		return m, tickDaemon()
+
+	case exposedMsg:
+		if msg.err != nil {
+			// The config was written before the daemon was asked, so "failed"
+			// alone would be false — and dangerously so when hiding, where
+			// the running gateway may still be serving what the file now
+			// withholds.
+			m.footerC.showToastLong(exposeMismatch(msg.name, msg.exposed, msg.err))
+			return m, nil
+		}
+		// Said plainly, because this is the moment a service becomes
+		// reachable from somewhere else — not the tunnel command days later.
+		m.footerC.showToast(describeExposed(msg.name, msg.exposed))
+		return m, m.pollDaemon()
 
 	case serviceRemovedMsg:
 		if !m.removeC.open || m.removeC.name != msg.name {
@@ -454,6 +479,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Stop):
 		return m, m.doStop()
+
+	// p is a config change and nothing more: it never starts a tunnel.
+	// Assigned before the return, because toggleExposed takes a pointer
+	// receiver and sets a toast — in `return m, m.toggleExposed()` the Go
+	// spec leaves the evaluation of the operand m unordered against the call,
+	// so the copy could be taken before the toast was set and the message
+	// lost. Every neighbouring do* helper has a value receiver and mutates
+	// nothing, which is why only this one needs the care.
+	case key.Matches(msg, keys.Expose):
+		cmd := m.toggleExposed()
+		return m, cmd
 
 	// r restarts the selected service; on one that is not running it is simply
 	// a start, so there is no wrong state to press it in.
@@ -1380,7 +1416,7 @@ func (m model) View() string {
 			crashed++
 		}
 	}
-	header := m.headerC.render(m.sourceLabel(), total, running, crashed, m.spinFrame, m.spinning, m.width)
+	header := m.headerC.render(m.sourceLabel(), total, running, crashed, m.spinFrame, m.spinning, m.gateway, m.width)
 
 	// Body: two bordered panes side by side; the focused one takes the accent.
 	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
@@ -1547,4 +1583,122 @@ func (m model) renderMain(w, h int) string {
 	}
 	frame.footRight = status
 	return frame.render(m.logsC.view(), w, h)
+}
+
+// exposedMsg carries the daemon's verdict on an exposure change back to the
+// model, so the toast says what actually happened rather than what was asked.
+type exposedMsg struct {
+	name    string
+	exposed bool
+	err     error
+}
+
+// toggleExposed flips whether the selected service may leave this machine.
+//
+// Persisted first, as `devrun gateway expose` does: the allowlist is what may
+// be published, so it has to outlive the running gateway — otherwise the next
+// `gateway up` reads the file, sees something different, and silently drops
+// the change.
+//
+// Only a config change. It never starts a tunnel: that would make a key press
+// in a dashboard put services on the internet, which is the safe-implies-
+// dangerous inversion the design rejects everywhere else.
+func (m *model) toggleExposed() tea.Cmd {
+	svc := m.sidebarC.selectedService()
+	if svc == nil {
+		return nil
+	}
+	name := svc.Name
+	want := !m.isExposed(name)
+
+	if err := config.SaveGatewayExpose(m.source, []string{name}, want); err != nil {
+		m.footerC.showToast("could not save: " + err.Error())
+		return nil
+	}
+	// The in-memory registry has to move with the file, or a second press
+	// reads the pre-save answer and computes the same direction again.
+	if m.registry != nil {
+		if m.registry.Gateway == nil {
+			m.registry.Gateway = &config.GatewayConfig{}
+		}
+		m.registry.Gateway.SetExposed([]string{name}, want)
+	}
+	// Re-mark the rows now. With a gateway this reads the same answer the
+	// poll below will confirm; with none it is the only refresh there is,
+	// since that path returns without polling.
+	m.sidebarC.exposed = m.exposedSet(m.sidebarC.services)
+	if m.gateway == nil || !m.gateway.Running {
+		// Recorded for next time; there is no gateway to tell.
+		m.footerC.showToast(describeExposed(name, want) + " (gateway is not running)")
+		return nil
+	}
+
+	sp := m.socketPath
+	return func() tea.Msg {
+		return dial(sp, func(c *client.Client) tea.Msg {
+			resp, err := c.Send("gateway-expose", ipc.GatewayExposePayload{
+				Names: []string{name}, Exposed: want,
+			})
+			if err != nil {
+				return exposedMsg{name: name, exposed: want, err: err}
+			}
+			if !resp.OK {
+				return exposedMsg{name: name, exposed: want, err: fmt.Errorf("%s", resp.Error)}
+			}
+			return exposedMsg{name: name, exposed: want}
+		})
+	}
+}
+
+// isExposed reports whether this service may currently leave the machine.
+//
+// A running gateway is the authority when there is one. With none, the config
+// file is — and it is the file the save writes to, so reading anything else
+// makes the toggle one-way: a service the file already exposes would read as
+// not exposed, every press would compute "expose", and there would be no way
+// to withhold it from the TUI without the daemon up.
+// exposedSet answers isExposed for a whole list at once, which is what the
+// sidebar needs to mark its rows.
+func (m model) exposedSet(svcs []ipc.ServiceInfo) map[string]bool {
+	out := make(map[string]bool, len(svcs))
+	for _, svc := range svcs {
+		if m.isExposed(svc.Name) {
+			out[svc.Name] = true
+		}
+	}
+	return out
+}
+
+func (m model) isExposed(name string) bool {
+	if m.gateway != nil && m.gateway.Running {
+		return slices.Contains(m.gateway.Exposed, name)
+	}
+	if m.registry != nil && m.registry.Gateway != nil {
+		return slices.Contains(m.registry.Gateway.ExposedSet(), name)
+	}
+	return false
+}
+
+func describeExposed(name string, exposed bool) string {
+	if exposed {
+		return name + " may now leave this machine"
+	}
+	return name + " may no longer leave this machine"
+}
+
+// exposeMismatch describes the state when the config was written but the
+// running gateway could not be told — which half took effect, and what that
+// leaves reachable.
+//
+// The two directions are not symmetric. Failing to publish is harmless: the
+// file says yes, nothing is serving it, and the next `gateway up` catches
+// up. Failing to *withhold* leaves a service the file no longer allows still
+// reachable from outside, and the reader has to know that.
+func exposeMismatch(name string, exposed bool, err error) string {
+	if exposed {
+		return name + ": saved, but the gateway was not told (" + err.Error() +
+			") — it is not published yet"
+	}
+	return name + ": saved, but the gateway was not told (" + err.Error() +
+		") — it MAY STILL BE PUBLISHED; run devrun gateway down"
 }

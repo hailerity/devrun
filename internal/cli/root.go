@@ -107,5 +107,7 @@ func init() {
 		infoCmd,
 		daemonCmd,
 		mcpCmd,
+		gatewayCmd,
+		tunnelCmd,
 	)
 }

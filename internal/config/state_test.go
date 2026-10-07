@@ -79,7 +79,7 @@ func TestState_ReAdoptionLogic(t *testing.T) {
 		"dead":  {Status: config.StatusRunning, PID: &deadPID},
 	}
 
-	config.ReAdoptServices(states)
+	config.ReAdoptServices(states, nil) // liveness only
 	assert.Equal(t, config.StatusRunning, states["alive"].Status)
 	assert.True(t, states["alive"].ReAdopted)
 	assert.Equal(t, config.StatusCrashed, states["dead"].Status)
@@ -95,4 +95,51 @@ func TestServiceStatus_IsLive(t *testing.T) {
 	for _, s := range terminal {
 		assert.False(t, s.IsLive(), "%s should not be live", s)
 	}
+}
+
+// kill(pid, 0) says only that something holds that number. After a reboot it
+// is a stranger, and devrun would list it as the service and send it SIGTERM
+// on `devrun stop`.
+func TestReAdoptServices_RefusesAPidItDoesNotRecognise(t *testing.T) {
+	pid := os.Getpid()
+	states := map[string]*config.ServiceState{
+		"web": {Status: config.StatusRunning, PID: &pid},
+	}
+
+	config.ReAdoptServices(states, func(string, int) bool { return false })
+
+	assert.Equal(t, config.StatusCrashed, states["web"].Status)
+	assert.Nil(t, states["web"].PID, "and it must not be left as something to signal")
+}
+
+func TestReAdoptServices_AdoptsOneItRecognises(t *testing.T) {
+	pid := os.Getpid()
+	states := map[string]*config.ServiceState{
+		"web": {Status: config.StatusCrashed, PID: &pid},
+	}
+
+	var askedName string
+	var askedPID int
+	config.ReAdoptServices(states, func(name string, p int) bool {
+		askedName, askedPID = name, p
+		return true
+	})
+
+	assert.Equal(t, config.StatusRunning, states["web"].Status)
+	assert.True(t, states["web"].ReAdopted)
+	assert.Equal(t, "web", askedName, "the check is told which service it is judging")
+	assert.Equal(t, pid, askedPID)
+}
+
+// A dead pid is settled before anything is asked: there is nothing to
+// recognise, and the check may be expensive.
+func TestReAdoptServices_DoesNotAskAboutADeadPid(t *testing.T) {
+	dead := 99999999
+	states := map[string]*config.ServiceState{"web": {Status: config.StatusRunning, PID: &dead}}
+
+	asked := false
+	config.ReAdoptServices(states, func(string, int) bool { asked = true; return true })
+
+	assert.False(t, asked)
+	assert.Equal(t, config.StatusCrashed, states["web"].Status)
 }

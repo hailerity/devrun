@@ -42,6 +42,17 @@ type supervisor struct {
 	// managed services running. Set by server.go once the listener is up; a nil
 	// value makes the daemon-reexec request report "unsupported".
 	onReexec func()
+	// gateway is the running gateway child, or nil. Reads and writes are guarded
+	// by mu; gatewayOps serialises the lifecycle operations themselves.
+	gateway *gatewayChild
+	// gatewayOps makes up/expose/down one-at-a-time. It cannot be mu: spawning
+	// waits for the child to announce its address, and holding mu that long
+	// would block every list.
+	gatewayOps sync.Mutex
+	// tunnel is the cloudflared child, guarded by mu and serialised by
+	// gatewayOps — the two lifecycles cascade (gateway down stops the tunnel),
+	// so one lock orders both and there is no pair to deadlock.
+	tunnel *tunnelChild
 }
 
 func newSupervisor(socketPath string, logger *slog.Logger) *supervisor {
@@ -59,13 +70,15 @@ func (s *supervisor) loadState() error {
 	if err != nil {
 		return err
 	}
-	config.ReAdoptServices(state.Services)
 
 	reg, err := config.LoadRegistry(config.RegistryPath())
 	if err != nil {
 		return err
 	}
 	s.registry = reg
+	// After the registry, because recognising a service means comparing the
+	// live argv against the command the registry records for it.
+	config.ReAdoptServices(state.Services, recogniseService(reg))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,6 +94,8 @@ func (s *supervisor) loadState() error {
 	if state.ActiveTargets != nil {
 		s.activeTargets = state.ActiveTargets
 	}
+	s.gateway = adoptGateway(state.Gateway, s.logger)
+	s.tunnel = adoptTunnel(state.Tunnel, s.logger)
 	s.reconcileActiveTargetsLocked()
 	return s.saveStateLocked()
 }
@@ -93,6 +108,23 @@ func (s *supervisor) saveStateLocked() error {
 	}
 	for name, svc := range s.services {
 		state.Services[name] = svc.state
+	}
+	if s.tunnel != nil {
+		state.Tunnel = &config.TunnelState{
+			PID:       s.tunnel.pid,
+			Kind:      s.tunnel.kind,
+			Origin:    s.tunnel.origin,
+			PublicURL: s.tunnel.publicURL,
+			Config:    s.tunnel.cfg,
+		}
+	}
+	if s.gateway != nil {
+		state.Gateway = &config.GatewayState{
+			PID:    s.gateway.pid,
+			Addr:   s.gateway.addr,
+			Token:  s.gateway.token,
+			Config: s.gateway.cfg,
+		}
 	}
 	return config.SaveState(s.statePath, state)
 }
@@ -117,6 +149,20 @@ func (s *supervisor) handleConn(conn net.Conn) {
 		_ = ipc.WriteMessage(conn, s.handleRemove(req.Payload))
 	case "list":
 		_ = ipc.WriteMessage(conn, s.handleList())
+	case "gateway-up":
+		_ = ipc.WriteMessage(conn, s.handleGatewayUp(req.Payload))
+	case "gateway-down":
+		_ = ipc.WriteMessage(conn, s.handleGatewayDown())
+	case "gateway-status":
+		_ = ipc.WriteMessage(conn, s.handleGatewayStatus())
+	case "gateway-expose":
+		_ = ipc.WriteMessage(conn, s.handleGatewayExpose(req.Payload))
+	case "tunnel-up":
+		_ = ipc.WriteMessage(conn, s.handleTunnelUp(req.Payload))
+	case "tunnel-down":
+		_ = ipc.WriteMessage(conn, s.handleTunnelDown())
+	case "tunnel-list":
+		_ = ipc.WriteMessage(conn, s.handleTunnelList())
 	case "attach":
 		s.handleAttach(conn, req.Payload)
 	case "daemon-stop":
@@ -194,7 +240,11 @@ func (s *supervisor) startService(name string, inlineCfg *config.ServiceConfig) 
 		return errResp(fmt.Sprintf("%s is already running", name))
 	}
 
-	proc, err := process.Start(cfg.Command, cfg.CWD, cfg.Env)
+	// Built under the lock, because it depends on which services are up and
+	// whether anything is publishing — both of which this call is about to
+	// change.
+	env := s.serviceEnvLocked(cfg)
+	proc, err := process.Start(cfg.Command, cfg.CWD, env)
 	if err != nil {
 		s.mu.Unlock()
 		return errResp(fmt.Sprintf("start process: %v", err))
@@ -597,6 +647,8 @@ func (s *supervisor) handleList() *ipc.Response {
 		group     string
 		startedAt *time.Time
 	}
+	var gw *ipc.GatewayStatusPayload
+	var urls map[string]serviceAddress
 
 	s.mu.Lock()
 	if s.reconcileActiveTargetsLocked() {
@@ -622,6 +674,12 @@ func (s *supervisor) handleList() *ipc.Response {
 		}
 		snaps = append(snaps, snap)
 	}
+	// Both under the same acquisition as the service snapshot, so a service
+	// and the address reported for it always describe one moment.
+	if st := s.gatewayStatusLocked(); st.Running {
+		gw = &st
+	}
+	urls = s.serviceAddressesLocked()
 	s.mu.Unlock()
 
 	// Append registry-only services (never started, so not in s.services).
@@ -658,11 +716,14 @@ func (s *supervisor) handleList() *ipc.Response {
 			info.CPUPct, _ = process.CPUPercent(*snap.pid)
 			info.MemBytes, _ = process.MemBytes(*snap.pid)
 		}
+		info.URL, info.PublicURL = urls[snap.name].local, urls[snap.name].public
 		services = append(services, info)
 	}
 
 	sort.Strings(activeTargets)
-	payload, _ := json.Marshal(ipc.ListResponsePayload{Services: services, ActiveTargets: activeTargets})
+	payload, _ := json.Marshal(ipc.ListResponsePayload{
+		Services: services, ActiveTargets: activeTargets, Gateway: gw,
+	})
 	return &ipc.Response{OK: true, Payload: json.RawMessage(payload)}
 }
 
@@ -678,7 +739,19 @@ func (s *supervisor) shutdown() {
 		pid  int
 	}
 
+	// Take the lifecycle lock before anything else. Without it, a gateway up
+	// in flight — which holds gatewayOps and has released mu to spawn — would
+	// see its child assigned *after* this ran, leaving a listener that outlives
+	// the daemon with nothing able to stop it. Bounded by gatewayStartTimeout.
+	s.gatewayOps.Lock()
+	defer s.gatewayOps.Unlock()
+
 	s.mu.Lock()
+	// Both children go too, tunnel first: publishing an origin whose services
+	// are being stopped is worse than not publishing, and stopping the gateway
+	// first would leave cloudflared briefly serving a dead address.
+	s.stopTunnelLocked()
+	s.stopGatewayLocked()
 	var targets []target
 	for name, svc := range s.services {
 		if svc.state.Status != config.StatusRunning && svc.state.Status != config.StatusStarting {

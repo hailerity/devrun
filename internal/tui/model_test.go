@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -669,4 +670,143 @@ func TestModel_MouseClick_SetsFocusMain(t *testing.T) {
 	})
 	mm := m2.(model)
 	assert.Equal(t, focusMain, mm.focus, "clicking in the log area should auto-focus the main panel")
+}
+
+// Toggling exposure is a config change and nothing more. It must never start
+// a tunnel: a key press in a dashboard putting services on the internet is
+// the safe-implies-dangerous inversion the design rejects everywhere else.
+func TestIsExposed(t *testing.T) {
+	var m model
+	assert.False(t, m.isExposed("web"), "no gateway, nothing is exposed")
+
+	m.gateway = &ipc.GatewayStatusPayload{Running: true, Exposed: []string{"web", "api"}}
+	assert.True(t, m.isExposed("web"))
+	assert.False(t, m.isExposed("admin"))
+}
+
+func TestDescribeExposed(t *testing.T) {
+	assert.Equal(t, "web may now leave this machine", describeExposed("web", true))
+	assert.Equal(t, "web may no longer leave this machine", describeExposed("web", false))
+}
+
+// The poll carries the gateway, so the header and the exposure state follow
+// the daemon rather than whatever the TUI last did.
+func TestDaemonResp_CarriesTheGateway(t *testing.T) {
+	m := newModel("", &config.Registry{Services: map[string]*config.ServiceConfig{}}, config.Source{}, t.TempDir(), clipboard{})
+	require.Nil(t, m.gateway)
+
+	updated, _ := m.Update(daemonRespMsg{payload: ipc.ListResponsePayload{
+		Gateway: &ipc.GatewayStatusPayload{Running: true, Posture: config.PosturePublished},
+	}})
+	assert.Equal(t, config.PosturePublished, updated.(model).gateway.Posture)
+}
+
+// toggleExposed sets a toast through a pointer receiver, so the returned
+// model has to carry it. `return m, m.toggleExposed()` left the evaluation of
+// m unordered against the call, and the message could be lost — which is the
+// worst case here, since the toast is how a failed save is reported at all.
+func TestExposeKey_ToastSurvivesOnTheReturnedModel(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devrun.yaml"),
+		[]byte("services:\n  web:\n    command: sleep 30\n"), 0o644))
+
+	reg := &config.Registry{Services: map[string]*config.ServiceConfig{
+		"web": {Name: "web", Command: "sleep 30"},
+	}}
+	src := config.Source{Local: filepath.Join(dir, "devrun.yaml"), Dir: dir}
+	m := newModel("", reg, src, t.TempDir(), clipboard{})
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "web", State: "stopped"}}, nil)
+
+	// No gateway running: the save still happens and the toast says so.
+	out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	assert.Contains(t, out.(model).footerC.toast, "may now leave this machine",
+		"the toast set through the pointer receiver must reach the returned model")
+
+	// And it was persisted, not only announced.
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	require.NotNil(t, proj.Gateway)
+	assert.Equal(t, []string{"web"}, proj.Gateway.Expose,
+		"the allowlist has to outlive the running gateway")
+}
+
+// The config is written before the daemon is asked, so a daemon failure is
+// not "nothing happened". The two directions are not symmetric: failing to
+// publish is harmless, failing to withhold leaves a service the file no
+// longer allows still reachable from outside.
+func TestExposeMismatch(t *testing.T) {
+	boom := errors.New("connection refused")
+
+	publishing := exposeMismatch("web", true, boom)
+	assert.Contains(t, publishing, "saved")
+	assert.Contains(t, publishing, "not published yet")
+
+	withholding := exposeMismatch("web", false, boom)
+	assert.Contains(t, withholding, "saved")
+	assert.Contains(t, withholding, "MAY STILL BE PUBLISHED",
+		"the dangerous direction has to be unmissable")
+	assert.Contains(t, withholding, "gateway down", "and say what to do")
+}
+
+// The toast must never read as though nothing was written.
+func TestExposedMsg_FailureDoesNotClaimNothingHappened(t *testing.T) {
+	m := newModel("", &config.Registry{Services: map[string]*config.ServiceConfig{}}, config.Source{}, t.TempDir(), clipboard{})
+
+	out, _ := m.Update(exposedMsg{name: "web", exposed: false, err: errors.New("connection refused")})
+	toast := out.(model).footerC.toast
+	assert.Contains(t, toast, "saved")
+	assert.NotContains(t, toast, "expose failed")
+}
+
+// With no gateway running the config file is the only record of what may
+// leave the machine — and it is the file the save writes to. Reading only
+// the daemon made the key one-way: a service the file already exposed read
+// as not exposed, so every press re-exposed it and nothing could be
+// withheld without the daemon up.
+func TestIsExposed_FallsBackToTheConfigWithNoGateway(t *testing.T) {
+	reg := &config.Registry{Gateway: &config.GatewayConfig{Expose: []string{"web"}}}
+	m := model{registry: reg}
+
+	assert.True(t, m.isExposed("web"), "the file says it may leave")
+	assert.False(t, m.isExposed("admin"))
+
+	// A running gateway outranks the file: it is what is actually serving.
+	m.gateway = &ipc.GatewayStatusPayload{Running: true, Exposed: []string{"admin"}}
+	assert.False(t, m.isExposed("web"))
+	assert.True(t, m.isExposed("admin"))
+}
+
+// Pressing p twice with the gateway down has to end where it started.
+func TestExposeKey_TogglesBothWaysWithGatewayDown(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "devrun.yaml"),
+		[]byte("services:\n  web:\n    command: sleep 30\ngateway:\n  expose: [web]\n"), 0o644))
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	reg := &config.Registry{
+		Services: map[string]*config.ServiceConfig{"web": {Name: "web", Command: "sleep 30"}},
+		Gateway:  proj.Gateway,
+	}
+	src := config.Source{Local: filepath.Join(dir, "devrun.yaml"), Dir: dir}
+	m := newModel("", reg, src, t.TempDir(), clipboard{})
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "web", State: "stopped"}}, nil)
+	require.True(t, m.isExposed("web"), "starts exposed, per the file")
+
+	press := func(m model) model {
+		out, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+		return out.(model)
+	}
+
+	m = press(m)
+	assert.False(t, m.isExposed("web"), "first press withholds it")
+	saved, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.NotContains(t, saved.Gateway.ExposedSet(), "web", "and the file agrees")
+
+	m = press(m)
+	assert.True(t, m.isExposed("web"), "second press puts it back")
+	saved, err = config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Contains(t, saved.Gateway.ExposedSet(), "web")
 }

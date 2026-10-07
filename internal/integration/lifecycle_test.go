@@ -79,8 +79,8 @@ func testEnv(t *testing.T) (socketPath string, cleanup func()) {
 	}
 
 	cleanup = func() {
-		cancel()       // signal daemon goroutine to stop (closes ln via ctx.Done)
-		<-daemonDone   // wait for daemon goroutine to finish
+		cancel()     // signal daemon goroutine to stop (closes ln via ctx.Done)
+		<-daemonDone // wait for daemon goroutine to finish
 		os.RemoveAll(tmp)
 	}
 	t.Cleanup(cleanup)
@@ -550,7 +550,6 @@ func waitForSocket(t *testing.T, path string) {
 	}
 	t.Fatalf("socket %s did not become available within 3s", path)
 }
-
 
 func TestLifecycle_DaemonAutoStart(t *testing.T) {
 	// Use a fresh short temp dir WITHOUT starting an in-process daemon.

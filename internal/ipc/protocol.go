@@ -32,11 +32,21 @@ type StartPayload struct {
 	Name   string                `json:"name"`
 	Config *config.ServiceConfig `json:"config,omitempty"`
 }
-type StartResponsePayload struct{ PID int `json:"pid"` }
-type StopPayload struct{ Name string `json:"name"` }
-type RemovePayload struct{ Name string `json:"name"` }
-type AttachPayload struct{ Name string `json:"name"` }
-type DetachPayload struct{ Name string `json:"name"` }
+type StartResponsePayload struct {
+	PID int `json:"pid"`
+}
+type StopPayload struct {
+	Name string `json:"name"`
+}
+type RemovePayload struct {
+	Name string `json:"name"`
+}
+type AttachPayload struct {
+	Name string `json:"name"`
+}
+type DetachPayload struct {
+	Name string `json:"name"`
+}
 
 // TargetStartPayload starts every service in a target. Services carries the full
 // definitions inline — the daemon has no target vocabulary of its own — the same
@@ -49,7 +59,9 @@ type TargetStartPayload struct {
 // TargetStopPayload stops a target. The daemon resolves which members to stop
 // from the snapshot it recorded at target-start time, skipping any still held by
 // another active target.
-type TargetStopPayload struct{ Name string `json:"name"` }
+type TargetStopPayload struct {
+	Name string `json:"name"`
+}
 
 type ServiceInfo struct {
 	Name      string  `json:"name"`
@@ -60,10 +72,24 @@ type ServiceInfo struct {
 	UptimeSec int64   `json:"uptime_s"`
 	CPUPct    float64 `json:"cpu_pct"`
 	MemBytes  int64   `json:"mem_bytes"`
+	// URL is where this service can be opened from this machine, when the
+	// gateway is up and serving it. Empty otherwise — a service with no port,
+	// or one withheld while published, has no address to give out. A running
+	// tunnel makes the gateway withhold from local requests too, so starting
+	// one empties this for every service not on the allowlist.
+	URL string `json:"url,omitempty"`
+	// PublicURL is where the same service can be opened from anywhere, and is
+	// set only for an exposed service under a devrun-managed tunnel. It sits
+	// beside URL rather than replacing it: both work, and the local one is
+	// the one being developed against.
+	PublicURL string `json:"public_url,omitempty"`
 }
 
 type ListResponsePayload struct {
 	Services []ServiceInfo `json:"services"`
+	// Gateway is nil when it is not running, so every caller reads the same
+	// answer rather than each deciding what absence means.
+	Gateway *GatewayStatusPayload `json:"gateway,omitempty"`
 	// ActiveTargets names the targets the daemon currently considers started,
 	// sorted. Empty when no target has been started.
 	ActiveTargets []string `json:"active_targets,omitempty"`
@@ -105,4 +131,70 @@ func ReadMessage(r io.Reader, dst interface{}) error {
 		return fmt.Errorf("unmarshal message: %w", err)
 	}
 	return nil
+}
+
+// GatewayUpPayload starts (or reconfigures) the gateway. The config travels
+// inline for the same reason a project service's does: the daemon cannot read
+// the devrun.yaml the CLI resolved.
+type GatewayUpPayload struct {
+	Config *config.GatewayConfig `json:"config,omitempty"`
+}
+
+// GatewayExposePayload adds or removes services from the allowlist — what may
+// leave this machine.
+type GatewayExposePayload struct {
+	Names   []string `json:"names"`
+	Exposed bool     `json:"exposed"`
+}
+
+// GatewayStatusPayload is the gateway's runtime state. A zero value means it is
+// not running.
+type GatewayStatusPayload struct {
+	Running bool     `json:"running"`
+	Addr    string   `json:"addr,omitempty"`
+	Posture string   `json:"posture,omitempty"`
+	Mode    string   `json:"mode,omitempty"`
+	Token   string   `json:"token,omitempty"`
+	Exposed []string `json:"exposed,omitempty"`
+	PID     *int     `json:"pid,omitempty"`
+	// PublicHostname is the gateway's {service} template, so a caller can
+	// build each service's address without knowing how the gateway resolves
+	// one. Empty means services are addressed by path.
+	PublicHostname string `json:"public_hostname,omitempty"`
+	// Tunnel is nil when nothing devrun manages is publishing this gateway.
+	// Nil does not mean unpublished: someone may be fronting it with ngrok or
+	// a Caddy devrun knows nothing about, which is what posture reports.
+	Tunnel *TunnelStatusPayload `json:"tunnel,omitempty"`
+}
+
+// TunnelUpPayload starts the tunnel, and the gateway under it if needed. Both
+// configs travel inline, as a project service's does: the daemon cannot read
+// the devrun.yaml the CLI resolved. By the time this is sent the CLI has
+// already resolved flags, config and any prompt into a complete TunnelConfig.
+type TunnelUpPayload struct {
+	Config  *config.TunnelConfig  `json:"config,omitempty"`
+	Gateway *config.GatewayConfig `json:"gateway,omitempty"`
+	// Expose names services that may leave this machine, added to the
+	// allowlist before anything is published.
+	Expose []string `json:"expose,omitempty"`
+}
+
+// TunnelStatusPayload is the tunnel's runtime state. A zero value means devrun
+// is not running one.
+type TunnelStatusPayload struct {
+	Running bool   `json:"running"`
+	Kind    string `json:"kind,omitempty"` // "named" | "quick"
+	Name    string `json:"name,omitempty"`
+	// PublicURL may be empty for a running quick tunnel whose banner could not
+	// be read. The tunnel works; devrun just cannot print the address.
+	PublicURL string `json:"public_url,omitempty"`
+	PID       *int   `json:"cloudflared_pid,omitempty"`
+}
+
+// TunnelListPayload carries the account's tunnel names. Known is false when
+// cloudflared could not be asked — no login, no network — which callers must
+// not read as "the name does not exist".
+type TunnelListPayload struct {
+	Names []string `json:"names"`
+	Known bool     `json:"known"`
 }

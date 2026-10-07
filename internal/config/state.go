@@ -45,9 +45,44 @@ type ServiceState struct {
 	ReAdopted    bool          `json:"re_adopted"`
 }
 
+// GatewayState is the running gateway, recorded so a replacement daemon can
+// take it back.
+//
+// The gateway is spawned into its own session and never waited on, so it
+// outlives the daemon on every path except SIGTERM — which is deliberate, the
+// same as for services: `devrun daemon restart` should not drop a published
+// URL. Without this record the replacement daemon had no handle on it, and the
+// gateway became unstoppable and invisible while still holding its port.
+//
+// Token is here because it cannot be re-derived: the running child was given
+// it at startup and a new daemon cannot change its mind. It is why state.json
+// is written 0600.
+type GatewayState struct {
+	PID    int           `json:"pid"`
+	Addr   string        `json:"addr"`
+	Token  string        `json:"token"`
+	Config GatewayConfig `json:"config"`
+}
+
+// TunnelState is the running cloudflared, recorded for the same reason
+// GatewayState is: the process outlives the daemon on every exit path but
+// SIGTERM, so without a record a replacement daemon could neither see it nor
+// stop it, while it went on publishing.
+type TunnelState struct {
+	PID  int    `json:"pid"`
+	Kind string `json:"kind"` // "named" | "quick"
+	// Origin is the gateway address cloudflared was pointed at, so a new
+	// gateway can tell whether it has actually moved.
+	Origin    string       `json:"origin"`
+	PublicURL string       `json:"public_url"`
+	Config    TunnelConfig `json:"config"`
+}
+
 type State struct {
 	Version  int                      `json:"version"`
 	Services map[string]*ServiceState `json:"services"`
+	Gateway  *GatewayState            `json:"gateway,omitempty"`
+	Tunnel   *TunnelState             `json:"tunnel,omitempty"`
 	// ActiveTargets maps a currently-started target to the member service names
 	// captured when it was started. `devrun target stop` consults this snapshot —
 	// not the live config — so editing a target's membership while it runs does
@@ -92,8 +127,15 @@ func SaveState(path string, s *State) error {
 		return fmt.Errorf("mkdir state dir: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// 0600: the gateway's token lives here, and it is the only thing between a
+	// stranger and the services once the gateway is published.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write tmp state: %w", err)
+	}
+	// WriteFile applies the mode only when it creates the file, so a .tmp left
+	// behind by an earlier crash would keep whatever mode it had.
+	if err := os.Chmod(tmp, 0600); err != nil {
+		return fmt.Errorf("chmod tmp state: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("rename state: %w", err)
@@ -101,21 +143,31 @@ func SaveState(path string, s *State) error {
 	return nil
 }
 
-// ReAdoptServices checks each service's PID to determine if it is still alive.
-// Alive → StatusRunning + ReAdopted=true. Dead → StatusCrashed, PID cleared.
-// Modifies the map in place. Only checks services that have a non-nil PID.
-func ReAdoptServices(services map[string]*ServiceState) {
-	for _, svc := range services {
+// ReAdoptServices decides, for each service with a recorded pid, whether that
+// process is still the one devrun started. Alive and recognised →
+// StatusRunning with ReAdopted set; anything else → StatusCrashed with the
+// pid cleared. Modifies the map in place.
+//
+// recognise is asked only about pids that are alive, and a nil recognise
+// keeps the liveness-only behaviour. It must answer true whenever it cannot
+// tell: see the daemon's recogniseService for why a false negative is the
+// more expensive mistake.
+//
+// The liveness probe treats EPERM as dead, unlike the one used for devrun's
+// own children. That is deliberate here. EPERM means the process belongs to
+// another user, which a service devrun spawned never does — so it is a
+// stranger who inherited the pid, and refusing to adopt it is the point.
+func ReAdoptServices(services map[string]*ServiceState, recognise func(name string, pid int) bool) {
+	for name, svc := range services {
 		if svc.PID == nil {
 			continue
 		}
-		err := syscall.Kill(*svc.PID, 0)
-		if err == nil {
+		if syscall.Kill(*svc.PID, 0) == nil && (recognise == nil || recognise(name, *svc.PID)) {
 			svc.Status = StatusRunning
 			svc.ReAdopted = true
-		} else {
-			svc.Status = StatusCrashed
-			svc.PID = nil
+			continue
 		}
+		svc.Status = StatusCrashed
+		svc.PID = nil
 	}
 }
