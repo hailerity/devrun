@@ -243,7 +243,7 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 	// taken, a bind it cannot have, a panic. Sending it to /dev/null turned every
 	// one of those into "it exited before listening", which names no cause at
 	// all and leaves nothing to act on.
-	said, err := openChildStderr()
+	said, err := openChildStderr(s.logger)
 	if err != nil {
 		_ = pr.Close()
 		return nil, err
@@ -298,13 +298,17 @@ const stderrCap = 4096
 // GatewayLogPath is where the gateway child's stderr is kept, beside the
 // tunnel's.
 //
-// It stays near-empty by design: internal/gateway logs nothing, so the only
-// writers are the four fatal messages in the --_gateway entry point and
-// net/http's own panic report. That is exactly why it has to be a real file.
+// It is quiet, not silent. internal/gateway logs nothing of its own, but it
+// sets no ErrorLog on either the http.Server or the ReverseProxy, so Go's
+// default applies: a handler panic (with its stack, per request), a body-copy
+// error mid-response, a superfluous WriteHeader, a write to a hijacked
+// connection — all reach fd 2. Nothing caps this file; neither does anything
+// cap a service log, which is the house style.
+//
 // This used to be a temp file, unlinked as soon as the child announced its
-// address — which served a failure to *start* and threw away a panic while
-// *serving*, the case with no other trace at all.
-func GatewayLogPath() string { return config.LogPath("gateway") }
+// address — which served a failure to *start* and threw away everything
+// above, the cases with no other trace at all.
+func GatewayLogPath() string { return config.InternalLogPath("gateway") }
 
 // childStderr is where the gateway child's stderr goes, and how to read back
 // what this particular child wrote to it.
@@ -322,20 +326,48 @@ type childStderr struct {
 	from int64
 }
 
-func openChildStderr() (*childStderr, error) {
+// openChildStderr opens the gateway's log, falling back to /dev/null when it
+// cannot be had.
+//
+// A log is a debugging aid and must not become a prerequisite for serving.
+// One root-owned _gateway.log — left by a single `sudo devrun` sharing this
+// XDG_DATA_HOME — would otherwise fail every `gateway up` afterwards, giving
+// no gateway at all rather than a gateway with no log. The temp file this
+// replaced could hardly fail; a fixed path in the user's data dir can.
+func openChildStderr(log *slog.Logger) (*childStderr, error) {
 	path := GatewayLogPath()
+	f, err := openAppend(path)
+	if err == nil {
+		return &childStderr{f: f, from: sizeOf(f)}, nil
+	}
+	log.Warn("gateway log unavailable; the child's output goes nowhere", "path", path, "err", err)
+
+	null, nullErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if nullErr != nil {
+		// No log and no /dev/null: the child has no fd 2 to inherit, and a
+		// gateway that cannot write to stderr dies on its first message.
+		return nil, fmt.Errorf("open %s: %w", os.DevNull, nullErr)
+	}
+	return &childStderr{f: null, from: -1}, nil
+}
+
+func openAppend(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir log dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+}
+
+// sizeOf is where this child's output will start, or -1 when that cannot be
+// established. Returning 0 there would read the file from the beginning and
+// report its oldest line as this child's cause — the exact mistake `from`
+// exists to prevent. It was harmless while every run got a fresh temp file.
+func sizeOf(f *os.File) int64 {
+	st, err := f.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("open %s: %w", path, err)
+		return -1
 	}
-	var from int64
-	if st, err := f.Stat(); err == nil {
-		from = st.Size()
-	}
-	return &childStderr{f: f, from: from}, nil
+	return st.Size()
 }
 
 // closeParentCopy drops this process's descriptor. The child holds its own.
@@ -344,6 +376,9 @@ func (c *childStderr) closeParentCopy() { _ = c.f.Close() }
 // firstLine is the one line worth putting in an error: "address already in
 // use", or "panic: ...". What follows is the stack, or the fallout.
 func (c *childStderr) firstLine() string {
+	if c.from < 0 {
+		return "" // no idea where this child's output starts
+	}
 	f, err := os.Open(c.f.Name())
 	if err != nil {
 		return ""

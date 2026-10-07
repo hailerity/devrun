@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func quietSupervisor(t *testing.T) *supervisor {
 	t.Helper()
 	return &supervisor{
@@ -180,7 +182,7 @@ func TestChildStderr(t *testing.T) {
 	fresh := func(t *testing.T) *childStderr {
 		t.Helper()
 		t.Setenv("XDG_DATA_HOME", t.TempDir())
-		c, err := openChildStderr()
+		c, err := openChildStderr(quietLogger())
 		require.NoError(t, err)
 		t.Cleanup(c.closeParentCopy)
 		return c
@@ -206,17 +208,44 @@ func TestChildStderr(t *testing.T) {
 		assert.Empty(t, c.firstLine())
 	})
 
-	// The log outlives the child. It used to be a temp file unlinked the moment
-	// the gateway announced its address, which served a failure to start and
-	// threw away a panic while serving — the case with no other trace.
-	t.Run("the log is kept, beside the tunnel's", func(t *testing.T) {
-		c := fresh(t)
-		write(t, c, "gateway: kept\n")
+	// The log outlives the child, and the next child picks up after it. It
+	// used to be a temp file unlinked the moment the gateway announced its
+	// address, so anything written while *serving* — a handler panic and its
+	// stack, a body-copy error — went to an inode nothing could open.
+	t.Run("one child's output survives into the next child's run", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-		assert.Equal(t, filepath.Join(config.DataDir(), "logs", "gateway.log"), GatewayLogPath())
+		first, err := openChildStderr(quietLogger())
+		require.NoError(t, err)
+		write(t, first, "gateway: panic: nil map\n")
+		first.closeParentCopy()
+
+		second, err := openChildStderr(quietLogger())
+		require.NoError(t, err)
+		t.Cleanup(second.closeParentCopy)
+
+		assert.Equal(t, int64(len("gateway: panic: nil map\n")), second.from,
+			"the second child reads from where the first stopped")
+		assert.Empty(t, second.firstLine(), "and is not blamed for the first's panic")
+
 		kept, err := os.ReadFile(GatewayLogPath())
 		require.NoError(t, err)
-		assert.Contains(t, string(kept), "kept")
+		assert.Contains(t, string(kept), "panic: nil map", "the first child's output is still there")
+	})
+
+	// A log is a debugging aid, not a prerequisite for serving: an unopenable
+	// path must not be the difference between a gateway and no gateway.
+	t.Run("an unopenable log does not stop the gateway", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", dir)
+		// A directory where the log file goes: O_CREATE|O_WRONLY cannot open it.
+		require.NoError(t, os.MkdirAll(GatewayLogPath(), 0o755))
+
+		c, err := openChildStderr(quietLogger())
+		require.NoError(t, err, "it falls back rather than failing")
+		t.Cleanup(c.closeParentCopy)
+		assert.Equal(t, os.DevNull, c.f.Name())
+		assert.Empty(t, c.firstLine(), "nowhere to read a cause from, so none is invented")
 	})
 
 	// The file is appended to across restarts, so reading the whole of it would
@@ -226,7 +255,7 @@ func TestChildStderr(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
 		require.NoError(t, os.WriteFile(GatewayLogPath(), []byte("gateway: an older failure\n"), 0o644))
 
-		c, err := openChildStderr()
+		c, err := openChildStderr(quietLogger())
 		require.NoError(t, err)
 		t.Cleanup(c.closeParentCopy)
 		assert.Empty(t, c.firstLine(), "nothing written by this child yet")

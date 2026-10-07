@@ -65,7 +65,7 @@ var quickURLRe = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
 // tunnel outlives this daemon on the same paths the gateway does, and a write
 // to a pipe whose reader has gone raises SIGPIPE, which on fd 2 the Go runtime
 // turns into a fatal signal.
-func TunnelLogPath() string { return config.LogPath("tunnel") }
+func TunnelLogPath() string { return config.InternalLogPath("tunnel") }
 
 // spawnTunnel starts cloudflared against the gateway as its single origin.
 //
