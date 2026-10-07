@@ -395,3 +395,31 @@ func TestHandleGatewayDown_ClearsTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, state.Gateway)
 }
+
+// The log is append-only across restarts, so a panicking route under load
+// would grow it without limit. Truncating only once it is already large keeps
+// the cross-restart history a fixed path exists for.
+func TestChildStderr_CapsTheLog(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
+	require.NoError(t, os.WriteFile(GatewayLogPath(), make([]byte, logCap+1), 0o644))
+
+	c, err := openChildStderr(quietLogger())
+	require.NoError(t, err)
+	t.Cleanup(c.closeParentCopy)
+
+	assert.Zero(t, c.from, "a truncated file starts this child at byte 0")
+	st, err := os.Stat(GatewayLogPath())
+	require.NoError(t, err)
+	assert.Zero(t, st.Size())
+
+	// Just under the cap is left alone, history and all.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
+	require.NoError(t, os.WriteFile(GatewayLogPath(), make([]byte, logCap), 0o644))
+
+	c2, err := openChildStderr(quietLogger())
+	require.NoError(t, err)
+	t.Cleanup(c2.closeParentCopy)
+	assert.Equal(t, int64(logCap), c2.from, "kept, and this child reads only past it")
+}

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -89,12 +88,26 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 		kind = KindNamed
 	}
 
-	if err := os.MkdirAll(filepath.Dir(TunnelLogPath()), 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir log dir: %w", err)
-	}
-	logFile, err := os.OpenFile(TunnelLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	logFile, err := openAppend(TunnelLogPath())
 	if err != nil {
-		return nil, fmt.Errorf("open tunnel log: %w", err)
+		if cfg.IsQuick() {
+			// A quick tunnel's URL is assigned by Cloudflare and announced
+			// only in this output, so waitForQuickURL has to read it back.
+			// Here the log is load-bearing, not diagnostic: without it there
+			// is nothing to hand the caller.
+			return nil, fmt.Errorf("open tunnel log: %w", err)
+		}
+		// A named tunnel's URL comes from its configured hostname, so nothing
+		// is parsed and the log is only for debugging — which must not be the
+		// difference between publishing and not, any more than it is for the
+		// gateway. Without this, an unwritable logs directory left `tunnel up`
+		// starting the gateway and then failing, with nothing published.
+		s.logger.Warn("tunnel log unavailable; cloudflared's output goes nowhere",
+			"path", TunnelLogPath(), "err", err)
+		logFile, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
+		}
 	}
 	defer func() { _ = logFile.Close() }()
 	// Where this run's output starts, so a quick URL scraped below belongs to

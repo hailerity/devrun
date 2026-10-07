@@ -42,16 +42,21 @@ func LogPath(name string) string {
 }
 
 // InternalLogPath is where a log devrun itself owns is kept — the gateway's
-// stderr, cloudflared's output — in the same directory, where anyone looking
-// for logs will find it.
+// stderr, cloudflared's output — in a subdirectory of the same logs directory,
+// where anyone looking for logs will still find it.
 //
-// The underscore is what keeps it out of the way: ValidateName requires a
-// name to start with a letter or digit, so no service can ever be called
-// "_gateway" and no service log can land on one of these. Spelling these as
-// LogPath("gateway") put them in the user's namespace, where a service called
-// `gateway` — an ordinary thing to have — would have shared the file: its dev
-// server's output would have been quoted back as the gateway's reason for
-// failing to start, and `devrun logs gateway` would have interleaved the two.
+// A subdirectory rather than a name convention, because the convention cannot
+// be enforced where it matters. Spelling these as LogPath("gateway") put them
+// in the user's namespace, where a service called `gateway` — an ordinary
+// thing to run — shared the file: its output was quoted back as the gateway's
+// reason for failing to start, and `devrun logs gateway` interleaved the two.
+// A "_gateway" prefix did not fix it either: the load-bearing check on a name
+// that becomes a path is SafeFileName, not ValidateName, and SafeFileName
+// accepts a leading underscore, so a hand-edited devrun.yaml reached it again.
+//
+// SafeFileName does reject '/' and '\', and it is applied before any service
+// name becomes a path. So no service log can descend into here, by
+// construction rather than by agreement.
 func InternalLogPath(name string) string {
-	return LogPath("_" + name)
+	return filepath.Join(DataDir(), "logs", "devrun", name+".log")
 }

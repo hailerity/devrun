@@ -661,6 +661,7 @@ Agents cannot remove or edit services, or control the daemon.
 | `~/.config/devrun/services.yaml` | Global service registry |
 | `~/.local/share/devrun/state.json` | Runtime state (PID, status, port) |
 | `~/.local/share/devrun/logs/` | Log files per service (`<name>.log`) |
+| `~/.local/share/devrun/logs/devrun/` | devrun's own logs — `gateway.log`, `tunnel.log` |
 | `~/.local/share/devrun/devrun.sock` | Daemon Unix socket |
 | `devrun.yaml` | Project-local service definitions |
 
