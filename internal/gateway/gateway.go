@@ -97,9 +97,8 @@ type Config struct {
 // Snapshot is what the gateway last learned from the daemon. It is replaced
 // wholesale rather than mutated, so a request always sees one coherent view.
 type Snapshot struct {
-	Routes    []Route
-	Exposed   []string // may leave this machine; applies only when Published
-	Tunnelled bool     // a devrun-managed tunnel is running
+	Routes  []Route
+	Exposed []string // may leave this machine; applies only when Published
 }
 
 // Server answers requests from a Snapshot it does not own.

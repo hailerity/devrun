@@ -16,38 +16,35 @@ func req(host string) *http.Request {
 
 func TestPosture(t *testing.T) {
 	tests := []struct {
-		name      string
-		bind      string
-		forced    string
-		tunnelled bool
-		host      string
-		want      Posture
+		name   string
+		bind   string
+		forced string
+		host   string
+		want   Posture
 	}{
-		{"loopback bind, local host", "127.0.0.1:7788", PostureAuto, false, "localhost:7788", Local},
-		{"loopback bind, loopback ip host", "127.0.0.1:7788", PostureAuto, false, "127.0.0.1:7788", Local},
-		{"loopback bind, ipv6 loopback host", "127.0.0.1:7788", PostureAuto, false, "[::1]:7788", Local},
-		{"bind host echoed back", "127.0.0.1:7788", PostureAuto, false, "127.0.0.1", Local},
+		{"loopback bind, local host", "127.0.0.1:7788", PostureAuto, "localhost:7788", Local},
+		{"loopback bind, loopback ip host", "127.0.0.1:7788", PostureAuto, "127.0.0.1:7788", Local},
+		{"loopback bind, ipv6 loopback host", "127.0.0.1:7788", PostureAuto, "[::1]:7788", Local},
+		{"bind host echoed back", "127.0.0.1:7788", PostureAuto, "127.0.0.1", Local},
 
 		// RFC 6761 reserves .localhost for loopback, and browsers resolve it —
 		// it is how subdomain routing is reached locally, so it must stay local.
-		{"subdomain of localhost", "127.0.0.1:7788", PostureAuto, false, "web.localhost:7788", Local},
+		{"subdomain of localhost", "127.0.0.1:7788", PostureAuto, "web.localhost:7788", Local},
 
 		// The hole this check exists for: someone else's ngrok in front of a
 		// loopback gateway. devrun's own state says nothing; the Host does.
-		{"foreign host on a loopback bind", "127.0.0.1:7788", PostureAuto, false, "a1b2.ngrok-free.app", Published},
-		{"no host at all", "127.0.0.1:7788", PostureAuto, false, "", Published},
+		{"foreign host on a loopback bind", "127.0.0.1:7788", PostureAuto, "a1b2.ngrok-free.app", Published},
+		{"no host at all", "127.0.0.1:7788", PostureAuto, "", Published},
 
-		{"devrun's own tunnel", "127.0.0.1:7788", PostureAuto, true, "localhost:7788", Published},
-		{"wildcard bind", "0.0.0.0:7788", PostureAuto, false, "localhost:7788", Published},
-		{"ipv6 wildcard bind", "[::]:7788", PostureAuto, false, "localhost:7788", Published},
-		{"lan bind", "192.168.1.8:7788", PostureAuto, false, "localhost:7788", Published},
-		{"forced, everything else local", "127.0.0.1:7788", PostureForced, false, "localhost:7788", Published},
+		{"wildcard bind", "0.0.0.0:7788", PostureAuto, "localhost:7788", Published},
+		{"ipv6 wildcard bind", "[::]:7788", PostureAuto, "localhost:7788", Published},
+		{"lan bind", "192.168.1.8:7788", PostureAuto, "localhost:7788", Published},
+		{"forced, everything else local", "127.0.0.1:7788", PostureForced, "localhost:7788", Published},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			s := New(Config{Bind: tc.bind, Posture: tc.forced})
-			s.SetSnapshot(Snapshot{Tunnelled: tc.tunnelled})
 			assert.Equal(t, tc.want, s.Posture(req(tc.host)))
 		})
 	}

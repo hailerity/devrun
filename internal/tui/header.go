@@ -63,10 +63,10 @@ func (h headerBar) render(source string, total, running, crashed, frame int, spi
 // word, since "published" alone does not distinguish a tunnel devrun runs
 // from a proxy someone else put in front.
 //
-// A running tunnel counts as published whatever the config says. The
-// gateway's own Posture() reaches that from Snapshot().Tunnelled, which is
-// what turns the allowlist and the token on; reading only the configured
-// posture showed a quiet "gateway" at the exact moment the services were
+// A running tunnel counts as published whatever the config says, because it
+// is: traffic through it carries the public hostname, which the gateway's own
+// Posture judges as off this machine. Reading only the configured posture
+// showed a quiet "gateway" at the exact moment the exposed services were
 // reachable from the internet.
 func gatewayLabel(gw *ipc.GatewayStatusPayload) string {
 	if gw == nil || !gw.Running {
