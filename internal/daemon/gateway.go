@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -284,10 +285,8 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 		if line := said.firstLine(); line != "" {
 			err = fmt.Errorf("%w: %s", err, line)
 		}
-		said.discard()
 		return nil, err
 	}
-	said.discard()
 
 	s.logger.Info("gateway started", "pid", pid, "addr", addr)
 	return &gatewayChild{pid: pid, addr: addr, token: token, cfg: cfg}, nil
@@ -296,10 +295,16 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 // stderrCap bounds how much of the child's stderr is read back when it fails.
 const stderrCap = 4096
 
-// gatewayLogEnv names a file to keep the gateway's stderr in, for anyone
-// debugging the child itself. Unset, it goes to a temp file that is read back
-// only on failure and then removed.
-const gatewayLogEnv = "DEVRUN_GATEWAY_LOG"
+// GatewayLogPath is where the gateway child's stderr is kept, beside the
+// tunnel's.
+//
+// It stays near-empty by design: internal/gateway logs nothing, so the only
+// writers are the four fatal messages in the --_gateway entry point and
+// net/http's own panic report. That is exactly why it has to be a real file.
+// This used to be a temp file, unlinked as soon as the child announced its
+// address — which served a failure to *start* and threw away a panic while
+// *serving*, the case with no other trace at all.
+func GatewayLogPath() string { return config.LogPath("gateway") }
 
 // childStderr is where the gateway child's stderr goes, and how to read back
 // what this particular child wrote to it.
@@ -311,44 +316,30 @@ const gatewayLogEnv = "DEVRUN_GATEWAY_LOG"
 // anything logs. A file cannot kill it, and needs no draining goroutine.
 type childStderr struct {
 	f *os.File
-	// from is the size the file had before this child started. With
-	// DEVRUN_GATEWAY_LOG the file is appended to across restarts, and quoting a
-	// previous child's failure would be worse than quoting none.
+	// from is the size the file had before this child started. The file is
+	// appended to across restarts, and quoting a previous child's failure at a
+	// child that is merely slow would be worse than quoting none.
 	from int64
-	temp bool
 }
 
 func openChildStderr() (*childStderr, error) {
-	if path := os.Getenv(gatewayLogEnv); path != "" {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", gatewayLogEnv, err)
-		}
-		var from int64
-		if st, err := f.Stat(); err == nil {
-			from = st.Size()
-		}
-		return &childStderr{f: f, from: from}, nil
+	path := GatewayLogPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("mkdir log dir: %w", err)
 	}
-	f, err := os.CreateTemp("", "devrun-gateway-*.err")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("gateway stderr file: %w", err)
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	return &childStderr{f: f, temp: true}, nil
+	var from int64
+	if st, err := f.Stat(); err == nil {
+		from = st.Size()
+	}
+	return &childStderr{f: f, from: from}, nil
 }
 
 // closeParentCopy drops this process's descriptor. The child holds its own.
 func (c *childStderr) closeParentCopy() { _ = c.f.Close() }
-
-// discard removes the temp file once its contents are no longer wanted. The
-// child keeps writing to the open descriptor either way; unlinked, that costs
-// nothing once it exits. A file named by DEVRUN_GATEWAY_LOG is left alone —
-// the point of setting it is to keep the output.
-func (c *childStderr) discard() {
-	if c.temp {
-		_ = os.Remove(c.f.Name())
-	}
-}
 
 // firstLine is the one line worth putting in an error: "address already in
 // use", or "panic: ...". What follows is the stack, or the fallout.

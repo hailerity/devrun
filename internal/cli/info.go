@@ -85,17 +85,9 @@ func runSysInfo() error {
 		styleLabel.Render("tunnel"),
 		styleValue.Render(daemon.TunnelLogPath()),
 	)
-	// The gateway's stderr has no fixed home: it goes to a temp file that is
-	// read back only if the child fails and then removed. Naming the variable
-	// is the whole point of the line — it is the only way to keep that output,
-	// and nothing else in devrun mentions it.
-	gwLog := os.Getenv("DEVRUN_GATEWAY_LOG")
-	if gwLog == "" {
-		gwLog = "(a temp file; set DEVRUN_GATEWAY_LOG to keep it)"
-	}
 	fmt.Printf("  %s %s\n",
 		styleLabel.Render("gateway"),
-		styleValue.Render(gwLog),
+		styleValue.Render(daemon.GatewayLogPath()),
 	)
 
 	return nil
