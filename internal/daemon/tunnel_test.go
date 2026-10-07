@@ -340,6 +340,12 @@ func unwritableLog(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores the mode bits this relies on")
 	}
+	// This chmods TunnelLogPath() to 0400. Left pointing at a real data dir it
+	// would silence the developer's own tunnel log for good, and only a daemon
+	// warning would say why — so refuse rather than rely on the caller having
+	// set it.
+	require.True(t, strings.HasPrefix(TunnelLogPath(), os.TempDir()),
+		"set XDG_DATA_HOME to a t.TempDir() first (fakeCloudflared does)")
 	require.NoError(t, os.MkdirAll(filepath.Dir(TunnelLogPath()), 0o755))
 	require.NoError(t, os.WriteFile(TunnelLogPath(), []byte("ERR an older run failed\n"), 0o400))
 }
@@ -352,4 +358,29 @@ func TestReadLogFrom_DeclinesAnUnknownOffset(t *testing.T) {
 
 	assert.Equal(t, "ERR an older run failed", firstLogLine(path, 0), "a known offset reads")
 	assert.Equal(t, "nothing was logged", firstLogLine(path, -1), "an unknown one does not")
+}
+
+// A quick tunnel's URL is announced only in its log, so a log that opened but
+// cannot be measured is as useless as one that would not open: there is no
+// offset to read back from, and scanning from the start risks handing back a
+// *previous* run's trycloudflare URL. It fails rather than returning a
+// running tunnel with no address, or the wrong one.
+func TestSpawnTunnel_QuickNeedsAMeasurableLog(t *testing.T) {
+	fakeCloudflared(t, "sleep 30\n")
+	restore := sizeOf
+	sizeOf = func(*os.File) int64 { return -1 }
+	t.Cleanup(func() { sizeOf = restore })
+
+	s := quietSupervisor(t)
+	_, err := s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	require.Error(t, err, "a quick tunnel cannot proceed without an offset")
+	assert.Contains(t, err.Error(), "could not be read back")
+
+	// A named tunnel does not care: its URL is its configured hostname.
+	named := config.TunnelConfig{Provider: config.ProviderCloudflare, Name: "t", Hostname: "t.example.com"}
+	child, err := s.spawnTunnel(named, "http://127.0.0.1:7788")
+	require.NoError(t, err)
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+	assert.Equal(t, "https://t.example.com", child.publicURL)
+	assert.False(t, child.logged, "so no error points the reader at that log")
 }

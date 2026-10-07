@@ -25,6 +25,18 @@ func (e noLogsError) Error() string {
 }
 func (e noLogsError) Is(target error) bool { return target == ErrNoLogs }
 
+// badNameError is a name that cannot be a file, which is not the same thing as
+// a service that has never run. "Has it been started before?" sends the reader
+// looking in the wrong place; this is the wording startService already uses
+// for the identical rejection. It still answers to ErrNoLogs, so callers that
+// branch on "nothing to show" keep working.
+type badNameError struct{ name string }
+
+func (e badNameError) Error() string {
+	return fmt.Sprintf("invalid service name %q: a name cannot contain '/' or '\\' or be '.' or '..'", e.name)
+}
+func (e badNameError) Is(target error) bool { return target == ErrNoLogs }
+
 // LogQuery selects which lines of a service's log to return.
 type LogQuery struct {
 	// Lines is how many lines to return, counted from the end. Zero or less
@@ -71,7 +83,7 @@ func Logs(name string, q LogQuery) (*LogResult, error) {
 	// `devrun logs devrun/gateway` read one of those as though a service had
 	// written it.
 	if !config.SafeFileName(name) {
-		return nil, noLogsError{name}
+		return nil, badNameError{name}
 	}
 	path := config.LogPath(name)
 	f, err := os.Open(path)

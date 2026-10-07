@@ -36,6 +36,10 @@ type tunnelChild struct {
 	origin    string
 	publicURL string
 	cfg       config.TunnelConfig
+	// logged says this run's output reached TunnelLogPath(), so an error may
+	// point the reader at it. False under the /dev/null fallback, where that
+	// file exists and holds an earlier run instead.
+	logged bool
 }
 
 // How a tunnel was obtained, which decides what its URL is worth: a named
@@ -121,6 +125,16 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 	}
 	defer func() { _ = logFile.Close() }()
 
+	// A quick tunnel's URL is announced only in that log, so it needs an
+	// offset it can read back from. The abort above covers a log that would
+	// not open; this covers one that opened and then could not be measured,
+	// which the IsQuick check there does not reach. Without it waitForQuickURL
+	// spends its whole timeout finding nothing and reports a running tunnel
+	// with no address.
+	if cfg.IsQuick() && from < 0 {
+		return nil, fmt.Errorf("cannot measure %s, so a quick tunnel's URL could not be read back", TunnelLogPath())
+	}
+
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open /dev/null: %w", err)
@@ -140,7 +154,7 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 	pid := proc.Pid
 	s.reap(proc, "tunnel", s.clearTunnelPid)
 
-	child := &tunnelChild{pid: pid, kind: kind, origin: origin, cfg: cfg}
+	child := &tunnelChild{pid: pid, kind: kind, origin: origin, cfg: cfg, logged: from >= 0}
 	if kind == KindNamed {
 		child.publicURL = "https://" + cfg.Hostname
 		// Nothing in a named tunnel's output is parsed, so there is no wait
@@ -192,8 +206,12 @@ func scanQuickURL(path string, from int64) string {
 const logTail = 16 << 10
 
 func readLogFrom(path string, from int64) string {
+	// ReadAt rejects a negative offset by itself, so this is explicitness
+	// rather than the thing standing between a caller and the wrong answer.
+	// What is load-bearing is that `from` is -1 at all when this run's output
+	// went nowhere readable.
 	if from < 0 {
-		return "" // this run's output went nowhere readable
+		return ""
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -316,9 +334,13 @@ func (s *supervisor) handleTunnelUp(raw json.RawMessage) *ipc.Response {
 	s.mu.Unlock()
 	if !live {
 		msg := "cloudflared exited immediately after starting"
-		if _, err := os.Stat(TunnelLogPath()); err == nil {
+		if child.logged {
 			msg += "; see " + TunnelLogPath()
 		}
+		// Not merely "does the file exist": under the /dev/null fallback it
+		// exists and is readable — that is the shape of the case — and holds
+		// somebody else's run. Sending the reader there would repeat the
+		// mistake this diff treats as a defect everywhere else.
 		return errResp(msg)
 	}
 	return okResp(resp)

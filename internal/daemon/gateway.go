@@ -306,9 +306,14 @@ var logCap int64 = 8 << 20
 // Neither of these files is the user's output: the gateway's carries Go's
 // default error log, which writes a panic's whole stack per request while
 // net/http keeps serving, and cloudflared's carries a line per connection and
-// reconnect. Unbounded growth in a file nobody is watching is the result.
-// Truncating only once it is already large keeps the cross-restart history
-// that a fixed path exists for.
+// reconnect.
+//
+// This bounds what *accumulates across runs*, not a single run: it is checked
+// at spawn and nowhere else, and the gateway is built to outlive the daemon,
+// so one long-lived child writing steadily is still unbounded. Capping that
+// properly means the child installing its own limited ErrorLog on the server
+// and the proxy, which is a larger change than this one. Truncating only once
+// the file is already large keeps the history a fixed path exists for.
 func capLog(f *os.File, log *slog.Logger, path string) int64 {
 	from := sizeOf(f)
 	if from <= logCap {
@@ -389,7 +394,9 @@ func openAppend(path string) (*os.File, error) {
 // established. Returning 0 there would read the file from the beginning and
 // report its oldest line as this child's cause — the exact mistake `from`
 // exists to prevent. It was harmless while every run got a fresh temp file.
-func sizeOf(f *os.File) int64 {
+// A var because fstat on an open descriptor does not fail to order: the
+// branches that handle -1 are only reachable in a test through this.
+var sizeOf = func(f *os.File) int64 {
 	st, err := f.Stat()
 	if err != nil {
 		return -1
@@ -403,8 +410,12 @@ func (c *childStderr) closeParentCopy() { _ = c.f.Close() }
 // firstLine is the one line worth putting in an error: "address already in
 // use", or "panic: ...". What follows is the stack, or the fallout.
 func (c *childStderr) firstLine() string {
+	// ReadAt rejects a negative offset by itself, so this is explicitness
+	// rather than the thing standing between a caller and the wrong answer.
+	// What is load-bearing is that `from` is -1 at all when the output went to
+	// /dev/null or the file could not be measured.
 	if c.from < 0 {
-		return "" // no idea where this child's output starts
+		return ""
 	}
 	f, err := os.Open(c.f.Name())
 	if err != nil {
