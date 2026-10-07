@@ -327,7 +327,7 @@ func (s *sidebar) window() (first, last int) {
 	return first, min(len(s.services), first+s.rows)
 }
 
-// Column widths of a service row: " ● name  ⇡  :8080   2.1%".
+// Column widths of a service row: " ● name  ▲  :8080   2.1%".
 const (
 	rowStateW = 9 // "detecting" / "stopping" — the longest state token
 	rowCPUW   = 6 // "100.0%"
@@ -371,11 +371,17 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected, exposed bool) string {
 	// Amber, as the header's published chip is: the two say the same thing at
 	// different scales, and a reader should not have to learn two colours for
 	// "can leave this machine".
-	mark := " "
+	//
+	// Filled and bold because amber is the palest colour in the theme
+	// (#f0e68c against #c9d1d9 text), so a light glyph has nothing carrying
+	// it — the dashed ⇡ this started as was missed outright. ▲ sits at the
+	// weight of the ● beside it, and stays one column wide in every font,
+	// which ☁ and ⬆ do not.
+	mark, style := " ", base.Foreground(colorYellow)
 	if exposed {
-		mark = "⇡"
+		mark, style = "▲", style.Bold(true)
 	}
-	row += base.Foreground(colorYellow).Render(" " + mark)
+	row += style.Render(" " + mark)
 
 	if showState {
 		// A running service shows where to reach it; any other state is named,

@@ -173,8 +173,14 @@ func TestServiceRow_ShowsPortStateAndCPU(t *testing.T) {
 // leave the machine.
 func TestServiceRow_MarksAnExposedService(t *testing.T) {
 	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080)}
-	assert.Contains(t, plain(serviceRow(30, svc, false, true)), "⇡")
-	assert.NotContains(t, plain(serviceRow(30, svc, false, false)), "⇡")
+	assert.Contains(t, plain(serviceRow(30, svc, false, true)), "▲")
+	assert.NotContains(t, plain(serviceRow(30, svc, false, false)), "▲")
+
+	// Amber and bold, pinned on the styled output rather than the stripped
+	// one: amber is the palest colour in the theme, and the mark was missed
+	// entirely before the weight was added.
+	want := lipgloss.NewStyle().Foreground(colorYellow).Bold(true).Render(" ▲")
+	assert.Contains(t, serviceRow(30, svc, false, true), want)
 }
 
 // The mark holds one column whether or not it is used, so it lines up down
@@ -182,7 +188,7 @@ func TestServiceRow_MarksAnExposedService(t *testing.T) {
 // onto the name.
 func TestServiceRow_ExposedMarkKeepsItsColumn(t *testing.T) {
 	svc := ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080)}
-	// By display column, not byte offset: "⇡" is three bytes where the unused
+	// By display column, not byte offset: "▲" is three bytes where the unused
 	// mark is one space, so indexes differ by two while the column does not.
 	col := func(row string) int {
 		return lipgloss.Width(row[:strings.Index(row, ":8080")])
