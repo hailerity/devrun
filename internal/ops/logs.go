@@ -65,6 +65,14 @@ var logBlock = 64 * 1024
 // Lines are split the way bufio.ScanLines splits them: on "\n", with one
 // trailing "\r" removed, and a final line without a newline still counted.
 func Logs(name string, q LogQuery) (*LogResult, error) {
+	// The name becomes a path, so it needs the same check startService applies
+	// before writing one. Without it `devrun logs ../../x` read outside the
+	// logs directory, and once devrun kept its own logs in logs/devrun/,
+	// `devrun logs devrun/gateway` read one of those as though a service had
+	// written it.
+	if !config.SafeFileName(name) {
+		return nil, noLogsError{name}
+	}
 	path := config.LogPath(name)
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {

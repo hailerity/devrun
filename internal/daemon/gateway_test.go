@@ -400,6 +400,12 @@ func TestHandleGatewayDown_ClearsTheRecord(t *testing.T) {
 // would grow it without limit. Truncating only once it is already large keeps
 // the cross-restart history a fixed path exists for.
 func TestChildStderr_CapsTheLog(t *testing.T) {
+	// Shrunk so this writes bytes rather than megabytes. The boundary is what
+	// is under test, not the number.
+	old := logCap
+	logCap = 32
+	t.Cleanup(func() { logCap = old })
+
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
 	require.NoError(t, os.WriteFile(GatewayLogPath(), make([]byte, logCap+1), 0o644))
@@ -421,5 +427,5 @@ func TestChildStderr_CapsTheLog(t *testing.T) {
 	c2, err := openChildStderr(quietLogger())
 	require.NoError(t, err)
 	t.Cleanup(c2.closeParentCopy)
-	assert.Equal(t, int64(logCap), c2.from, "kept, and this child reads only past it")
+	assert.Equal(t, logCap, c2.from, "kept, and this child reads only past it")
 }

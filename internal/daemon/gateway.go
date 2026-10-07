@@ -295,9 +295,32 @@ func (s *supervisor) spawnGateway(cfg config.GatewayConfig, token string) (*gate
 // stderrCap bounds how much of the child's stderr is read back when it fails.
 const stderrCap = 4096
 
-// logCap bounds the gateway log on disk. Generous, because the file is quiet:
-// it exists to hold the one thing that ever goes wrong.
-const logCap = 8 << 20
+// logCap bounds a log devrun owns. Generous, because these files are quiet:
+// they exist to hold the one thing that ever goes wrong. A var so a test can
+// shrink it rather than write megabytes.
+var logCap int64 = 8 << 20
+
+// capLog returns where this run's output starts in f, truncating it first when
+// it has outgrown logCap.
+//
+// Neither of these files is the user's output: the gateway's carries Go's
+// default error log, which writes a panic's whole stack per request while
+// net/http keeps serving, and cloudflared's carries a line per connection and
+// reconnect. Unbounded growth in a file nobody is watching is the result.
+// Truncating only once it is already large keeps the cross-restart history
+// that a fixed path exists for.
+func capLog(f *os.File, log *slog.Logger, path string) int64 {
+	from := sizeOf(f)
+	if from <= logCap {
+		return from
+	}
+	if err := f.Truncate(0); err != nil {
+		log.Warn("log passed its cap but could not be truncated", "path", path, "err", err)
+		return from
+	}
+	log.Info("log passed its cap and was truncated", "path", path, "was", from)
+	return 0
+}
 
 // GatewayLogPath is where the gateway child's stderr is kept, beside the
 // tunnel's.
@@ -306,8 +329,8 @@ const logCap = 8 << 20
 // sets no ErrorLog on either the http.Server or the ReverseProxy, so Go's
 // default applies: a handler panic (with its stack, per request), a body-copy
 // error mid-response, a superfluous WriteHeader, a write to a hijacked
-// connection — all reach fd 2. Nothing caps this file; neither does anything
-// cap a service log, which is the house style.
+// connection — all reach fd 2. That is why capLog bounds it: a service log
+// grows with output its owner chose to produce, and this one does not.
 //
 // This used to be a temp file, unlinked as soon as the child announced its
 // address — which served a failure to *start* and threw away everything
@@ -342,20 +365,7 @@ func openChildStderr(log *slog.Logger) (*childStderr, error) {
 	path := GatewayLogPath()
 	f, err := openAppend(path)
 	if err == nil {
-		from := sizeOf(f)
-		// Capped, unlike a service log. What appends here is not output the
-		// user asked to produce but Go's default error log, and a handler
-		// panic writes a full stack per request while net/http keeps serving
-		// — so one deterministic panic on a published route is unbounded
-		// growth in a file nobody is watching. Truncating only once it is
-		// already large keeps the cross-restart history a fixed path is for.
-		if from > logCap {
-			if truncErr := f.Truncate(0); truncErr == nil {
-				log.Info("gateway log passed its cap and was truncated", "path", path, "was", from)
-				from = 0
-			}
-		}
-		return &childStderr{f: f, from: from}, nil
+		return &childStderr{f: f, from: capLog(f, log, path)}, nil
 	}
 	log.Warn("gateway log unavailable; the child's output goes nowhere", "path", path, "err", err)
 

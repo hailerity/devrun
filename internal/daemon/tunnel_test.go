@@ -295,3 +295,61 @@ func TestAdoptTunnel_KeepsTheOrigin(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, "http://127.0.0.1:7788", got.origin)
 }
+
+// A named tunnel publishes from its configured hostname, so its log is only
+// for debugging and must not decide whether publishing happens. A quick one
+// has its URL announced nowhere else, so there the log is load-bearing.
+func TestSpawnTunnel_AnUnwritableLogStopsOnlyAQuickTunnel(t *testing.T) {
+	fakeCloudflared(t, "sleep 30\n")
+	unwritableLog(t)
+
+	s := quietSupervisor(t)
+	named := config.TunnelConfig{Provider: config.ProviderCloudflare, Name: "t", Hostname: "t.example.com"}
+	child, err := s.spawnTunnel(named, "http://127.0.0.1:7788")
+	require.NoError(t, err, "a named tunnel publishes without a log")
+	t.Cleanup(func() { s.mu.Lock(); s.tunnel = child; s.stopTunnelLocked(); s.mu.Unlock() })
+	assert.Equal(t, "https://t.example.com", child.publicURL)
+
+	_, err = s.spawnTunnel(config.TunnelConfig{}, "http://127.0.0.1:7788")
+	assert.ErrorContains(t, err, "open tunnel log",
+		"a quick tunnel's URL is only in that log, so there is nothing to hand back without it")
+}
+
+// The defect this guards: with the log unwritable, this run's output went to
+// /dev/null — but the real log is still *readable*, which is the whole shape
+// of the case (a root-owned 0644 file). Reading it from offset 0 reported
+// someone else's failure, from any time in the past, as this run's cause.
+func TestSpawnTunnel_NeverQuotesAnEarlierRunsFailure(t *testing.T) {
+	fakeCloudflared(t, "exit 1\n") // dead before namedSettle elapses
+	unwritableLog(t)
+
+	s := quietSupervisor(t)
+	named := config.TunnelConfig{Provider: config.ProviderCloudflare, Name: "t", Hostname: "t.example.com"}
+	_, err := s.spawnTunnel(named, "http://127.0.0.1:7788")
+
+	require.ErrorContains(t, err, "cloudflared exited")
+	assert.NotContains(t, err.Error(), "an older run failed",
+		"this run wrote nothing, so nothing in that file is its cause")
+	assert.Contains(t, err.Error(), "nothing was logged")
+}
+
+// unwritableLog leaves TunnelLogPath() readable, holding an earlier run's
+// failure, and impossible to open for writing.
+func unwritableLog(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the mode bits this relies on")
+	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(TunnelLogPath()), 0o755))
+	require.NoError(t, os.WriteFile(TunnelLogPath(), []byte("ERR an older run failed\n"), 0o400))
+}
+
+// readLogFrom declines an offset it does not know, so a run whose output went
+// to /dev/null cannot be blamed for whatever the real log already held.
+func TestReadLogFrom_DeclinesAnUnknownOffset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tunnel.log")
+	require.NoError(t, os.WriteFile(path, []byte("ERR an older run failed\n"), 0o644))
+
+	assert.Equal(t, "ERR an older run failed", firstLogLine(path, 0), "a known offset reads")
+	assert.Equal(t, "nothing was logged", firstLogLine(path, -1), "an unknown one does not")
+}

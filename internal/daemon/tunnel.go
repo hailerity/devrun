@@ -88,6 +88,10 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 		kind = KindNamed
 	}
 
+	// Where this run's output starts, so a quick URL scraped below belongs to
+	// this cloudflared and not to one that ran an hour ago. -1 means it went
+	// nowhere readable, and nothing may be quoted back as this run's doing.
+	from := int64(-1)
 	logFile, err := openAppend(TunnelLogPath())
 	if err != nil {
 		if cfg.IsQuick() {
@@ -108,14 +112,14 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 		if err != nil {
 			return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
 		}
+		// from stays -1. The real log may still hold an older run's failure —
+		// readable even when unwritable, which is the very case this fallback
+		// exists for — and quoting that as this run's cause is the mistake
+		// `from` is here to prevent.
+	} else {
+		from = capLog(logFile, s.logger, TunnelLogPath())
 	}
 	defer func() { _ = logFile.Close() }()
-	// Where this run's output starts, so a quick URL scraped below belongs to
-	// this cloudflared and not to one that ran an hour ago.
-	var from int64
-	if st, err := logFile.Stat(); err == nil {
-		from = st.Size()
-	}
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -188,6 +192,9 @@ func scanQuickURL(path string, from int64) string {
 const logTail = 16 << 10
 
 func readLogFrom(path string, from int64) string {
+	if from < 0 {
+		return "" // this run's output went nowhere readable
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -308,7 +315,11 @@ func (s *supervisor) handleTunnelUp(raw json.RawMessage) *ipc.Response {
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
 	if !live {
-		return errResp("cloudflared exited immediately after starting; see " + TunnelLogPath())
+		msg := "cloudflared exited immediately after starting"
+		if _, err := os.Stat(TunnelLogPath()); err == nil {
+			msg += "; see " + TunnelLogPath()
+		}
+		return errResp(msg)
 	}
 	return okResp(resp)
 }

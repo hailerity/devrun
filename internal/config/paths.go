@@ -54,9 +54,10 @@ func LogPath(name string) string {
 // that becomes a path is SafeFileName, not ValidateName, and SafeFileName
 // accepts a leading underscore, so a hand-edited devrun.yaml reached it again.
 //
-// SafeFileName does reject '/' and '\', and it is applied before any service
-// name becomes a path. So no service log can descend into here, by
-// construction rather than by agreement.
+// SafeFileName does reject '/' and '\'. It is applied by startService before
+// a name becomes a path that is written, and by ops.Logs before one is read —
+// both, because a guard on only the writers left `devrun logs devrun/gateway`
+// handing this file back as though a service had produced it.
 func InternalLogPath(name string) string {
 	return filepath.Join(DataDir(), "logs", "devrun", name+".log")
 }
