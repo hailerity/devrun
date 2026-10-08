@@ -274,6 +274,33 @@ gateway:
 On a shared machine, loopback is not a trust boundary either. `auth: always`
 keeps the token on locally.
 
+### Handing over the key
+
+`devrun gateway status` prints the token, whether or not a tunnel is running;
+`devrun tunnel up` prints it too, since publishing is what usually starts it
+being asked for. There are three ways to present it:
+
+| | How | Good for |
+|---|---|---|
+| **Link** | `https://…/?k=<token>` | Sharing — the link carries the key |
+| **Form** | Paste it on the page the gateway answers with | Whoever has the token but no link |
+| **Header** | `Authorization: Bearer <token>` | `curl`, and anything that is not a browser |
+
+The first two trade the token for an `HttpOnly` cookie, so it is presented once
+rather than on every link that follows.
+
+**Prefer the form when you have the token to hand.** A pasted key never enters
+the address bar, the browser's history, a `Referer` header or the tunnel's
+request log; `?k=` is in a URL for one round trip before it is traded away. The
+form is no weaker a gate — the token is 128 bits of randomness, so neither can
+be guessed, and the page answers a wrong key exactly as it answers a missing
+one, so it never confirms a near miss.
+
+A key entered in the form lands you on the index rather than the page you asked
+for. That is deliberate: carrying a destination through the form would make the
+denial page differ by the path that was requested, and it is identical for every
+path so that a stranger cannot learn which services exist.
+
 ### How a request names a service
 
 Two shapes, and both always resolve whatever the mode says — `mode` only
