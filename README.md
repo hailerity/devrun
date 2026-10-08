@@ -20,7 +20,7 @@ with a live TUI dashboard and persistent logs.
 - **Attach to any service** — bring a running process to your foreground (interactive)
 - **Local gateway** — one address for everything you are running, with a clickable index
 - **Optional publishing** — put the gateway behind a Cloudflare tunnel, or front it yourself
-- **Works with AI agents** — Claude Code, Codex and other MCP clients can add, start and stop services and read their logs (`devrun mcp`)
+- **Works with AI agents** — Claude Code, Codex and other MCP clients can add, start and stop services and read their logs (`devrun mcp`), with a Claude Code plugin that steers them to it instead of a raw shell
 
 ---
 
@@ -563,13 +563,35 @@ drives the same daemon you do, so whatever it starts shows up live in your
 
 ### Set up
 
-**Claude Code**
+**Claude Code — plugin (recommended)**
+
+The plugin wires up the MCP server *and* a skill that tells the agent to reach
+for devrun when it needs a dev server, rather than leaving it to notice the
+tools on its own:
+
+```bash
+claude plugin marketplace add hailerity/devrun
+claude plugin install devrun@hailerity
+```
+
+or, in a session, `/plugin marketplace add hailerity/devrun` followed by
+`/plugin install devrun@hailerity`.
+
+To try it without installing, `claude --plugin-dir ./plugin` loads it for one
+session.
+
+**Claude Code — MCP server only**
 
 ```bash
 claude mcp add devrun -- devrun mcp              # this project only
 claude mcp add -s user devrun -- devrun mcp      # every project
 claude mcp add -s project devrun -- devrun mcp   # shared with the team via .mcp.json
 ```
+
+These give you the tools without the skill. If you have done this *and* then
+install the plugin, your own entry takes precedence and the plugin's is
+ignored — both define the same `devrun mcp` command, so nothing breaks, but
+`claude mcp list` will mention the conflict.
 
 The project scope writes a `.mcp.json` you can commit:
 
