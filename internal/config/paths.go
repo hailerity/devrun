@@ -33,6 +33,31 @@ func RegistryPath() string  { return filepath.Join(ConfigDir(), "services.yaml")
 func SocketPath() string    { return filepath.Join(DataDir(), "devrun.sock") }
 func StatePath() string     { return filepath.Join(DataDir(), "state.json") }
 func DaemonPIDPath() string { return filepath.Join(DataDir(), "daemon.pid") }
+
+// LogPath is where a *service's* output is kept. The name comes from the
+// user, so it shares a directory with every other service's log and nothing
+// else may claim a name in here — see InternalLogPath.
 func LogPath(name string) string {
 	return filepath.Join(DataDir(), "logs", name+".log")
+}
+
+// InternalLogPath is where a log devrun itself owns is kept — the gateway's
+// stderr, cloudflared's output — in a subdirectory of the same logs directory,
+// where anyone looking for logs will still find it.
+//
+// A subdirectory rather than a name convention, because the convention cannot
+// be enforced where it matters. Spelling these as LogPath("gateway") put them
+// in the user's namespace, where a service called `gateway` — an ordinary
+// thing to run — shared the file: its output was quoted back as the gateway's
+// reason for failing to start, and `devrun logs gateway` interleaved the two.
+// A "_gateway" prefix did not fix it either: the load-bearing check on a name
+// that becomes a path is SafeFileName, not ValidateName, and SafeFileName
+// accepts a leading underscore, so a hand-edited devrun.yaml reached it again.
+//
+// SafeFileName does reject '/' and '\'. It is applied by startService before
+// a name becomes a path that is written, and by ops.Logs before one is read —
+// both, because a guard on only the writers left `devrun logs devrun/gateway`
+// handing this file back as though a service had produced it.
+func InternalLogPath(name string) string {
+	return filepath.Join(DataDir(), "logs", "devrun", name+".log")
 }

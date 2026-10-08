@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -37,6 +36,10 @@ type tunnelChild struct {
 	origin    string
 	publicURL string
 	cfg       config.TunnelConfig
+	// logged says this run's output reached TunnelLogPath(), so an error may
+	// point the reader at it. False under the /dev/null fallback, where that
+	// file exists and holds an earlier run instead.
+	logged bool
 }
 
 // How a tunnel was obtained, which decides what its URL is worth: a named
@@ -65,7 +68,7 @@ var quickURLRe = regexp.MustCompile(`https://[a-z0-9-]+\.trycloudflare\.com`)
 // tunnel outlives this daemon on the same paths the gateway does, and a write
 // to a pipe whose reader has gone raises SIGPIPE, which on fd 2 the Go runtime
 // turns into a fatal signal.
-func TunnelLogPath() string { return config.LogPath("tunnel") }
+func TunnelLogPath() string { return config.InternalLogPath("tunnel") }
 
 // spawnTunnel starts cloudflared against the gateway as its single origin.
 //
@@ -89,19 +92,47 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 		kind = KindNamed
 	}
 
-	if err := os.MkdirAll(filepath.Dir(TunnelLogPath()), 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir log dir: %w", err)
-	}
-	logFile, err := os.OpenFile(TunnelLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	// Where this run's output starts, so a quick URL scraped below belongs to
+	// this cloudflared and not to one that ran an hour ago. -1 means it went
+	// nowhere readable, and nothing may be quoted back as this run's doing.
+	from := int64(-1)
+	logFile, err := openAppend(TunnelLogPath())
 	if err != nil {
-		return nil, fmt.Errorf("open tunnel log: %w", err)
+		if cfg.IsQuick() {
+			// A quick tunnel's URL is assigned by Cloudflare and announced
+			// only in this output, so waitForQuickURL has to read it back.
+			// Here the log is load-bearing, not diagnostic: without it there
+			// is nothing to hand the caller.
+			return nil, fmt.Errorf("open tunnel log: %w", err)
+		}
+		// A named tunnel's URL comes from its configured hostname, so nothing
+		// is parsed and the log is only for debugging — which must not be the
+		// difference between publishing and not, any more than it is for the
+		// gateway. Without this, an unwritable logs directory left `tunnel up`
+		// starting the gateway and then failing, with nothing published.
+		s.logger.Warn("tunnel log unavailable; cloudflared's output goes nowhere",
+			"path", TunnelLogPath(), "err", err)
+		logFile, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
+		}
+		// from stays -1. The real log may still hold an older run's failure —
+		// readable even when unwritable, which is the very case this fallback
+		// exists for — and quoting that as this run's cause is the mistake
+		// `from` is here to prevent.
+	} else {
+		from = capLog(logFile, s.logger, TunnelLogPath())
 	}
 	defer func() { _ = logFile.Close() }()
-	// Where this run's output starts, so a quick URL scraped below belongs to
-	// this cloudflared and not to one that ran an hour ago.
-	var from int64
-	if st, err := logFile.Stat(); err == nil {
-		from = st.Size()
+
+	// A quick tunnel's URL is announced only in that log, so it needs an
+	// offset it can read back from. The abort above covers a log that would
+	// not open; this covers one that opened and then could not be measured,
+	// which the IsQuick check there does not reach. Without it waitForQuickURL
+	// spends its whole timeout finding nothing and reports a running tunnel
+	// with no address.
+	if cfg.IsQuick() && from < 0 {
+		return nil, fmt.Errorf("cannot measure %s, so a quick tunnel's URL could not be read back", TunnelLogPath())
 	}
 
 	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
@@ -123,7 +154,7 @@ func (s *supervisor) spawnTunnel(cfg config.TunnelConfig, origin string) (*tunne
 	pid := proc.Pid
 	s.reap(proc, "tunnel", s.clearTunnelPid)
 
-	child := &tunnelChild{pid: pid, kind: kind, origin: origin, cfg: cfg}
+	child := &tunnelChild{pid: pid, kind: kind, origin: origin, cfg: cfg, logged: from >= 0}
 	if kind == KindNamed {
 		child.publicURL = "https://" + cfg.Hostname
 		// Nothing in a named tunnel's output is parsed, so there is no wait
@@ -175,6 +206,13 @@ func scanQuickURL(path string, from int64) string {
 const logTail = 16 << 10
 
 func readLogFrom(path string, from int64) string {
+	// ReadAt rejects a negative offset by itself, so this is explicitness
+	// rather than the thing standing between a caller and the wrong answer.
+	// What is load-bearing is that `from` is -1 at all when this run's output
+	// went nowhere readable.
+	if from < 0 {
+		return ""
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -295,7 +333,15 @@ func (s *supervisor) handleTunnelUp(raw json.RawMessage) *ipc.Response {
 	resp := s.gatewayStatusLocked()
 	s.mu.Unlock()
 	if !live {
-		return errResp("cloudflared exited immediately after starting; see " + TunnelLogPath())
+		msg := "cloudflared exited immediately after starting"
+		if child.logged {
+			msg += "; see " + TunnelLogPath()
+		}
+		// Not merely "does the file exist": under the /dev/null fallback it
+		// exists and is readable — that is the shape of the case — and holds
+		// somebody else's run. Sending the reader there would repeat the
+		// mistake this diff treats as a defect everywhere else.
+		return errResp(msg)
 	}
 	return okResp(resp)
 }

@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func quietLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
 func quietSupervisor(t *testing.T) *supervisor {
 	t.Helper()
 	return &supervisor{
@@ -175,53 +177,85 @@ func TestChildStderr(t *testing.T) {
 		_, err := io.WriteString(c.f, s)
 		require.NoError(t, err)
 	}
+	// Each subtest gets its own data dir, so GatewayLogPath lands somewhere
+	// disposable instead of in the developer's real log directory.
+	fresh := func(t *testing.T) *childStderr {
+		t.Helper()
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		c, err := openChildStderr(quietLogger())
+		require.NoError(t, err)
+		t.Cleanup(c.closeParentCopy)
+		return c
+	}
 
 	t.Run("quotes the cause without the child's own label", func(t *testing.T) {
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		t.Cleanup(c.discard)
+		c := fresh(t)
 		write(t, c, "gateway: listen on 127.0.0.1:7788: bind: address already in use\n")
 
 		assert.Equal(t, "listen on 127.0.0.1:7788: bind: address already in use", c.firstLine())
 	})
 
 	t.Run("keeps the opening line, not the stack", func(t *testing.T) {
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		t.Cleanup(c.discard)
+		c := fresh(t)
 		write(t, c, "panic: nil map\n\ngoroutine 1 [running]:\nmain.run(...)\n")
 
 		assert.Equal(t, "panic: nil map", c.firstLine())
 	})
 
 	t.Run("a silent child says nothing", func(t *testing.T) {
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		t.Cleanup(c.discard)
+		c := fresh(t)
 
 		assert.Empty(t, c.firstLine())
 	})
 
-	t.Run("discard removes the temp file", func(t *testing.T) {
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		require.True(t, c.temp)
-		name := c.f.Name()
-		c.closeParentCopy()
-		c.discard()
+	// The log outlives the child, and the next child picks up after it. It
+	// used to be a temp file unlinked the moment the gateway announced its
+	// address, so anything written while *serving* — a handler panic and its
+	// stack, a body-copy error — went to an inode nothing could open.
+	t.Run("one child's output survives into the next child's run", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
 
-		_, err = os.Stat(name)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		first, err := openChildStderr(quietLogger())
+		require.NoError(t, err)
+		write(t, first, "gateway: panic: nil map\n")
+		first.closeParentCopy()
+
+		second, err := openChildStderr(quietLogger())
+		require.NoError(t, err)
+		t.Cleanup(second.closeParentCopy)
+
+		assert.Equal(t, int64(len("gateway: panic: nil map\n")), second.from,
+			"the second child reads from where the first stopped")
+		assert.Empty(t, second.firstLine(), "and is not blamed for the first's panic")
+
+		kept, err := os.ReadFile(GatewayLogPath())
+		require.NoError(t, err)
+		assert.Contains(t, string(kept), "panic: nil map", "the first child's output is still there")
 	})
 
-	// DEVRUN_GATEWAY_LOG is appended to across restarts. Reading the whole file
-	// would quote the *previous* child's failure at a child that is merely slow.
-	t.Run("reads only what this child wrote to the log file", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "gateway.err")
-		require.NoError(t, os.WriteFile(path, []byte("gateway: an older failure\n"), 0o644))
-		t.Setenv(gatewayLogEnv, path)
+	// A log is a debugging aid, not a prerequisite for serving: an unopenable
+	// path must not be the difference between a gateway and no gateway.
+	t.Run("an unopenable log does not stop the gateway", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("XDG_DATA_HOME", dir)
+		// A directory where the log file goes: O_CREATE|O_WRONLY cannot open it.
+		require.NoError(t, os.MkdirAll(GatewayLogPath(), 0o755))
 
-		c, err := openChildStderr()
+		c, err := openChildStderr(quietLogger())
+		require.NoError(t, err, "it falls back rather than failing")
+		t.Cleanup(c.closeParentCopy)
+		assert.Equal(t, os.DevNull, c.f.Name())
+		assert.Empty(t, c.firstLine(), "nowhere to read a cause from, so none is invented")
+	})
+
+	// The file is appended to across restarts, so reading the whole of it would
+	// quote the *previous* child's failure at a child that is merely slow.
+	t.Run("reads only what this child wrote", func(t *testing.T) {
+		t.Setenv("XDG_DATA_HOME", t.TempDir())
+		require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
+		require.NoError(t, os.WriteFile(GatewayLogPath(), []byte("gateway: an older failure\n"), 0o644))
+
+		c, err := openChildStderr(quietLogger())
 		require.NoError(t, err)
 		t.Cleanup(c.closeParentCopy)
 		assert.Empty(t, c.firstLine(), "nothing written by this child yet")
@@ -230,26 +264,8 @@ func TestChildStderr(t *testing.T) {
 		assert.Equal(t, "the new failure", c.firstLine())
 	})
 
-	// The point of setting it is to keep the output.
-	t.Run("never removes the log file", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "gateway.err")
-		t.Setenv(gatewayLogEnv, path)
-
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		write(t, c, "gateway: kept\n")
-		c.closeParentCopy()
-		c.discard()
-
-		kept, err := os.ReadFile(path)
-		require.NoError(t, err)
-		assert.Contains(t, string(kept), "kept")
-	})
-
 	t.Run("a long stack does not read back unbounded", func(t *testing.T) {
-		c, err := openChildStderr()
-		require.NoError(t, err)
-		t.Cleanup(c.discard)
+		c := fresh(t)
 		write(t, c, strings.Repeat("x", 4*stderrCap)+"\nlater\n")
 
 		assert.Len(t, c.firstLine(), stderrCap, "capped, and never reaches the later line")
@@ -378,4 +394,38 @@ func TestHandleGatewayDown_ClearsTheRecord(t *testing.T) {
 	state, err := config.LoadState(s.statePath)
 	require.NoError(t, err)
 	assert.Nil(t, state.Gateway)
+}
+
+// The log is append-only across restarts, so a panicking route under load
+// would grow it without limit. Truncating only once it is already large keeps
+// the cross-restart history a fixed path exists for.
+func TestChildStderr_CapsTheLog(t *testing.T) {
+	// Shrunk so this writes bytes rather than megabytes. The boundary is what
+	// is under test, not the number.
+	old := logCap
+	logCap = 32
+	t.Cleanup(func() { logCap = old })
+
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
+	require.NoError(t, os.WriteFile(GatewayLogPath(), make([]byte, logCap+1), 0o644))
+
+	c, err := openChildStderr(quietLogger())
+	require.NoError(t, err)
+	t.Cleanup(c.closeParentCopy)
+
+	assert.Zero(t, c.from, "a truncated file starts this child at byte 0")
+	st, err := os.Stat(GatewayLogPath())
+	require.NoError(t, err)
+	assert.Zero(t, st.Size())
+
+	// Just under the cap is left alone, history and all.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(GatewayLogPath()), 0o755))
+	require.NoError(t, os.WriteFile(GatewayLogPath(), make([]byte, logCap), 0o644))
+
+	c2, err := openChildStderr(quietLogger())
+	require.NoError(t, err)
+	t.Cleanup(c2.closeParentCopy)
+	assert.Equal(t, logCap, c2.from, "kept, and this child reads only past it")
 }

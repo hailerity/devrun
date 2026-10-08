@@ -205,3 +205,19 @@ func TestLogs_ReadsOnlyTheEnd(t *testing.T) {
 	assert.Equal(t, []string{"last", "second to last"}, got)
 	assert.Equal(t, 2, calls, "stops as soon as the caller has enough")
 }
+
+// The name becomes a path. Without this check `devrun logs ../../x` read
+// outside the logs directory, and once devrun kept its own logs under
+// logs/devrun/, `devrun logs devrun/gateway` handed one back as though a
+// service had written it.
+func TestLogs_RefusesANameThatIsAPath(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	require.NoError(t, os.MkdirAll(filepath.Dir(config.InternalLogPath("gateway")), 0o755))
+	require.NoError(t, os.WriteFile(config.InternalLogPath("gateway"),
+		[]byte("gateway: panic: nil map\n"), 0o644))
+
+	for _, name := range []string{"devrun/gateway", "../../escaped", "..", "devrun\\gateway"} {
+		_, err := Logs(name, LogQuery{Lines: 10})
+		assert.ErrorIs(t, err, ErrNoLogs, "%q must not resolve to a file", name)
+	}
+}
