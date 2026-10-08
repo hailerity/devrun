@@ -1,0 +1,10 @@
+{
+  "name": "devrun",
+  "description": "Hand long-running dev processes — servers, workers, local databases — to devrun instead of starting them in a shell.",
+  "version": "0.1.0",
+  "author": { "name": "Hai Le" },
+  "homepage": "https://github.com/hailerity/devrun",
+  "repository": "https://github.com/hailerity/devrun",
+  "license": "MIT",
+  "keywords": ["devrun", "dev-server", "process-manager", "mcp"]
+}

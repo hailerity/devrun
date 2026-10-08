@@ -1,0 +1,15 @@
+{
+  "name": "hailerity",
+  "description": "Plugins from the devrun project — local development tooling for AI coding agents.",
+  "owner": {
+    "name": "Hai Le",
+    "url": "https://github.com/hailerity"
+  },
+  "plugins": [
+    {
+      "name": "devrun",
+      "source": "./plugin",
+      "description": "Hand long-running dev processes — servers, workers, local databases — to devrun instead of starting them in a shell."
+    }
+  ]
+}
