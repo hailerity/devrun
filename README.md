@@ -41,7 +41,7 @@ Pin a specific version with `DEVRUN_VERSION=v1.2.3 curl ... | sh`.
 go install github.com/hailerity/devrun/cmd/devrun@latest
 ```
 
-Requires Go 1.25+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
+Requires Go 1.26+. The binary is placed in `$GOPATH/bin` (usually `~/go/bin`).
 
 ### Verify
 
