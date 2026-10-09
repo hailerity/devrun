@@ -88,12 +88,13 @@ type model struct {
 	pickerC     targetPicker
 	helpC       helpPanel
 
-	searching   bool            // the footer's search input has the keyboard
-	searchScope searchScope     // which list that input is narrowing
-	searchPrev  string          // the query the input opened on, restored if it is cancelled
-	searchC     textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
-	headerC     headerBar
-	footerC     footerBar
+	searching    bool            // the footer's search input has the keyboard
+	searchScope  searchScope     // which list that input is narrowing
+	searchPrev   string          // the query the input opened on, restored if it is cancelled
+	searchAnchor string          // the service the cursor was on then, restored with it
+	searchC      textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
+	headerC      headerBar
+	footerC      footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -256,12 +257,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modalOpen() {
 			return m, nil
 		}
-		// The `/` input is a keyboard trap, so it has to be a mouse trap too.
-		// A click would otherwise move focus to the log pane while the input
-		// still held the keyboard — the accent border on one pane, every
-		// keystroke narrowing the other, and Enter committing a query the
-		// reader had visually left behind.
-		if m.searching {
+		// While `/` is narrowing the service list it has to be a mouse trap as
+		// well as a keyboard one: a click would otherwise move focus to the log
+		// pane while the input still held the keyboard — accent border on one
+		// pane, every keystroke narrowing the other, Enter committing a query
+		// the reader had visually left behind.
+		//
+		// A log search is the opposite case. Focus is already on the main pane
+		// and the log is the thing being narrowed, so scrolling it to inspect
+		// the live-highlighted matches is the obvious thing to do mid-search,
+		// and it worked before this key grew a second job. Those events pass.
+		//
+		// Release always passes, whatever the scope: pressing `/` with the
+		// button held would otherwise leave scrollBuffer.mouseDown set, and the
+		// next bare motion over the log would drag a selection with no button
+		// down at all.
+		if m.searching && m.searchScope == scopeServices &&
+			msg.Action != tea.MouseActionRelease {
 			return m, nil
 		}
 		// In the narrow layout the sidebar may be the pane on screen; the log
@@ -440,8 +452,13 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searching = true
 		m.searchScope = scopeServices
 		// `/` prefills with the live query so an existing filter can be
-		// amended, which only works if backing out puts the old one back.
+		// amended, which only works if backing out puts the old one back —
+		// along with the cursor, which the narrowing is about to move.
 		m.searchPrev = m.sidebarC.filterQuery
+		m.searchAnchor = ""
+		if svc := m.sidebarC.selectedService(); svc != nil {
+			m.searchAnchor = svc.Name
+		}
 		m.searchC.SetValue(m.sidebarC.filterQuery)
 		m.searchC.CursorEnd()
 		m.searchC.Focus()
@@ -688,7 +705,7 @@ func (m model) handleServiceFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// with its own test, and not this change's to alter.)
 		m.searching = false
 		m.searchC.Blur()
-		m.sidebarC.setQuery(m.searchPrev)
+		m.sidebarC.cancelQuery(m.searchPrev, m.searchAnchor)
 		m.updateLogFile()
 		return m, nil
 	case tea.KeyEnter:

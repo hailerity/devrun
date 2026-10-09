@@ -204,6 +204,24 @@ func (s *sidebar) setFilter(name string) {
 	})
 }
 
+// cancelQuery undoes an abandoned `/` session: the query the input opened on
+// goes back, and so does the cursor. Both are needed for the footer's "cancel"
+// to be honest — while the query was in force the narrowing will have forced
+// the cursor onto whichever row survived it, and restoring only the query
+// leaves the highlight (and the log pane behind it) on that row rather than on
+// the service the reader started from.
+//
+// Deliberately not keepingCursor: that records the cursor as it is now, which
+// is the forced row this is undoing.
+func (s *sidebar) cancelQuery(query, anchor string) {
+	s.filterQuery = query
+	s.refilter()
+	if anchor != "" {
+		s.anchor = anchor
+	}
+	s.selectServiceByName(s.anchor)
+}
+
 // setQuery narrows the list to the services whose name contains q, ignoring
 // case; "" clears it. Matching is a plain substring and deliberately not fuzzy:
 // a list you are scanning has to stay predictable, and "api" pulling in

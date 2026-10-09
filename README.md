@@ -532,15 +532,15 @@ width: `Tab` swaps panes, and `↵` on a service opens it.
 | `s` / `x` | Start / stop the selected service |
 | `r` | Restart the selected service (starts it if it is not running) |
 | `S` / `X` | Start / stop everything the list is showing — narrowed by `/` and `t`, or every service when neither is active |
+| `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` in the input cancels, `Esc` on the list clears) |
+| `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
+| `e` | Edit the selected service (sidebar focused) |
+| `d` | Remove the selected service (sidebar focused, asks to confirm) |
 
 Under a `/` query, `S` / `X` act on the named services one by one rather than on
 the target as a unit. That is the point — you narrowed the list to those rows —
 but it means `X` will stop a service even when another started target still
 holds it, where `X` on an unqueried target leaves such a member running.
-| `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` in the input cancels, `Esc` on the list clears) |
-| `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
-| `e` | Edit the selected service (sidebar focused) |
-| `d` | Remove the selected service (sidebar focused, asks to confirm) |
 
 Pressing `e` opens a modal editor. It writes back to the active config — the
 project `devrun.yaml` when one is in scope, otherwise `~/.config/devrun/services.yaml` —

@@ -455,9 +455,9 @@ func TestModel_SlashStillOpensAfterAQueryMatchedNothing(t *testing.T) {
 	assert.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
 }
 
-// The `/` input owns the keyboard, so it has to own the mouse too: a click that
-// moved focus would leave the accent border on one pane while every keystroke
-// narrowed the other.
+// The `/` input owns the keyboard, so while it is narrowing the service list it
+// has to own the mouse too: a click that moved focus would leave the accent
+// border on one pane while every keystroke narrowed the other.
 func TestModel_MouseIsIgnoredWhileTheFilterInputIsOpen(t *testing.T) {
 	m := filterModel()
 	m = pressKey(m, '/')
@@ -472,6 +472,66 @@ func TestModel_MouseIsIgnoredWhileTheFilterInputIsOpen(t *testing.T) {
 	assert.Equal(t, focusSidebar, m.focus, "the click must not move focus out from under the input")
 	assert.True(t, m.searching)
 	assert.False(t, m.logsC.sb.visualMode, "nor start a selection behind it")
+}
+
+// A Release has to pass even so. Pressing `/` with the button held would
+// otherwise leave scrollBuffer.mouseDown set, and the next bare motion over the
+// log would drag a selection with no button down.
+func TestModel_MouseReleasePassesThroughTheFilterInput(t *testing.T) {
+	m := searchModel() // focused on the log pane, with lines to select
+	m2, _ := m.Update(tea.MouseMsg{
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+		X: 60, Y: headerRows + 2,
+	})
+	m = m2.(model)
+	require.True(t, m.logsC.sb.mouseDown, "the button is held")
+
+	// `/` on the sidebar, so the trap is armed for scopeServices.
+	m.focus = focusSidebar
+	m = pressKey(m, '/')
+	require.Equal(t, scopeServices, m.searchScope)
+
+	m2, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft})
+	m = m2.(model)
+	assert.False(t, m.logsC.sb.mouseDown, "the release must land, or the drag never ends")
+
+	// And no phantom selection follows from a bare motion.
+	m2, _ = m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, X: 60, Y: headerRows + 6})
+	m = m2.(model)
+	assert.False(t, m.logsC.sb.visualMode)
+}
+
+// A log search is the opposite case: focus is already on the main pane and the
+// log is what is being narrowed, so the wheel has to keep scrolling it.
+func TestModel_MouseStillScrollsTheLogDuringALogSearch(t *testing.T) {
+	m := searchModel()
+	m.logsC.sb.gotoBottom()
+	m = pressKey(m, '/')
+	require.Equal(t, scopeLog, m.searchScope)
+
+	before := m.logsC.sb.yOffset
+	m2, _ := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	m = m2.(model)
+	assert.Less(t, m.logsC.sb.yOffset, before, "the wheel must still scroll the log being searched")
+}
+
+// "Cancel" has to be free of the cursor as well as the query: while the query
+// was in force the narrowing forced the highlight onto a surviving row, and
+// that is not where the reader started.
+func TestModel_ServiceFilterEscRestoresTheCursorTooNotJustTheQuery(t *testing.T) {
+	m := filterModel()
+	m.sidebarC.selectServiceByName("api")
+	require.Equal(t, "api", m.sidebarC.selectedService().Name)
+
+	// `web` excludes api, so the cursor is forced onto a row that survived.
+	m = typeString(pressKey(m, '/'), "web")
+	require.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
+	require.NotEqual(t, "api", m.sidebarC.selectedService().Name)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.Equal(t, "api", m.sidebarC.selectedService().Name, "cancel put the cursor back")
+	assert.Contains(t, m.logsC.filePath, "api.log", "and the log pane with it")
 }
 
 // A poll can empty the list while the input is open — the daemon died, the
