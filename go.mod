@@ -1,6 +1,14 @@
 module github.com/hailerity/devrun
 
-go 1.25.0
+go 1.26.0
+
+// The floor is a patch release, not a minor one: the advisories that forced
+// this move are fixed in 1.26.9. This line is what a contributor building by
+// hand gets — under the default GOTOOLCHAIN=auto, an older Go fetches 1.26.9
+// rather than quietly building against a vulnerable standard library. It does
+// not reach CI, which sets GOTOOLCHAIN=local and so pins the patch in the
+// workflows instead; bump both together.
+toolchain go1.26.9
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0

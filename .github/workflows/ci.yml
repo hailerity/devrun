@@ -6,6 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+# Every go-version below names a patch, not a minor, and has to. The
+# advisories this repo moved for are fixed in 1.26.9, while "1.26" resolves to
+# 1.26.8 — a Vulncheck failure that reads as a code problem and is not one.
+#
+# go.mod's toolchain line cannot cover for it here: actions/setup-go exports
+# GOTOOLCHAIN=local, which overrides a workflow env and makes the go command
+# ignore that line, so CI builds with exactly what setup-go installed. The
+# version is therefore pinned where setup-go reads it, and bumping it means
+# editing each one.
+
 jobs:
   test:
     name: Test
@@ -13,7 +23,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go: ["1.25"]
+        go: ["1.26.9"]
     steps:
       - uses: actions/checkout@v5
 
@@ -39,7 +49,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.9"
           cache: true
 
       - name: go mod tidy is clean
@@ -55,7 +65,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.9"
           cache: true
 
       - uses: golangci/golangci-lint-action@v7
@@ -70,15 +80,18 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.25"
+          go-version: "1.26.9"
           cache: true
 
-      # Pinned, like golangci-lint above: @latest broke this job when
-      # govulncheck v1.8.0 started requiring Go 1.26 while CI runs 1.25.
-      # v1.7.0 is the last release that supports Go 1.25; bump it together
-      # with go-version. The vulnerability database is fetched live, so a
-      # pinned tool still sees newly published vulnerabilities.
+      # Pinned, like golangci-lint above, so a tool release cannot break this
+      # job on its own. Bump it together with go-version: v1.8.0 requires Go
+      # 1.26, which is why the pin sat at v1.7.0 while CI ran 1.25.
+      #
+      # The vulnerability database is fetched live, so a pinned tool still
+      # sees newly published vulnerabilities — this job can start failing on a
+      # commit that changed nothing, and when it does, the fix is usually a
+      # newer Go rather than anything in this repository.
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           govulncheck ./...
