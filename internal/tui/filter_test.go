@@ -56,6 +56,21 @@ func TestSidebar_QueryMatchesNameSubstringIgnoringCase(t *testing.T) {
 	assert.Empty(t, svcNames(sb), "matching is substring, not fuzzy: wb must not find webhook")
 }
 
+// The order has to agree with the query: `/work` finds `Worker`, so the list
+// must file it where a reader hunting for a "w" would look. Byte order would
+// put every capitalised name ahead of every lowercase one.
+func TestSidebar_OrderIsCaseInsensitive(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "Worker"}, {Name: "api"}, {Name: "Zebra"}, {Name: "beta"},
+	}, nil)
+	assert.Equal(t, []string{"api", "beta", "Worker", "Zebra"}, svcNames(sb))
+
+	// Names differing only in case still come out in a stable, total order.
+	sb.update([]ipc.ServiceInfo{{Name: "web"}, {Name: "WEB"}, {Name: "Web"}}, nil)
+	assert.Equal(t, []string{"WEB", "Web", "web"}, svcNames(sb))
+}
+
 func TestSidebar_ClearingTheQueryRestoresTheList(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(filterServices(), nil)
@@ -63,7 +78,7 @@ func TestSidebar_ClearingTheQueryRestoresTheList(t *testing.T) {
 	require.Len(t, sb.services, 1)
 
 	sb.setQuery("")
-	assert.Equal(t, []string{"Worker", "api", "web", "webhook"}, svcNames(sb))
+	assert.Equal(t, []string{"api", "web", "webhook", "Worker"}, svcNames(sb))
 }
 
 // The two narrowings compose rather than replace each other: a query searches
@@ -124,6 +139,34 @@ func TestSidebar_EmptyStateBlamesTheTargetWhenThereIsNoQuery(t *testing.T) {
 	assert.Contains(t, plain(sb.render(28)), "no services in target")
 }
 
+// A target that has already emptied the list is still the cause once a query is
+// typed on top of it: deleting the query would not bring back a single row, so
+// blaming it would send the reader to fix the wrong thing.
+func TestSidebar_EmptyStateKeepsBlamingTheTargetUnderAQuery(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(filterServices(), []sidebarTarget{{name: "empty", members: []string{"gone"}}})
+	sb.setFilter("empty")
+	sb.setQuery("web")
+
+	out := plain(sb.render(28))
+	assert.Contains(t, out, "no services in target")
+	assert.NotContains(t, out, "no match for", "the query is not what emptied this list")
+}
+
+// A long target name comes from user config and can overrun on its own, with no
+// query involved to trigger the drop-the-target branch.
+func TestSidebar_FrameFitsALoneLongTarget(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(filterServices(), []sidebarTarget{
+		{name: "my-long-frontend-target", members: []string{"web"}},
+	})
+	sb.setFilter("my-long-frontend-target")
+
+	title := plain(sb.frame(true, sidebarMinW).title)
+	assert.LessOrEqual(t, lipgloss.Width(title), titleRoom(sidebarMinW))
+	assert.Contains(t, title, "…", "shortened here, not cut by the frame")
+}
+
 // The frame names both narrowings, so the reason a service is missing from the
 // list is always on screen.
 func TestSidebar_FrameNamesTargetAndQuery(t *testing.T) {
@@ -153,7 +196,7 @@ func TestSidebar_FrameFitsTheTitleAtMinimumWidth(t *testing.T) {
 	sb.setQuery("nomatchhere")
 
 	title := plain(sb.frame(true, sidebarMinW).title)
-	assert.LessOrEqual(t, lipgloss.Width(title), sidebarMinW-4, "the title must fit the pane's edge")
+	assert.LessOrEqual(t, lipgloss.Width(title), titleRoom(sidebarMinW), "the title must fit the pane's edge")
 	assert.NotContains(t, title, "frontend", "the target gives way to the query")
 	assert.Contains(t, title, "/", "the query is still named")
 
@@ -161,7 +204,7 @@ func TestSidebar_FrameFitsTheTitleAtMinimumWidth(t *testing.T) {
 	// what is left has to be shortened too, with the ellipsis that says so.
 	sb.setQuery("a-really-long-query-nobody-would-type")
 	long := plain(sb.frame(true, sidebarMinW).title)
-	assert.LessOrEqual(t, lipgloss.Width(long), sidebarMinW-4, "a long query must still fit")
+	assert.LessOrEqual(t, lipgloss.Width(long), titleRoom(sidebarMinW), "a long query must still fit")
 	assert.Contains(t, long, "…", "and be visibly shortened rather than silently cut")
 
 	// Given room, both are shown in full.
@@ -266,7 +309,7 @@ func TestModel_StartStopAllRespectsTheNameQuery(t *testing.T) {
 	m := filterModel()
 	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
 
-	assert.Equal(t, []string{"Worker", "api", "web", "webhook"}, m.listedServiceNames(),
+	assert.Equal(t, []string{"api", "web", "webhook", "Worker"}, m.listedServiceNames(),
 		"no query: everything is listed")
 
 	m = typeString(pressKey(m, '/'), "web")
@@ -362,6 +405,7 @@ func TestModel_ServiceFilterTrapsCommandKeys(t *testing.T) {
 // input has to follow it.
 func TestModel_ServiceFilterMovesTheLogPaneWithTheHighlight(t *testing.T) {
 	m := filterModel()
+	m.sidebarC.selectServiceByName("Worker")
 	require.Equal(t, "Worker", m.sidebarC.selectedService().Name)
 
 	m = typeString(pressKey(m, '/'), "api")
@@ -370,15 +414,23 @@ func TestModel_ServiceFilterMovesTheLogPaneWithTheHighlight(t *testing.T) {
 }
 
 // Nothing to filter: `/` must not open an input over an empty list, where every
-// keystroke would be a no-op with no way to tell.
-func TestModel_SlashIsInertWithNoServices(t *testing.T) {
+// keystroke would be a no-op with no way to tell. A query only subtracts, so
+// this holds for a target that has emptied the list just as much as for an
+// empty config.
+func TestModel_SlashIsInertWithNothingListed(t *testing.T) {
 	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	m = m2.(model)
-	m.sidebarC.update(nil, nil)
 
-	m = pressKey(m, '/')
-	assert.False(t, m.searching)
+	m.sidebarC.update(nil, nil) // nothing configured
+	assert.False(t, pressKey(m, '/').searching)
+
+	// Configured, but the target filter leaves no rows.
+	m.sidebarC.update(filterServices(), []sidebarTarget{{name: "empty", members: []string{"gone"}}})
+	m.sidebarC.setFilter("empty")
+	require.Empty(t, m.sidebarC.services)
+	require.NotEmpty(t, m.sidebarC.allServices)
+	assert.False(t, pressKey(m, '/').searching, "a query can only narrow zero rows to zero rows")
 }
 
 // --- the footer ---

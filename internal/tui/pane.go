@@ -72,12 +72,22 @@ func (f paneFrame) render(content string, w, h int) string {
 	return strings.Join(rows, "\n")
 }
 
+// titleRoom is how many columns of a border label edge() will actually print at
+// pane width w: its two corners and inner rule cells, plus the space it puts
+// either side of the label. A caller that fits its own label — the sidebar
+// does, because edge() truncates without saying so — must measure against this
+// rather than re-deriving it, which is how the two came to disagree by the two
+// columns of padding.
+func titleRoom(w int) int { return w - edgeFixed - 2 }
+
+// edgeFixed is the two corners plus one rule cell inside each.
+const edgeFixed = 4
+
 // edge builds one horizontal border row: corner, a label near each end, and a
 // rule filling the rest. When both labels do not fit, the right one is dropped
 // first, then the left one is truncated — the left label names the pane.
 func (f paneFrame) edge(border lipgloss.Style, cornerL, cornerR, left, right string, w int) string {
-	const fixed = 4 // two corners + one rule cell inside each
-	room := w - fixed
+	room := w - edgeFixed
 	if room < 0 {
 		return border.Render(cornerL + strings.Repeat("─", max(0, w-2)) + cornerR)
 	}

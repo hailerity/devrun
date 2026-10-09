@@ -57,8 +57,20 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 		// service changes state. A crash is announced by the row's ✖ and its
 		// colour, not by its position — which also leaves the order free to
 		// carry grouping later.
+		//
+		// Case-insensitively, so the order matches where a reader looks for a
+		// name — and matches the query, which is also case-insensitive. Byte
+		// order would file `Worker` under W-before-a, ahead of `api`, while
+		// `/work` still found it.
 		sorted := append([]ipc.ServiceInfo(nil), svcs...)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		sort.Slice(sorted, func(i, j int) bool {
+			li, lj := strings.ToLower(sorted[i].Name), strings.ToLower(sorted[j].Name)
+			if li != lj {
+				return li < lj
+			}
+			// Names differing only in case still need a total order.
+			return sorted[i].Name < sorted[j].Name
+		})
 		s.allServices = sorted
 		s.targets = targets
 
@@ -120,19 +132,45 @@ func (s *sidebar) target(name string) *sidebarTarget {
 // targetExists reports whether a target with the given name is configured.
 func (s *sidebar) targetExists(name string) bool { return s.target(name) != nil }
 
+// targetMembers is the member set of the active target filter, or nil when no
+// target is filtering — which callers read as "everything passes".
+func (s *sidebar) targetMembers() map[string]bool {
+	t := s.target(s.filterTarget)
+	if s.filterTarget == "" || t == nil {
+		return nil
+	}
+	members := make(map[string]bool, len(t.members))
+	for _, m := range t.members {
+		members[m] = true
+	}
+	return members
+}
+
+// inTargetCount is how many services the target filter alone would list: what
+// the list would hold if the query were cleared. The empty state needs it to
+// know which of the two narrowings to blame — a target that has already emptied
+// the list is not fixed by deleting the query.
+func (s *sidebar) inTargetCount() int {
+	members := s.targetMembers()
+	if members == nil {
+		return len(s.allServices)
+	}
+	n := 0
+	for _, svc := range s.allServices {
+		if members[svc.Name] {
+			n++
+		}
+	}
+	return n
+}
+
 // refilter recomputes s.services from s.allServices, the active target filter
 // and the active name query, then clamps the service cursor into range. The two
 // narrowings compose: a query searches within the filtering target rather than
 // escaping it, so what the frame's title says is on screen is what is on
 // screen.
 func (s *sidebar) refilter() {
-	var members map[string]bool
-	if t := s.target(s.filterTarget); s.filterTarget != "" && t != nil {
-		members = make(map[string]bool, len(t.members))
-		for _, m := range t.members {
-			members[m] = true
-		}
-	}
+	members := s.targetMembers()
 	q := strings.ToLower(s.filterQuery)
 
 	if members == nil && q == "" {
@@ -326,8 +364,8 @@ func (s *sidebar) frame(focused bool, width int) paneFrame {
 	// without an ellipsis, which turns an explanation into a word that looks
 	// like a shorter name — so the fitting is done here instead.
 	chip := func(s string) string { return styleMuted.Render(" · ") + styleAccent.Render(s) }
-	const sep = 3                             // " · "
-	room := width - 4 - lipgloss.Width(label) // 4: edge()'s corners and rules
+	const sep = 3 // " · "
+	room := titleRoom(width) - lipgloss.Width(label)
 
 	target := s.filterTarget
 	// The query carries its "/" so it reads as the query it is rather than as a
@@ -341,7 +379,10 @@ func (s *sidebar) frame(focused bool, width int) paneFrame {
 	if target != "" && query != "" && 2*sep+lipgloss.Width(target)+lipgloss.Width(query) > room {
 		target = ""
 	}
+	// Each chip is fitted, not only the query: a target name comes from user
+	// config and can be long enough to overrun on its own.
 	if target != "" {
+		target = truncateName(target, max(1, room-sep))
 		title += chip(target)
 		room -= sep + lipgloss.Width(target)
 	}
@@ -375,11 +416,13 @@ func (s *sidebar) render(width int) string {
 	case len(s.allServices) == 0:
 		return styleMuted.Render(" No services — run devrun add <name>")
 	// Which of the two narrowings emptied the list, named: "nothing here" with
-	// no cause is the one empty state a reader cannot act on. The query is the
-	// more likely culprit and the easier to undo, so it is reported first. The
+	// no cause is the one empty state a reader cannot act on. The query is
+	// blamed only when clearing it would actually bring rows back — a target
+	// that has already emptied the list on its own is the real cause, and
+	// pointing at the query would send the reader to fix the wrong thing. The
 	// query is fitted to the pane rather than left for the frame to cut, which
 	// would stop the sentence mid-word.
-	case len(s.services) == 0 && s.filterQuery != "":
+	case len(s.services) == 0 && s.filterQuery != "" && s.inTargetCount() > 0:
 		const lead = " no match for /"
 		return styleMuted.Render(lead + truncateName(s.filterQuery, max(1, width-lipgloss.Width(lead))))
 	case len(s.services) == 0:

@@ -419,7 +419,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// same input — the list being narrowed is the one under the reader's eyes,
 	// so there is nothing to choose between.
 	case m.focus == focusSidebar && key.Matches(msg, keys.Filter):
-		if len(m.sidebarC.allServices) == 0 {
+		// Nothing listed, nothing to narrow: a query only ever subtracts, so
+		// from zero rows no keystroke can produce one. That covers an empty
+		// config and a target filter that has already emptied the list.
+		if len(m.sidebarC.services) == 0 {
 			break
 		}
 		m.searching = true

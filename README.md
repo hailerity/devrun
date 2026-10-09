@@ -529,7 +529,7 @@ width: `Tab` swaps panes, and `↵` on a service opens it.
 |---|---|
 | `s` / `x` | Start / stop the selected service |
 | `r` | Restart the selected service (starts it if it is not running) |
-| `S` / `X` | Start / stop everything listed — the filtering target, or every service when there is no filter |
+| `S` / `X` | Start / stop everything the list is showing — narrowed by `/` and `t`, or every service when neither is active |
 | `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` clears it) |
 | `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
 | `e` | Edit the selected service (sidebar focused) |
