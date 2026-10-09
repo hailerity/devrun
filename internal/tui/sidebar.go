@@ -21,7 +21,7 @@ type sidebarTarget struct {
 const allServicesLabel = "All services"
 
 type sidebar struct {
-	allServices []ipc.ServiceInfo // full scoped list: crashed first, then by Name
+	allServices []ipc.ServiceInfo // full scoped list, by Name
 	services    []ipc.ServiceInfo // allServices filtered to the active target
 	selected    int               // cursor within services
 	top         int               // first visible services row — the scroll window's offset
@@ -46,17 +46,13 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 		curSvc = s.services[s.selected].Name
 	}
 
-	// Crashed services lead the list so a failure is never below the fold;
-	// everything else stays alphabetical. The cursor follows its service by
-	// name (below), so a row that jumps to the top takes the highlight with it.
+	// Plain alphabetical, with no state in the ordering: a row keeps its place
+	// for as long as it is configured, so the list a reader has learned does
+	// not reshuffle itself under the cursor every time a service changes state.
+	// A crash is announced by the row's ✖ and its colour, not by its position —
+	// which also leaves the order free to carry grouping later.
 	sorted := append([]ipc.ServiceInfo(nil), svcs...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		ci, cj := sorted[i].State == "crashed", sorted[j].State == "crashed"
-		if ci != cj {
-			return ci
-		}
-		return sorted[i].Name < sorted[j].Name
-	})
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	s.allServices = sorted
 	s.targets = targets
 
