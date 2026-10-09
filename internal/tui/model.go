@@ -43,6 +43,17 @@ const (
 	focusMain
 )
 
+// searchScope says what the footer's `/` input is narrowing. One input serves
+// both jobs — the query line, its truncation and its two keys are the same
+// either way — and this is what tells the Enter and Esc handlers which list
+// they are committing to.
+type searchScope int
+
+const (
+	scopeLog searchScope = iota
+	scopeServices
+)
+
 // --- Message types ---
 
 type daemonTickMsg struct{}
@@ -77,10 +88,11 @@ type model struct {
 	pickerC     targetPicker
 	helpC       helpPanel
 
-	searching bool            // the footer's search input has the keyboard
-	searchC   textinput.Model // the `/` input; its value is committed to logsC.sb on Enter
-	headerC   headerBar
-	footerC   footerBar
+	searching   bool            // the footer's search input has the keyboard
+	searchScope searchScope     // which list that input is narrowing
+	searchC     textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
+	headerC     headerBar
+	footerC     footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -401,15 +413,30 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.enterVisual()
 		}
 
-	// / opens the search input. It always lands in the log pane — searching
-	// from the sidebar or from DETAILS means "search this service's log".
+	// / narrows whatever the focused pane is showing: the service list from the
+	// sidebar, the selected service's log from the main pane. Same key, and the
+	// same input — the list being narrowed is the one under the reader's eyes,
+	// so there is nothing to choose between.
+	case m.focus == focusSidebar && key.Matches(msg, keys.Filter):
+		if len(m.sidebarC.allServices) == 0 {
+			break
+		}
+		m.searching = true
+		m.searchScope = scopeServices
+		m.searchC.SetValue(m.sidebarC.filterQuery)
+		m.searchC.CursorEnd()
+		m.searchC.Focus()
+		return m, textinput.Blink
+
+	// From DETAILS as well as from LOGS: searching the main pane means "search
+	// this service's log", so it switches to the tab that can show a match.
 	case key.Matches(msg, keys.Search):
 		if m.sidebarC.selectedService() == nil {
 			break
 		}
-		m.focus = focusMain
 		m.activeTab = tabLogs
 		m.searching = true
+		m.searchScope = scopeLog
 		m.searchC.SetValue(m.logsC.sb.search.query)
 		m.searchC.CursorEnd()
 		m.searchC.Focus()
@@ -428,11 +455,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	// Esc backs out one level: it cancels an active visual selection first,
-	// then clears an active search, otherwise it collapses DETAILS back to LOGS.
+	// then clears whichever narrowing the focused pane is under, otherwise it
+	// collapses DETAILS back to LOGS.
 	case key.Matches(msg, keys.Escape):
 		switch {
 		case m.focus == focusMain && m.activeTab == tabLogs && m.logsC.sb.visualMode:
 			m.logsC.sb.exitVisual()
+		// The query, not the target filter: the target is a deliberate mode
+		// chosen from a picker, and Esc undoing it would be a surprise.
+		case m.focus == focusSidebar && m.sidebarC.filterQuery != "":
+			m.sidebarC.setQuery("")
+			m.updateLogFile()
 		case m.activeTab == tabLogs && m.logsC.sb.search.active():
 			m.logsC.sb.setQuery("")
 		case m.activeTab == tabDetails:
@@ -574,6 +607,9 @@ func (m model) modalOpen() bool {
 // matched live as it is typed — the border's match count updates — but the
 // cursor only moves on Enter, so abandoning a search with Esc costs nothing.
 func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.searchScope == scopeServices {
+		return m.handleServiceFilterKey(msg)
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -594,6 +630,42 @@ func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.searchC, cmd = m.searchC.Update(msg)
 	m.logsC.sb.setQuery(m.searchC.Value())
+	return m, cmd
+}
+
+// handleServiceFilterKey routes a key to the `/` input while it is narrowing
+// the service list. The list itself is the preview — it re-filters on every
+// keystroke — so Enter has nothing to commit beyond handing the keyboard back,
+// and Esc drops the query the way it drops a log search. The query survives
+// Enter: it is the state the frame's title and the footer's "Esc clear" hint
+// then report.
+func (m model) handleServiceFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.searching = false
+		m.searchC.Blur()
+		m.sidebarC.setQuery("")
+		m.updateLogFile()
+		return m, nil
+	case tea.KeyEnter:
+		m.searching = false
+		m.searchC.Blur()
+		// Only a query can have emptied the list here, so an empty one has
+		// nothing to report — an empty list under no query means the poll took
+		// the services away, which the list's own empty state covers.
+		if q := m.sidebarC.filterQuery; q != "" && len(m.sidebarC.services) == 0 {
+			m.footerC.showToast("no service matches " + q)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchC, cmd = m.searchC.Update(msg)
+	m.sidebarC.setQuery(m.searchC.Value())
+	// The narrowed list can hand the highlight to another service, and the log
+	// pane behind the input follows the highlight.
+	m.updateLogFile()
 	return m, cmd
 }
 
@@ -1462,7 +1534,9 @@ func (m model) View() string {
 		picking:      m.pickerC.open,
 		helping:      m.helpC.open,
 		searching:    m.searching,
+		searchScope:  m.searchScope,
 		hasQuery:     m.logsC.sb.search.active(),
+		hasFilter:    m.sidebarC.filterQuery != "",
 		searchInput:  m.searchC.View(),
 		narrow:       m.narrow(),
 	}, m.width)

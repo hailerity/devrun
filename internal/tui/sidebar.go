@@ -22,13 +22,14 @@ const allServicesLabel = "All services"
 
 type sidebar struct {
 	allServices []ipc.ServiceInfo // full scoped list, by Name
-	services    []ipc.ServiceInfo // allServices filtered to the active target
+	services    []ipc.ServiceInfo // allServices narrowed by the target filter and the name query
 	selected    int               // cursor within services
 	top         int               // first visible services row — the scroll window's offset
 	rows        int               // visible row count, set by the model's layout; 0 = not laid out yet
 
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
+	filterQuery  string          // name query narrowing the list ("" = no query); set via the `/` input
 
 	// exposed names the services that may leave this machine. Held here, not
 	// read off ipc.ServiceInfo, because the allowlist belongs to the gateway
@@ -41,26 +42,38 @@ type sidebar struct {
 func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	s.loaded = true
 
+	s.keepingCursor(func() {
+		// Plain alphabetical, with no state in the ordering: a row keeps its
+		// place for as long as it is configured, so the list a reader has
+		// learned does not reshuffle itself under the cursor every time a
+		// service changes state. A crash is announced by the row's ✖ and its
+		// colour, not by its position — which also leaves the order free to
+		// carry grouping later.
+		sorted := append([]ipc.ServiceInfo(nil), svcs...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		s.allServices = sorted
+		s.targets = targets
+
+		// Keep the target filter across the poll; drop it only if that target
+		// is gone. The name query needs no such check — a query that matches
+		// nothing is still a query the user typed, and saying so (render's
+		// empty state) beats silently dropping it.
+		if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
+			s.filterTarget = ""
+		}
+	})
+}
+
+// keepingCursor applies a change to what the list shows, then puts the
+// highlight back on the service it was on — by name, since the row index means
+// nothing once the list has been re-sorted or re-filtered. A service that the
+// change filtered out leaves the cursor at the top.
+func (s *sidebar) keepingCursor(change func()) {
 	var curSvc string
 	if s.selected < len(s.services) {
 		curSvc = s.services[s.selected].Name
 	}
-
-	// Plain alphabetical, with no state in the ordering: a row keeps its place
-	// for as long as it is configured, so the list a reader has learned does
-	// not reshuffle itself under the cursor every time a service changes state.
-	// A crash is announced by the row's ✖ and its colour, not by its position —
-	// which also leaves the order free to carry grouping later.
-	sorted := append([]ipc.ServiceInfo(nil), svcs...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	s.allServices = sorted
-	s.targets = targets
-
-	// Keep the filter across the poll; drop it only if that target is gone.
-	if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
-		s.filterTarget = ""
-	}
-
+	change()
 	s.refilter()
 	s.selectServiceByName(curSvc)
 }
@@ -91,21 +104,33 @@ func (s *sidebar) target(name string) *sidebarTarget {
 // targetExists reports whether a target with the given name is configured.
 func (s *sidebar) targetExists(name string) bool { return s.target(name) != nil }
 
-// refilter recomputes s.services from s.allServices and the active target
-// filter, then clamps the service cursor into range.
+// refilter recomputes s.services from s.allServices, the active target filter
+// and the active name query, then clamps the service cursor into range. The two
+// narrowings compose: a query searches within the filtering target rather than
+// escaping it, so what the frame's title says is on screen is what is on
+// screen.
 func (s *sidebar) refilter() {
-	if t := s.target(s.filterTarget); s.filterTarget == "" || t == nil {
-		s.services = s.allServices
-	} else {
-		members := make(map[string]bool, len(t.members))
+	var members map[string]bool
+	if t := s.target(s.filterTarget); s.filterTarget != "" && t != nil {
+		members = make(map[string]bool, len(t.members))
 		for _, m := range t.members {
 			members[m] = true
 		}
+	}
+	q := strings.ToLower(s.filterQuery)
+
+	if members == nil && q == "" {
+		s.services = s.allServices
+	} else {
 		out := make([]ipc.ServiceInfo, 0, len(s.allServices))
 		for _, svc := range s.allServices {
-			if members[svc.Name] {
-				out = append(out, svc)
+			if members != nil && !members[svc.Name] {
+				continue
 			}
+			if q != "" && !strings.Contains(strings.ToLower(svc.Name), q) {
+				continue
+			}
+			out = append(out, svc)
 		}
 		s.services = out
 	}
@@ -117,16 +142,20 @@ func (s *sidebar) refilter() {
 // setFilter makes the target called name the service filter ("" or an unknown
 // name clears it), keeping the highlight on the same service if it survived.
 func (s *sidebar) setFilter(name string) {
-	var curSvc string
-	if s.selected < len(s.services) {
-		curSvc = s.services[s.selected].Name
-	}
-	if !s.targetExists(name) {
-		name = ""
-	}
-	s.filterTarget = name
-	s.refilter()
-	s.selectServiceByName(curSvc)
+	s.keepingCursor(func() {
+		if !s.targetExists(name) {
+			name = ""
+		}
+		s.filterTarget = name
+	})
+}
+
+// setQuery narrows the list to the services whose name contains q, ignoring
+// case; "" clears it. Matching is a plain substring and deliberately not fuzzy:
+// a list you are scanning has to stay predictable, and "api" pulling in
+// "a-public-interface" is the opposite of that.
+func (s *sidebar) setQuery(q string) {
+	s.keepingCursor(func() { s.filterQuery = q })
 }
 
 // setRows tells the sidebar how many rows its pane can show, and re-anchors the
@@ -265,9 +294,10 @@ func stateDot(state string) string {
 	return lipgloss.NewStyle().Foreground(fg).Render(glyph)
 }
 
-// frame is the sidebar's border: the title names the list and any target
-// filtering it — so the reason a service is missing is always on screen — and
-// the bottom edge counts how many of the listed services are up.
+// frame is the sidebar's border: the title names the list and anything
+// narrowing it — the target, then the name query — so the reason a service is
+// missing is always on screen, and the bottom edge counts how many of the
+// listed services are up.
 func (s *sidebar) frame(focused bool) paneFrame {
 	title := styleMuted.Render("SERVICES")
 	if focused {
@@ -275,6 +305,11 @@ func (s *sidebar) frame(focused bool) paneFrame {
 	}
 	if s.filterTarget != "" {
 		title += styleMuted.Render(" · ") + styleAccent.Render(s.filterTarget)
+	}
+	// Carries its "/" so it reads as the query it is rather than as a second
+	// target name.
+	if s.filterQuery != "" {
+		title += styleMuted.Render(" · ") + styleAccent.Render("/"+s.filterQuery)
 	}
 	f := paneFrame{title: title, focused: focused}
 	if len(s.services) > 0 {
@@ -302,6 +337,11 @@ func (s *sidebar) render(width int) string {
 		return styleMuted.Render(" Loading services…")
 	case len(s.allServices) == 0:
 		return styleMuted.Render(" No services — run devrun add <name>")
+	// Which of the two narrowings emptied the list, named: "nothing here" with
+	// no cause is the one empty state a reader cannot act on. The query is the
+	// more likely culprit and the easier to undo, so it is reported first.
+	case len(s.services) == 0 && s.filterQuery != "":
+		return styleMuted.Render(" (no service matches /" + s.filterQuery + ")")
 	case len(s.services) == 0:
 		return styleMuted.Render(" (no services in target)")
 	}

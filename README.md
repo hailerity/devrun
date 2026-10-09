@@ -483,20 +483,31 @@ process control on your machine.
 │ ● api       :8080      2.1% ││ → POST /api/auth     201  45ms                     │
 │ ● web       :5173     64.0% ││ → GET  /api/profile  200   8ms                     │
 ╰─ 2/3 up ────────────────────╯╰─ 1,204 lines ─────────────────────────── ⇣ follow ─╯
- s start  x stop  r restart  ↵ details  t target  / search        ? help  q quit
+ s start  x stop  r restart  ↵ details  / filter  t target        ? help  q quit
 ```
 
 Each service row shows a state glyph (`●` running, `◐` starting / stopping,
-`○` stopped, `✖` crashed), the name, the port or state, and CPU. Crashed
-services sort to the top. The focused pane has the accent-coloured border, and
-the main pane's border always names the service whose logs or details it shows.
-Colours adapt to light and dark terminals.
+`○` stopped, `✖` crashed), the name, the port or state, and CPU. The list is
+alphabetical and stays that way: a service that crashes keeps its row rather
+than jumping the queue, so the list never reshuffles under the cursor. The
+focused pane has the accent-coloured border, and the main pane's border always
+names the service whose logs or details it shows. Colours adapt to light and
+dark terminals.
 
-The sidebar is one list of services. When the active config defines targets,
-`t` opens the **target picker**: every target with its running count and
-members. `↵` filters the list to that target (its name then shows in the
-SERVICES heading), `All services` clears the filter, and `e` edits the
-highlighted target.
+The sidebar is one list of services, and two things can narrow it:
+
+- **`/` filters by name** — with the sidebar focused, `/` opens a query input
+  and the list narrows as you type (case-insensitive substring, so `web` finds
+  both `web` and `webhook`). `↵` keeps the filter, `Esc` clears it — from the
+  input, or later from the list.
+- **`t` opens the target picker** when the active config defines targets: every
+  target with its running count and members. `↵` filters the list to that
+  target, `All services` clears the filter, and `e` edits the highlighted
+  target.
+
+Both apply at once — a query searches within the filtering target — and the
+SERVICES heading names whichever are active (`SERVICES · frontend · /web`), so
+the reason a service is missing from the list is always on screen.
 
 **Navigation:**
 
@@ -519,6 +530,7 @@ width: `Tab` swaps panes, and `↵` on a service opens it.
 | `s` / `x` | Start / stop the selected service |
 | `r` | Restart the selected service (starts it if it is not running) |
 | `S` / `X` | Start / stop everything listed — the filtering target, or every service when there is no filter |
+| `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` clears it) |
 | `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
 | `e` | Edit the selected service (sidebar focused) |
 | `d` | Remove the selected service (sidebar focused, asks to confirm) |
@@ -546,7 +558,7 @@ the active config — the same file `e` writes to, the same effect as
 
 | Key | Action |
 |---|---|
-| `/` | Search the log — matches highlight as you type, `↵` jumps to the nearest match above the cursor, `Esc` cancels |
+| `/` | Search the log (main panel focused) — matches highlight as you type, `↵` jumps to the nearest match above the cursor, `Esc` cancels |
 | `n` / `N` | Next match down / previous match up (wraps) |
 | `f` | Toggle follow mode |
 | `g` / `G` | Jump to top / jump to the end and follow |
