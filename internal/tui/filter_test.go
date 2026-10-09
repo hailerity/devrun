@@ -157,7 +157,15 @@ func TestSidebar_FrameFitsTheTitleAtMinimumWidth(t *testing.T) {
 	assert.NotContains(t, title, "frontend", "the target gives way to the query")
 	assert.Contains(t, title, "/", "the query is still named")
 
-	// Given room, both are shown.
+	// A query long enough that dropping the target is not enough on its own:
+	// what is left has to be shortened too, with the ellipsis that says so.
+	sb.setQuery("a-really-long-query-nobody-would-type")
+	long := plain(sb.frame(true, sidebarMinW).title)
+	assert.LessOrEqual(t, lipgloss.Width(long), sidebarMinW-4, "a long query must still fit")
+	assert.Contains(t, long, "…", "and be visibly shortened rather than silently cut")
+
+	// Given room, both are shown in full.
+	sb.setQuery("nomatchhere")
 	wide := plain(sb.frame(true, 60).title)
 	assert.Contains(t, wide, "frontend")
 	assert.Contains(t, wide, "/nomatchhere")
