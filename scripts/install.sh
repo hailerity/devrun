@@ -86,11 +86,29 @@ fi
 
 # --- verify ------------------------------------------------------------------
 
-if command -v "$BINARY" >/dev/null 2>&1; then
-  say "devrun installed successfully!"
-  "$BINARY" --version
+# By path, never through PATH. Running "$BINARY" here would report whichever
+# devrun the shell finds first — an older one from somewhere else, quite
+# possibly — and would call a broken download a success on the strength of
+# that other binary working.
+INSTALLED="$(cd "$INSTALL_DIR" && pwd)/$BINARY"
+
+if ! "$INSTALLED" --version; then
+  err "installed to $INSTALLED, but it would not run"
+fi
+say "devrun installed successfully to $INSTALLED"
+
+# Which devrun the shell will actually run, now that one is installed.
+FOUND="$(command -v "$BINARY" 2>/dev/null || true)"
+if [ -n "$FOUND" ]; then
+  FOUND="$(cd "$(dirname "$FOUND")" && pwd)/$(basename "$FOUND")"
+fi
+
+if [ "$FOUND" = "$INSTALLED" ]; then
+  : # on PATH and it is this one; nothing to say
+elif [ -n "$FOUND" ]; then
+  say "Note: \"$BINARY\" still runs $FOUND, which comes earlier in your PATH."
+  say "Run it as $INSTALLED, or put $INSTALL_DIR ahead of the other directory."
 else
-  say "devrun installed to $INSTALL_DIR/$BINARY"
-  say "Add $INSTALL_DIR to your PATH if it is not already there:"
+  say "Add $INSTALL_DIR to your PATH to run it as \"$BINARY\":"
   say "  export PATH=\"\$PATH:$INSTALL_DIR\""
 fi
