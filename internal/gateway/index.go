@@ -315,6 +315,15 @@ func itoa(n int) string {
 // statusPage answers a request that resolved to nothing proxyable, in the same
 // shell as the index so a wrong URL does not look like a different site.
 func (s *Server) statusPage(w http.ResponseWriter, r *http.Request, code int, headline, detail string) {
+	s.renderStatus(w, r, code, headline, detail, "")
+}
+
+// statusForm is statusPage with the key form under the message.
+func (s *Server) statusForm(w http.ResponseWriter, r *http.Request, code int, headline, detail string) {
+	s.renderStatus(w, r, code, headline, detail, keyFormHTML)
+}
+
+func (s *Server) renderStatus(w http.ResponseWriter, r *http.Request, code int, headline, detail, form string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
@@ -324,9 +333,17 @@ func (s *Server) statusPage(w http.ResponseWriter, r *http.Request, code int, he
 		"{{HEADLINE}}", template.HTMLEscapeString(headline),
 		"{{DETAIL}}", template.HTMLEscapeString(detail),
 		"{{CODE}}", itoa(code),
+		"{{FORM}}", form,
 	).Replace(statusShell)
 	_, _ = w.Write([]byte(page))
 }
+
+// keyFormHTML posts the key to authPath. It carries no destination: see denied.
+const keyFormHTML = `<form class="key" method="post" action="` + authPath + `">
+<input type="password" name="k" aria-label="Gateway key" placeholder="key"
+ autocomplete="off" autocapitalize="off" spellcheck="false" autofocus>
+<button type="submit">Open</button>
+</form>`
 
 const statusShell = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -348,6 +365,13 @@ h1{margin:0 0 12px;font-size:15px;font-weight:400}
 p{margin:0;font-size:13px;color:var(--muted)}
 a{color:var(--accent)}
 .code{margin-top:28px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.key{margin:24px auto 0;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.key input{flex:1 1 260px;min-width:0;max-width:320px;padding:7px 10px;
+font-family:var(--mono);font-size:13px;color:var(--text);background:var(--bg);
+border:1px solid var(--rule);border-radius:6px}
+.key input:focus-visible{outline:2px solid var(--accent);outline-offset:-1px}
+.key button{padding:7px 14px;font-size:13px;color:var(--bg);background:var(--accent);
+border:1px solid var(--accent);border-radius:6px;cursor:pointer}
 </style></head><body>
 <header class="bar"><div class="wrap">
 <span class="mark"><span class="hex">&#11041;</span> <b>devrun</b></span>
@@ -356,5 +380,6 @@ a{color:var(--accent)}
 <main>
 <h1>{{HEADLINE}}</h1>
 <p>{{DETAIL}}</p>
+{{FORM}}
 <p class="code">{{CODE}} &middot; <a href="/">all services</a></p>
 </main></body></html>`

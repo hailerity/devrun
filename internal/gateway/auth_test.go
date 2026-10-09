@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +21,14 @@ func published(t *testing.T, cfg Config, snap Snapshot) *Server {
 
 func oneService(port int) Snapshot {
 	return Snapshot{Routes: []Route{running("web", port)}, Exposed: []string{"web"}}
+}
+
+// postForm builds a form POST, as the key form submits.
+func postForm(host, path, body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Host = host
+	return r
 }
 
 // A local gateway grants nothing localhost:<port> did not already grant the same
@@ -126,6 +136,113 @@ func TestAuth_SecureCookieBehindTLS(t *testing.T) {
 	cookies := serve(s, r).Result().Cookies()
 	require.Len(t, cookies, 1)
 	assert.True(t, cookies[0].Secure, "a tunnel terminates TLS, so the cookie must not leak over http")
+}
+
+// The key can be pasted, not only carried in a link: the operator has the token
+// in their terminal and was never sent a link at all.
+func TestAuth_KeyFormBanksAPastedKey(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	w := serve(s, postForm("devrun.example.com", authPath, "k="+key))
+
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Equal(t, "/", w.Header().Get("Location"))
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, tokenCookie, cookies[0].Name)
+	assert.Equal(t, key, cookies[0].Value)
+	assert.True(t, cookies[0].HttpOnly)
+}
+
+// The posted key never enters a URL, which is the whole point of offering the
+// form: nothing of it can reach history, a Referer header or the tunnel's log.
+func TestAuth_KeyFormDoesNotPutTheKeyInAURL(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	w := serve(s, postForm("devrun.example.com", authPath, "k="+key))
+
+	// Without the first assertion the rest holds for any response that simply
+	// says nothing, a denial included.
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.NotContains(t, w.Header().Get("Location"), key)
+	assert.NotContains(t, w.Body.String(), key)
+}
+
+// A wrong key posted to the form is answered exactly as a missing one, so the
+// form never confirms a near miss any more than the link does.
+func TestAuth_KeyFormWrongKeyLooksLikeNoKey(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	wrong := serve(s, postForm("devrun.example.com", authPath, "k=nope"))
+	none := serve(s, get("devrun.example.com", "/"))
+
+	assert.Equal(t, none.Code, wrong.Code)
+	assert.Equal(t, none.Body.String(), wrong.Body.String())
+	assert.Empty(t, wrong.Result().Cookies(), "a wrong key is never stored")
+}
+
+// The denial page carries the form, so there is somewhere to paste the key.
+func TestAuth_DenialOffersTheForm(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	body := serve(s, get("devrun.example.com", "/")).Body.String()
+
+	assert.Contains(t, body, `action="`+authPath+`"`)
+	assert.Contains(t, body, `name="k"`)
+	assert.Contains(t, body, `method="post"`)
+}
+
+// A GET of the form's own path is the operator arriving to paste a key, so it
+// renders the form rather than an error about a missing service.
+func TestAuth_KeyFormPathRendersTheFormOnGet(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	w := serve(s, get("devrun.example.com", authPath))
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), `action="`+authPath+`"`)
+	assert.NotContains(t, w.Body.String(), "No service here")
+}
+
+// The form is reachable while holding a cookie that no longer matches, which is
+// what a rotated key leaves behind. Were the cookie checked first, the page to
+// paste the new key would itself be unreachable.
+func TestAuth_KeyFormReachableWithAStaleCookie(t *testing.T) {
+	s := published(t, Config{}, oneService(4200))
+
+	r := postForm("devrun.example.com", authPath, "k="+key)
+	r.AddCookie(&http.Cookie{Name: tokenCookie, Value: "stale"})
+	w := serve(s, r)
+
+	require.Equal(t, http.StatusFound, w.Code)
+	require.Len(t, w.Result().Cookies(), 1)
+	assert.Equal(t, key, w.Result().Cookies()[0].Value, "the new key replaces the stale one")
+}
+
+// A local gateway asks for nothing, so the form's path is not special there: it
+// is just a path with no service behind it.
+func TestAuth_KeyFormPathIsNotSpecialWhenNoKeyIsNeeded(t *testing.T) {
+	s := server(t, Config{Token: key}, oneService(4200))
+
+	w := serve(s, get("", authPath))
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "No service here")
+}
+
+// A valid cookie must not short-circuit the form: were the cookie checked
+// first, a post carrying a key would fall through to routing, where the form's
+// path resolves to no service and answers 404 instead of letting anyone in.
+func TestAuth_KeyFormHandledEvenWithAValidCookie(t *testing.T) {
+	port, hits := upstream(t, nil)
+	s := published(t, Config{}, oneService(port))
+
+	r := postForm("devrun.example.com", authPath, "k="+key)
+	r.AddCookie(&http.Cookie{Name: tokenCookie, Value: key})
+	w := serve(s, r)
+
+	assert.Equal(t, http.StatusFound, w.Code, "the form answers, routing never sees it")
+	assert.Empty(t, *hits, "nothing upstream sees the key form")
 }
 
 func TestCleanURL(t *testing.T) {
