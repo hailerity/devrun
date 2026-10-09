@@ -284,6 +284,30 @@ func TestModel_ServiceFilterEscRestoresTheQueryItOpenedOn(t *testing.T) {
 	assert.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
 }
 
+// The other route out of a no-match query: commit it, let a poll land, then
+// press Esc on the list rather than in the input. That path has no saved
+// anchor to fall back on — it goes through setQuery("") — so it rests entirely
+// on recordAnchor refusing to overwrite the anchor while the list is empty.
+func TestModel_EscOnTheListReturnsTheCursorAfterANoMatchQueryAndAPoll(t *testing.T) {
+	m := filterModel()
+	m.sidebarC.selectServiceByName("web")
+	require.Equal(t, "web", m.sidebarC.selectedService().Name)
+
+	m = typeString(pressKey(m, '/'), "zz")
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.Empty(t, m.sidebarC.services)
+
+	// A poll arrives while nothing matches — the anchor must survive it.
+	m.sidebarC.update(filterServices(), targetRows())
+	require.Empty(t, m.sidebarC.services)
+
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // on the list, not in the input
+	m = m2.(model)
+	assert.Empty(t, m.sidebarC.filterQuery)
+	assert.Equal(t, "web", m.sidebarC.selectedService().Name)
+}
+
 // Typing a query that matches nothing leaves no row to read a cursor anchor
 // from. Backing out must still return to the service the cursor was on — the
 // `/` input promises that abandoning it costs nothing.
