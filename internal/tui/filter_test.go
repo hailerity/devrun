@@ -164,7 +164,7 @@ func TestSidebar_FrameFitsALoneLongTarget(t *testing.T) {
 
 	title := plain(sb.frame(true, sidebarMinW).title)
 	assert.LessOrEqual(t, lipgloss.Width(title), titleRoom(sidebarMinW))
-	assert.Contains(t, title, "…", "shortened here, not cut by the frame")
+	assert.Contains(t, title, "…", "shortened in the middle, keeping both ends of the name")
 }
 
 // The frame names both narrowings, so the reason a service is missing from the
@@ -183,10 +183,11 @@ func TestSidebar_FrameNamesTargetAndQuery(t *testing.T) {
 	assert.Contains(t, title, "/hook", "the query carries its slash, so it does not read as a target")
 }
 
-// The sidebar is 31 columns whenever the longest service name is short, and the
-// frame cuts an over-long title without an ellipsis. Rather than print half a
-// word, the title drops the target — which the picker can show again — and
-// keeps the query, shortening it if it still does not fit.
+// The sidebar is 31 columns whenever the longest service name is short. The
+// pane would fit an over-long title itself, but by cutting from the tail —
+// which eats the query chip whole. So the title drops the target instead, which
+// the picker can show again, and shortens the query in the middle if what is
+// left still does not fit.
 func TestSidebar_FrameFitsTheTitleAtMinimumWidth(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(filterServices(), []sidebarTarget{
@@ -431,6 +432,62 @@ func TestModel_SlashIsInertWithNothingListed(t *testing.T) {
 	require.Empty(t, m.sidebarC.services)
 	require.NotEmpty(t, m.sidebarC.allServices)
 	assert.False(t, pressKey(m, '/').searching, "a query can only narrow zero rows to zero rows")
+}
+
+// A query that matched nothing also leaves the list empty, but there `/` must
+// still open — reopening it prefilled is the only way to fix a typo'd filter,
+// and refusing would strand the reader on Esc-and-retype.
+func TestModel_SlashStillOpensAfterAQueryMatchedNothing(t *testing.T) {
+	m := filterModel()
+	m = typeString(pressKey(m, '/'), "webx")
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.Equal(t, "webx", m.sidebarC.filterQuery)
+	require.Empty(t, m.sidebarC.services, "the committed query matched nothing")
+
+	m = pressKey(m, '/')
+	require.True(t, m.searching, "a typo'd filter has to be amendable")
+	assert.Equal(t, "webx", m.searchC.Value(), "and it reopens on what is in force")
+
+	// Backspacing the typo brings the rows back.
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = m2.(model)
+	assert.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
+}
+
+// The `/` input owns the keyboard, so it has to own the mouse too: a click that
+// moved focus would leave the accent border on one pane while every keystroke
+// narrowed the other.
+func TestModel_MouseIsIgnoredWhileTheFilterInputIsOpen(t *testing.T) {
+	m := filterModel()
+	m = pressKey(m, '/')
+	require.True(t, m.searching)
+	require.Equal(t, focusSidebar, m.focus)
+
+	m2, _ := m.Update(tea.MouseMsg{
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 80, Y: 5,
+	})
+	m = m2.(model)
+
+	assert.Equal(t, focusSidebar, m.focus, "the click must not move focus out from under the input")
+	assert.True(t, m.searching)
+	assert.False(t, m.logsC.sb.visualMode, "nor start a selection behind it")
+}
+
+// A poll can empty the list while the input is open — the daemon died, the
+// config was emptied. Enter must not then blame the reader's query for it.
+func TestModel_ServiceFilterEnterDoesNotBlameTheQueryForADeadDaemon(t *testing.T) {
+	m := filterModel()
+	m = typeString(pressKey(m, '/'), "web")
+	require.NotEmpty(t, m.sidebarC.services)
+
+	m.sidebarC.update(nil, targetRows()) // every service gone
+	require.Empty(t, m.sidebarC.services)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Empty(t, m.footerC.toast,
+		"clearing the query would not bring anything back, so it is not the cause to name")
 }
 
 // --- the footer ---

@@ -156,6 +156,12 @@ func searchModel() model {
 
 // From DETAILS, / still means "search this service's log": the main pane has
 // focus, so it switches to the tab that can show a match.
+//
+// Focus is deliberately not asserted here. searchModel() already sets
+// focusMain, so `assert.Equal(focusMain, m.focus)` could not fail — it only
+// looked like a guard. Which pane `/` belongs to is decided by the two cases
+// in handleKey and covered by TestModel_SlashFromSidebarFiltersTheList, where
+// the focus assertion can actually go wrong.
 func TestModel_SearchFromDetailsLandsInTheLogPane(t *testing.T) {
 	m := searchModel()
 	m.activeTab = tabDetails
@@ -163,8 +169,7 @@ func TestModel_SearchFromDetailsLandsInTheLogPane(t *testing.T) {
 	m = pressKey(m, '/')
 	assert.True(t, m.searching)
 	assert.Equal(t, scopeLog, m.searchScope)
-	assert.Equal(t, focusMain, m.focus)
-	assert.Equal(t, tabLogs, m.activeTab)
+	assert.Equal(t, tabLogs, m.activeTab, "DETAILS cannot show a match, so / switches to LOGS")
 	assert.Contains(t, plain(m.View()), "/", "the input shows in the footer")
 }
 

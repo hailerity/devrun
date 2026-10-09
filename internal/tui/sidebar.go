@@ -360,9 +360,11 @@ func (s *sidebar) frame(focused bool, width int) paneFrame {
 	}
 
 	// Both narrowings want a chip here, and at the minimum pane width (31
-	// columns) there is not room for both. edge() cuts a title that overruns
-	// without an ellipsis, which turns an explanation into a word that looks
-	// like a shorter name — so the fitting is done here instead.
+	// columns) there is not room for both. edge() does fit an over-long title,
+	// with an ellipsis — but it cuts from the tail, which eats the query chip
+	// whole and leaves a title naming only the target. Fitting here instead
+	// keeps the chip that matters and shortens it in the middle, so both ends
+	// of the query stay readable.
 	chip := func(s string) string { return styleMuted.Render(" · ") + styleAccent.Render(s) }
 	const sep = 3 // " · "
 	room := titleRoom(width) - lipgloss.Width(label)
@@ -420,8 +422,8 @@ func (s *sidebar) render(width int) string {
 	// blamed only when clearing it would actually bring rows back — a target
 	// that has already emptied the list on its own is the real cause, and
 	// pointing at the query would send the reader to fix the wrong thing. The
-	// query is fitted to the pane rather than left for the frame to cut, which
-	// would stop the sentence mid-word.
+	// query is fitted here rather than left to the pane's own truncation, which
+	// cuts from the tail and would stop the sentence mid-query.
 	case len(s.services) == 0 && s.filterQuery != "" && s.inTargetCount() > 0:
 		const lead = " no match for /"
 		return styleMuted.Render(lead + truncateName(s.filterQuery, max(1, width-lipgloss.Width(lead))))

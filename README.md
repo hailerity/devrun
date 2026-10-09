@@ -498,8 +498,10 @@ The sidebar is one list of services, and two things can narrow it:
 
 - **`/` filters by name** — with the sidebar focused, `/` opens a query input
   and the list narrows as you type (case-insensitive substring, so `web` finds
-  both `web` and `webhook`). `↵` keeps the filter, `Esc` clears it — from the
-  input, or later from the list.
+  both `web` and `webhook`). `↵` keeps the filter. `Esc` **in the input**
+  cancels, putting back the query it opened on — which is no filter for a fresh
+  one, or the previous query when you reopened `/` to amend an existing filter.
+  `Esc` **on the list**, once the filter is in force, clears it.
 - **`t` opens the target picker** when the active config defines targets: every
   target with its running count and members. `↵` filters the list to that
   target, `All services` clears the filter, and `e` edits the highlighted
@@ -530,7 +532,12 @@ width: `Tab` swaps panes, and `↵` on a service opens it.
 | `s` / `x` | Start / stop the selected service |
 | `r` | Restart the selected service (starts it if it is not running) |
 | `S` / `X` | Start / stop everything the list is showing — narrowed by `/` and `t`, or every service when neither is active |
-| `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` clears it) |
+
+Under a `/` query, `S` / `X` act on the named services one by one rather than on
+the target as a unit. That is the point — you narrowed the list to those rows —
+but it means `X` will stop a service even when another started target still
+holds it, where `X` on an unqueried target leaves such a member running.
+| `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` in the input cancels, `Esc` on the list clears) |
 | `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
 | `e` | Edit the selected service (sidebar focused) |
 | `d` | Remove the selected service (sidebar focused, asks to confirm) |

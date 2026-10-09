@@ -256,6 +256,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modalOpen() {
 			return m, nil
 		}
+		// The `/` input is a keyboard trap, so it has to be a mouse trap too.
+		// A click would otherwise move focus to the log pane while the input
+		// still held the keyboard — the accent border on one pane, every
+		// keystroke narrowing the other, and Enter committing a query the
+		// reader had visually left behind.
+		if m.searching {
+			return m, nil
+		}
 		// In the narrow layout the sidebar may be the pane on screen; the log
 		// pane is not drawn, so there is nothing under the pointer to select.
 		if m.narrow() && m.focus == focusSidebar {
@@ -419,10 +427,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// same input — the list being narrowed is the one under the reader's eyes,
 	// so there is nothing to choose between.
 	case m.focus == focusSidebar && key.Matches(msg, keys.Filter):
-		// Nothing listed, nothing to narrow: a query only ever subtracts, so
-		// from zero rows no keystroke can produce one. That covers an empty
-		// config and a target filter that has already emptied the list.
-		if len(m.sidebarC.services) == 0 {
+		// Inert only when no query could ever produce a row — an empty config,
+		// or a target filter that has emptied the list on its own. Deliberately
+		// not "the list is empty": that is also true of a query that matched
+		// nothing, and refusing there would make a typo'd filter impossible to
+		// amend, which is the one thing prefilling the input is for.
+		// inTargetCount covers both cases, since it falls back to allServices
+		// when no target is filtering.
+		if m.sidebarC.inTargetCount() == 0 {
 			break
 		}
 		m.searching = true
@@ -596,6 +608,16 @@ func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll 
 	// name over exactly what is listed instead, even when a target is filtering
 	// too: `S` / `X` mean "everything listed", and the query is part of what is
 	// listed.
+	//
+	// This gives up what `target-stop` offers, which is that stopping a target
+	// leaves alone any member another running target still holds. That is the
+	// right guarantee for "stop this target" and the wrong one here: a reader
+	// who typed a query and pressed `X` named those services, so stopping a
+	// shared one is the request, not collateral. Worth knowing that `X` under a
+	// query can therefore take a service out from under another active target,
+	// where plain `X` would not — if that proves surprising in practice, the
+	// fix is to skip members held elsewhere and say so in the toast, which
+	// needs ipc's ActiveTargets plumbed through to the model.
 	case m.sidebarC.filterQuery != "":
 		scope = fmt.Sprintf("/%s (%d listed)", m.sidebarC.filterQuery, len(m.sidebarC.services))
 		cmd = forAll()
@@ -672,10 +694,14 @@ func (m model) handleServiceFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		m.searching = false
 		m.searchC.Blur()
-		// Only a query can have emptied the list here, so an empty one has
-		// nothing to report — an empty list under no query means the poll took
-		// the services away, which the list's own empty state covers.
-		if q := m.sidebarC.filterQuery; q != "" && len(m.sidebarC.services) == 0 {
+		// Blame the query only when clearing it would bring rows back — the
+		// same test render's empty state applies. A poll can land while the
+		// input is open and take every service away (the daemon died, the
+		// config emptied), and "no service matches web" would then point the
+		// reader at their typing instead of at the real cause, which the pane
+		// behind the input is already naming.
+		if q := m.sidebarC.filterQuery; q != "" && len(m.sidebarC.services) == 0 &&
+			m.sidebarC.inTargetCount() > 0 {
 			m.footerC.showToast("no service matches " + q)
 		}
 		return m, nil
