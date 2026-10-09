@@ -60,7 +60,16 @@ elif sudo -n true 2>/dev/null; then
   USE_SUDO=1
 else
   INSTALL_DIR="$HOME/.local/bin"
-  mkdir -p "$INSTALL_DIR"
+fi
+
+# Make sure it exists and can be written to, before anything is downloaded.
+# A DEVRUN_INSTALL naming a directory that is not there yet is a reasonable
+# thing to pass, and used to reach `mv` as a bare "No such file or directory"
+# after the download had already run. Skipped under sudo, where not being
+# writable by this user is the whole reason sudo is in play.
+if [ -z "$USE_SUDO" ]; then
+  mkdir -p "$INSTALL_DIR" || err "cannot create $INSTALL_DIR"
+  [ -w "$INSTALL_DIR" ] || err "$INSTALL_DIR is not writable; set DEVRUN_INSTALL to somewhere it can go"
 fi
 
 # --- download and install ----------------------------------------------------
