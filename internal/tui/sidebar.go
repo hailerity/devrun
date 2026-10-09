@@ -31,6 +31,14 @@ type sidebar struct {
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
 	filterQuery  string          // name query narrowing the list ("" = no query); set via the `/` input
 
+	// anchor is the name of the service the cursor is on, remembered so the
+	// highlight can be restored after the list is re-sorted or re-filtered. It
+	// is held here rather than re-read from services[selected] at restore time
+	// because a narrowing can empty the list: mid-query there is no row to read
+	// an anchor from, and clearing the query would then drop the reader on row 0
+	// instead of back where they were.
+	anchor string
+
 	// exposed names the services that may leave this machine. Held here, not
 	// read off ipc.ServiceInfo, because the allowlist belongs to the gateway
 	// and applies to services whether or not one is running.
@@ -65,17 +73,25 @@ func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 }
 
 // keepingCursor applies a change to what the list shows, then puts the
-// highlight back on the service it was on — by name, since the row index means
-// nothing once the list has been re-sorted or re-filtered. A service that the
-// change filtered out leaves the cursor at the top.
+// highlight back on the anchored service — by name, since the row index means
+// nothing once the list has been re-sorted or re-filtered. A service the change
+// filtered out keeps the anchor, so widening the list again returns the cursor
+// to it; the cursor sits at the top only while that service is not listed.
 func (s *sidebar) keepingCursor(change func()) {
-	var curSvc string
-	if s.selected < len(s.services) {
-		curSvc = s.services[s.selected].Name
-	}
+	s.recordAnchor()
 	change()
 	s.refilter()
-	s.selectServiceByName(curSvc)
+	s.selectServiceByName(s.anchor)
+}
+
+// recordAnchor remembers the service under the cursor. It deliberately does
+// nothing when the list is empty: there is no service to anchor to, and
+// overwriting the anchor with "" is how a no-match query used to lose the
+// cursor for good.
+func (s *sidebar) recordAnchor() {
+	if s.selected < len(s.services) {
+		s.anchor = s.services[s.selected].Name
+	}
 }
 
 // selectServiceByName moves the service cursor to the row named n, or to row 0
@@ -298,18 +314,39 @@ func stateDot(state string) string {
 // narrowing it — the target, then the name query — so the reason a service is
 // missing is always on screen, and the bottom edge counts how many of the
 // listed services are up.
-func (s *sidebar) frame(focused bool) paneFrame {
-	title := styleMuted.Render("SERVICES")
+func (s *sidebar) frame(focused bool, width int) paneFrame {
+	const label = "SERVICES"
+	title := styleMuted.Render(label)
 	if focused {
-		title = styleAccent.Bold(true).Render("SERVICES")
+		title = styleAccent.Bold(true).Render(label)
 	}
-	if s.filterTarget != "" {
-		title += styleMuted.Render(" · ") + styleAccent.Render(s.filterTarget)
-	}
-	// Carries its "/" so it reads as the query it is rather than as a second
-	// target name.
+
+	// Both narrowings want a chip here, and at the minimum pane width (31
+	// columns) there is not room for both. edge() cuts a title that overruns
+	// without an ellipsis, which turns an explanation into a word that looks
+	// like a shorter name — so the fitting is done here instead.
+	chip := func(s string) string { return styleMuted.Render(" · ") + styleAccent.Render(s) }
+	const sep = 3                             // " · "
+	room := width - 4 - lipgloss.Width(label) // 4: edge()'s corners and rules
+
+	target := s.filterTarget
+	// The query carries its "/" so it reads as the query it is rather than as a
+	// second target name.
+	query := ""
 	if s.filterQuery != "" {
-		title += styleMuted.Render(" · ") + styleAccent.Render("/"+s.filterQuery)
+		query = "/" + s.filterQuery
+	}
+	// The target gives way first: the picker can always show it again, while
+	// the query is the one the reader just typed and is about to undo.
+	if target != "" && query != "" && 2*sep+lipgloss.Width(target)+lipgloss.Width(query) > room {
+		target = ""
+	}
+	if target != "" {
+		title += chip(target)
+		room -= sep + lipgloss.Width(target)
+	}
+	if query != "" {
+		title += chip(truncateName(query, max(1, room-sep)))
 	}
 	f := paneFrame{title: title, focused: focused}
 	if len(s.services) > 0 {
@@ -339,9 +376,12 @@ func (s *sidebar) render(width int) string {
 		return styleMuted.Render(" No services — run devrun add <name>")
 	// Which of the two narrowings emptied the list, named: "nothing here" with
 	// no cause is the one empty state a reader cannot act on. The query is the
-	// more likely culprit and the easier to undo, so it is reported first.
+	// more likely culprit and the easier to undo, so it is reported first. The
+	// query is fitted to the pane rather than left for the frame to cut, which
+	// would stop the sentence mid-word.
 	case len(s.services) == 0 && s.filterQuery != "":
-		return styleMuted.Render(" (no service matches /" + s.filterQuery + ")")
+		const lead = " no match for /"
+		return styleMuted.Render(lead + truncateName(s.filterQuery, max(1, width-lipgloss.Width(lead))))
 	case len(s.services) == 0:
 		return styleMuted.Render(" (no services in target)")
 	}

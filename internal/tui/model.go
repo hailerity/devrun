@@ -90,6 +90,7 @@ type model struct {
 
 	searching   bool            // the footer's search input has the keyboard
 	searchScope searchScope     // which list that input is narrowing
+	searchPrev  string          // the query the input opened on, restored if it is cancelled
 	searchC     textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
 	headerC     headerBar
 	footerC     footerBar
@@ -423,6 +424,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.searching = true
 		m.searchScope = scopeServices
+		// `/` prefills with the live query so an existing filter can be
+		// amended, which only works if backing out puts the old one back.
+		m.searchPrev = m.sidebarC.filterQuery
 		m.searchC.SetValue(m.sidebarC.filterQuery)
 		m.searchC.CursorEnd()
 		m.searchC.Focus()
@@ -583,10 +587,19 @@ func (m model) onServiceRow() bool {
 func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll func() tea.Cmd) (tea.Model, tea.Cmd) {
 	scope := "all services"
 	var cmd tea.Cmd
-	if name := m.sidebarC.filterTarget; name != "" {
-		scope = "target " + name
-		cmd = forTarget(name)
-	} else {
+	switch {
+	// A name query narrows the list to a set the daemon has no name for, so the
+	// target request cannot carry it — it would act on the whole target. Go by
+	// name over exactly what is listed instead, even when a target is filtering
+	// too: `S` / `X` mean "everything listed", and the query is part of what is
+	// listed.
+	case m.sidebarC.filterQuery != "":
+		scope = fmt.Sprintf("/%s (%d listed)", m.sidebarC.filterQuery, len(m.sidebarC.services))
+		cmd = forAll()
+	case m.sidebarC.filterTarget != "":
+		scope = "target " + m.sidebarC.filterTarget
+		cmd = forTarget(m.sidebarC.filterTarget)
+	default:
 		cmd = forAll()
 	}
 	if cmd == nil {
@@ -644,9 +657,13 @@ func (m model) handleServiceFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
 	case tea.KeyEsc:
+		// Cancel, as the footer says: the query the input opened on goes back,
+		// which is "" for a fresh filter and the old one when amending. (The
+		// log-search scope still clears outright — a long-standing contract
+		// with its own test, and not this change's to alter.)
 		m.searching = false
 		m.searchC.Blur()
-		m.sidebarC.setQuery("")
+		m.sidebarC.setQuery(m.searchPrev)
 		m.updateLogFile()
 		return m, nil
 	case tea.KeyEnter:
@@ -1352,18 +1369,20 @@ func (m model) doStopTarget(name string) tea.Cmd {
 	}
 }
 
-// scopedServiceNames lists the names of every service in the sidebar's scoped
-// view (the unfiltered "All services" set), in the sidebar's sorted order.
-func (m model) scopedServiceNames() []string {
-	names := make([]string, len(m.sidebarC.allServices))
-	for i, s := range m.sidebarC.allServices {
+// listedServiceNames lists the names of the services the sidebar is currently
+// showing — after the target filter and the name query — in its sorted order.
+// This is what S / X act on, so it must be the narrowed set and not
+// allServices: "everything listed" has to mean the rows the reader can see.
+func (m model) listedServiceNames() []string {
+	names := make([]string, len(m.sidebarC.services))
+	for i, s := range m.sidebarC.services {
 		names[i] = s.Name
 	}
 	return names
 }
 
-// doStartAll starts every scoped service — the action behind `S` with no target
-// filter, the TUI equivalent of `devrun start --all`. It
+// doStartAll starts every listed service — the action behind `S` when no target
+// alone decides the scope, the TUI equivalent of `devrun start --all`. It
 // dials once per service (the daemon serves one request per connection),
 // shipping each definition inline so a project service the daemon has not seen
 // still starts. A service already running is left alone; a member that fails
@@ -1372,7 +1391,7 @@ func (m model) doStartAll() tea.Cmd {
 	if m.socketPath == "" {
 		return nil
 	}
-	names := m.scopedServiceNames()
+	names := m.listedServiceNames()
 	if len(names) == 0 {
 		return nil
 	}
@@ -1395,15 +1414,15 @@ func (m model) doStartAll() tea.Cmd {
 	}
 }
 
-// doStopAll stops every scoped service — the action behind `X` with no target
-// filter, the TUI equivalent of `devrun stop --all`. Like
+// doStopAll stops every listed service — the action behind `X` when no target
+// alone decides the scope, the TUI equivalent of `devrun stop --all`. Like
 // doStartAll it dials once per service; a service already stopped is not an
 // error, and per-service failures are collected into one message.
 func (m model) doStopAll() tea.Cmd {
 	if m.socketPath == "" {
 		return nil
 	}
-	names := m.scopedServiceNames()
+	names := m.listedServiceNames()
 	if len(names) == 0 {
 		return nil
 	}
@@ -1491,7 +1510,7 @@ func (m model) View() string {
 	header := m.headerC.render(m.sourceLabel(), total, running, crashed, m.spinFrame, m.spinning, m.gateway, m.width)
 
 	// Body: two bordered panes side by side; the focused one takes the accent.
-	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
+	sideFrame := m.sidebarC.frame(m.focus == focusSidebar, sidebarW)
 	sideW, _ := sideFrame.innerSize(sidebarW, bodyH)
 	var body string
 	switch {

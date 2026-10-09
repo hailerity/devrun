@@ -364,8 +364,8 @@ func TestSidebar_FooterSaysWhenTheListIsWindowed(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(manyServices(40), nil)
 	sb.setRows(10)
-	assert.Contains(t, plain(sb.frame(true).footRight), "1–10 of 40")
+	assert.Contains(t, plain(sb.frame(true, 40).footRight), "1–10 of 40")
 
 	sb.update(manyServices(5), nil)
-	assert.Empty(t, sb.frame(true).footRight, "nothing to say when every row fits")
+	assert.Empty(t, sb.frame(true, 40).footRight, "nothing to say when every row fits")
 }

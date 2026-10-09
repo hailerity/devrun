@@ -91,10 +91,10 @@ func TestSidebar_SetFilterKeepsSelectedService(t *testing.T) {
 func TestSidebar_FilterShownInPaneTitle(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs("api", "web"), targetRows())
-	assert.NotContains(t, plain(sb.frame(true).title), "·")
+	assert.NotContains(t, plain(sb.frame(true, 40).title), "·")
 
 	sb.setFilter("t1")
-	assert.Contains(t, plain(sb.frame(true).title), "SERVICES · t1")
+	assert.Contains(t, plain(sb.frame(true, 40).title), "SERVICES · t1")
 }
 
 func TestSidebar_FilterPreservedAcrossUpdate(t *testing.T) {

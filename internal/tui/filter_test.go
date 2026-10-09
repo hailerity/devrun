@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
@@ -110,7 +113,7 @@ func TestSidebar_QueryMatchingNothingIsKeptAndNamed(t *testing.T) {
 	assert.Equal(t, "absent", sb.filterQuery)
 	assert.Empty(t, sb.services)
 	assert.Nil(t, sb.selectedService())
-	assert.Contains(t, plain(sb.render(28)), "no service matches /absent")
+	assert.Contains(t, plain(sb.render(28)), "no match for /absent")
 }
 
 // With no query the empty list can only be the target's doing, and says so.
@@ -131,10 +134,44 @@ func TestSidebar_FrameNamesTargetAndQuery(t *testing.T) {
 	sb.setFilter("front")
 	sb.setQuery("hook")
 
-	title := plain(sb.frame(true).title)
+	title := plain(sb.frame(true, 40).title)
 	assert.Contains(t, title, "SERVICES")
 	assert.Contains(t, title, "front")
 	assert.Contains(t, title, "/hook", "the query carries its slash, so it does not read as a target")
+}
+
+// The sidebar is 31 columns whenever the longest service name is short, and the
+// frame cuts an over-long title without an ellipsis. Rather than print half a
+// word, the title drops the target — which the picker can show again — and
+// keeps the query, shortening it if it still does not fit.
+func TestSidebar_FrameFitsTheTitleAtMinimumWidth(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(filterServices(), []sidebarTarget{
+		{name: "frontend", members: []string{"web", "webhook"}},
+	})
+	sb.setFilter("frontend")
+	sb.setQuery("nomatchhere")
+
+	title := plain(sb.frame(true, sidebarMinW).title)
+	assert.LessOrEqual(t, lipgloss.Width(title), sidebarMinW-4, "the title must fit the pane's edge")
+	assert.NotContains(t, title, "frontend", "the target gives way to the query")
+	assert.Contains(t, title, "/", "the query is still named")
+
+	// Given room, both are shown.
+	wide := plain(sb.frame(true, 60).title)
+	assert.Contains(t, wide, "frontend")
+	assert.Contains(t, wide, "/nomatchhere")
+}
+
+// Same budget, same reason: the empty state has to stay a whole sentence.
+func TestSidebar_EmptyStateFitsAtMinimumWidth(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(filterServices(), nil)
+	sb.setQuery("nomatchhereatall")
+
+	out := plain(sb.render(sidebarMinW - 2)) // a minimum-width pane's content area
+	assert.LessOrEqual(t, lipgloss.Width(out), sidebarMinW-2)
+	assert.Contains(t, out, "no match for /")
 }
 
 // --- the `/` input, driving the sidebar ---
@@ -173,6 +210,97 @@ func TestModel_ServiceFilterEscCancelsAndRestores(t *testing.T) {
 	assert.False(t, m.searching)
 	assert.Empty(t, m.sidebarC.filterQuery)
 	assert.Len(t, m.sidebarC.services, 4, "Esc in the input puts the whole list back")
+}
+
+// `/` prefills with the live query so a filter can be amended, and the footer
+// calls Esc "cancel" — so cancelling an amendment must put the old query back,
+// not throw the filter away.
+func TestModel_ServiceFilterEscRestoresTheQueryItOpenedOn(t *testing.T) {
+	m := filterModel()
+	m = typeString(pressKey(m, '/'), "web")
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.Equal(t, "web", m.sidebarC.filterQuery)
+
+	// Reopen to amend, type more, then back out.
+	m = typeString(pressKey(m, '/'), "hook")
+	require.Equal(t, "webhook", m.sidebarC.filterQuery, "the input opened prefilled")
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+
+	assert.Equal(t, "web", m.sidebarC.filterQuery, "cancel restores, it does not clear")
+	assert.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
+}
+
+// Typing a query that matches nothing leaves no row to read a cursor anchor
+// from. Backing out must still return to the service the cursor was on — the
+// `/` input promises that abandoning it costs nothing.
+func TestModel_ServiceFilterEscReturnsToTheOriginalServiceAfterNoMatch(t *testing.T) {
+	m := filterModel()
+	m.sidebarC.selectServiceByName("web")
+	require.Equal(t, "web", m.sidebarC.selectedService().Name)
+
+	m = typeString(pressKey(m, '/'), "zz")
+	require.Empty(t, m.sidebarC.services, "nothing matches, so there is no row to anchor to")
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	assert.Equal(t, "web", m.sidebarC.selectedService().Name)
+	assert.Contains(t, m.logsC.filePath, "web.log", "and the log pane came back with it")
+}
+
+// --- S / X act on what is listed ---
+
+// `S` / `X` are documented as "everything listed", and a query is part of what
+// is listed. Starting 30 services because 2 are on screen is the failure this
+// guards.
+func TestModel_StartStopAllRespectsTheNameQuery(t *testing.T) {
+	m := filterModel()
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+
+	assert.Equal(t, []string{"Worker", "api", "web", "webhook"}, m.listedServiceNames(),
+		"no query: everything is listed")
+
+	m = typeString(pressKey(m, '/'), "web")
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.Equal(t, []string{"web", "webhook"}, svcNames(&m.sidebarC))
+	assert.Equal(t, []string{"web", "webhook"}, m.listedServiceNames(),
+		"the batch must see the narrowed list, not allServices")
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	require.NotNil(t, cmd)
+	toast := m2.(model).footerC.toast
+	assert.Contains(t, toast, "/web", "the toast names the scope it acted on")
+	assert.Contains(t, toast, "2 listed")
+
+	// The daemon is unreachable, so every attempted member fails — and the
+	// error names exactly the members that were attempted.
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		msg := err.err.Error()
+		assert.Contains(t, msg, "web")
+		assert.Contains(t, msg, "webhook")
+		assert.NotContains(t, msg, "api", "a service the query excluded must not be touched")
+		assert.NotContains(t, msg, "Worker")
+	}
+}
+
+// A target and a query together: the daemon has no name for the intersection,
+// so the target request cannot carry it and the by-name batch must be used.
+func TestModel_StartAllWithTargetAndQueryActsOnTheIntersection(t *testing.T) {
+	m := filterModel()
+	m.socketPath = filepath.Join(t.TempDir(), "nonexistent.sock")
+	m.sidebarC.setFilter("t2") // api, db — only api is in this model
+	m.sidebarC.setQuery("api")
+	require.Equal(t, []string{"api"}, m.listedServiceNames())
+
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	require.NotNil(t, cmd)
+	assert.Contains(t, m2.(model).footerC.toast, "/api")
+	if err, ok := cmd().(daemonErrMsg); assert.True(t, ok) {
+		assert.Contains(t, err.err.Error(), "start all:",
+			"a query forces the by-name batch, not one target-start for the whole target")
+	}
 }
 
 // A confirmed filter is cleared by Esc from the sidebar — the footer offers
@@ -278,4 +406,21 @@ func TestHelp_ListsSlashUnderServicesAndLogs(t *testing.T) {
 	out := plain(helpPanel{open: true}.view())
 	assert.Contains(t, out, "filter the list by name")
 	assert.Contains(t, out, "search the log")
+}
+
+// The overlay has no scrolling and overlay() hard-clips it to height-2, so its
+// row count is a fixed budget: the first thing lost is the bottom border, then
+// the "Esc or ? to close" line — the one instruction a reader needs. 26 rows is
+// the floor for two columns with these four groups, and keeps the overlay whole
+// down to a 28-row terminal.
+//
+// A ratchet, not a target: adding a key to the taller column breaks this, and
+// the fix is to rebalance helpGroups rather than raise the number. Getting
+// under 26 needs scrolling or a third column, which is its own change.
+func TestHelp_ViewFitsASmallTerminal(t *testing.T) {
+	const budget = 26
+	got := len(strings.Split(helpPanel{open: true}.view(), "\n"))
+	assert.LessOrEqualf(t, got, budget,
+		"the ? overlay is %d rows, over its %d-row budget — rebalance helpGroups' columns "+
+			"rather than letting overlay() clip the bottom border off", got, budget)
 }
