@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
-	"github.com/hailerity/devrun/internal/gateway"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/process"
 )
@@ -375,39 +373,6 @@ func (s *supervisor) handleTunnelList() *ipc.Response {
 		return okResp(ipc.TunnelListPayload{Known: false})
 	}
 	return okResp(ipc.TunnelListPayload{Names: names, Known: true})
-}
-
-// ensureGateway returns the running gateway, starting it if needed. Caller
-// holds gatewayOps.
-func (s *supervisor) ensureGateway(cfg config.GatewayConfig) (*gatewayChild, error) {
-	s.mu.Lock()
-	if s.gateway != nil && sameGatewayConfig(s.gateway.cfg, cfg) && pidAlive(s.gateway.pid) {
-		gw := s.gateway
-		s.mu.Unlock()
-		return gw, nil
-	}
-	token := ""
-	if s.gateway != nil {
-		token = s.gateway.token
-		s.stopGatewayLocked()
-	}
-	if token == "" {
-		token = gateway.NewToken()
-	}
-	s.mu.Unlock()
-
-	child, err := s.spawnGateway(cfg, token)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !recordLive(&s.gateway, child, child.pid) {
-		_ = s.saveStateLocked()
-		return nil, errors.New("the gateway exited immediately after starting; see the daemon log")
-	}
-	_ = s.saveStateLocked()
-	return child, nil
 }
 
 // tunnelStatusLocked builds the tunnel half of the status. Caller holds s.mu.

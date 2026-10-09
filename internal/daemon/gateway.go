@@ -14,6 +14,7 @@ import (
 
 	"github.com/hailerity/devrun/internal/cloudflared"
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/gateway"
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/hailerity/devrun/internal/process"
 )
@@ -464,6 +465,46 @@ func readGatewayAddr(pr *os.File) (string, error) {
 	case <-time.After(gatewayStartTimeout):
 		return "", fmt.Errorf("gateway did not announce an address within %s", gatewayStartTimeout)
 	}
+}
+
+// ensureGateway returns the running gateway, starting it if needed. Caller
+// holds gatewayOps.
+//
+// This is where the key is minted, and the only place: a token is carried
+// across a restart the gateway is still holding — a config change, a tunnel
+// following it to a new address — and a fresh one is cut only when there is no
+// gateway to inherit from, which is what stopGatewayLocked leaves behind.
+// Rotating it under a link that has already been shared would break that link
+// for no reason the sharer could see.
+func (s *supervisor) ensureGateway(cfg config.GatewayConfig) (*gatewayChild, error) {
+	s.mu.Lock()
+	if s.gateway != nil && sameGatewayConfig(s.gateway.cfg, cfg) && pidAlive(s.gateway.pid) {
+		gw := s.gateway
+		s.mu.Unlock()
+		return gw, nil
+	}
+	token := ""
+	if s.gateway != nil {
+		token = s.gateway.token
+		s.stopGatewayLocked()
+	}
+	if token == "" {
+		token = gateway.NewToken()
+	}
+	s.mu.Unlock()
+
+	child, err := s.spawnGateway(cfg, token)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !recordLive(&s.gateway, child, child.pid) {
+		_ = s.saveStateLocked()
+		return nil, errors.New("the gateway exited immediately after starting; see the daemon log")
+	}
+	_ = s.saveStateLocked()
+	return child, nil
 }
 
 // stopGatewayLocked stops the child if there is one. Caller holds s.mu.
