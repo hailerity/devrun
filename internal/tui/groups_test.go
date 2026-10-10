@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/config"
 
 	"github.com/hailerity/devrun/internal/ipc"
@@ -465,4 +466,30 @@ func TestSidebar_ClampDoesNotLeaveTheCursorOnAGap(t *testing.T) {
 	sb.selected = len(sb.rows) - 1
 	sb.refilter()
 	assert.NotEqual(t, rowSpacer, sb.rows[sb.selected].kind)
+}
+
+// fgSeq is the escape sequence a foreground colour emits, for asserting which
+// colour a rendered row actually used. Comparing whole styled strings does not
+// work: groupRow styles the name together with its padding in one call, so the
+// trailing reset lands somewhere a fragment-sized expectation never reaches.
+func fgSeq(t *testing.T, c lipgloss.AdaptiveColor) string {
+	t.Helper()
+	rendered := lipgloss.NewStyle().Foreground(c).Render("X")
+	i := strings.Index(rendered, "X")
+	require.Positive(t, i, "no escape sequence emitted — the colour profile is off in tests")
+	return rendered[:i]
+}
+
+// A header must not take a service name's colour. That was the confusion the
+// real terminal exposed: same colour, heavier weight, so it read as an
+// emphasised service rather than as a label for the ones under it.
+func TestGroupRow_IsNotColouredLikeAServiceName(t *testing.T) {
+	header := groupRow(31, "backend", 2, 3, false, false)
+	svc := serviceRow(31, ipc.ServiceInfo{Name: "api", State: "running", Port: intp(8080)}, false, false)
+
+	assert.Contains(t, svc, fgSeq(t, colorText), "a service name is colorText")
+	assert.NotContains(t, header, fgSeq(t, colorText),
+		"a group header must not use a service name's colour anywhere on its row")
+	assert.Contains(t, header, fgSeq(t, colorGroup), "it is colorGroup")
+	assert.Contains(t, plain(header), "backend", "and still shows the name")
 }

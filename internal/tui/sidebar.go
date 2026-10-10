@@ -890,15 +890,29 @@ func groupRow(width int, group string, up, total int, selected, collapsed bool) 
 	}
 
 	count := fmt.Sprintf("%d/%d", up, total)
-	// The name takes the service rows' text colour at greater weight, so a
-	// header reads as the stronger thing on the row rather than as another
-	// service; the glyph and the count are muted around it. The state column a
-	// service row carries is left out entirely — a group has no state.
+	// A quieter grey than a service name, with the weight kept. It read as
+	// another service when the name took colorText — exactly a service name's
+	// colour, so bold made it look like an emphasised service rather than a
+	// label for the ones beneath it.
+	//
+	// Not colorMuted, which is what every other section label here uses (the
+	// help overlay's titles, an unfocused pane's own title, the target picker's
+	// heading) — it measures 2.72:1 on Nord, and a label a reader hunts for in
+	// a long list cannot be the dimmest thing on screen. colorGroup sits one
+	// step up. A hue would have been louder but every one is taken: accent
+	// means focus and also a running service's port on the rows just below, and
+	// green, red and amber are service states and the exposed mark.
+	//
+	// So the separation is grey against grey, weight against the state words,
+	// and above all the blank line.
+	//
+	// The state column a service row carries is left out entirely: a group has
+	// no state, only a count of the states under it.
 	nameW := max(1, width-3-1-lipgloss.Width(count))
 
-	row := base.Foreground(colorMuted).Render(" "+collapseGlyph(collapsed)) +
-		base.Foreground(colorText).Bold(true).Render(" "+padRight(truncateName(group, nameW), nameW)) +
-		base.Foreground(colorMuted).Render(" "+count)
+	row := base.Foreground(colorGroup).Render(" "+collapseGlyph(collapsed)) +
+		base.Foreground(colorGroup).Bold(true).Render(" "+padRight(truncateName(group, nameW), nameW)) +
+		base.Foreground(colorGroup).Render(" "+count)
 	if pad := width - lipgloss.Width(row); pad > 0 {
 		row += base.Render(strings.Repeat(" ", pad))
 	}

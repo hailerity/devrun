@@ -11,8 +11,17 @@ import (
 // (the original look); the light side is GitHub Light, so text stays readable on
 // a light terminal instead of rendering pale grey on white.
 var (
-	colorText   = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#c9d1d9"}
-	colorMuted  = lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#6e7681"}
+	colorText  = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#c9d1d9"}
+	colorMuted = lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#6e7681"}
+
+	// colorGroup labels a sidebar group header: quieter than a service name, so
+	// it reads as structure rather than as another service, but not as quiet as
+	// colorMuted — which measures 2.72:1 on Nord and One Dark, under the 3:1 a
+	// non-text element needs, and a section label in a long list is something a
+	// reader actively hunts for. One step up from muted on dark terminals;
+	// muted's own value on light ones, where it already clears 4.9:1.
+	// Floor held by styles_test.go.
+	colorGroup  = lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#8b949e"}
 	colorAccent = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"}
 	colorGreen  = lipgloss.AdaptiveColor{Light: "#1a7f37", Dark: "#3fb950"}
 	colorRed    = lipgloss.AdaptiveColor{Light: "#cf222e", Dark: "#f85149"}

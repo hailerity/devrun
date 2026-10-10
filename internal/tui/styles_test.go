@@ -96,9 +96,65 @@ func TestPalette_BothSidesSet(t *testing.T) {
 	for name, c := range map[string]lipgloss.AdaptiveColor{
 		"text": colorText, "muted": colorMuted, "accent": colorAccent,
 		"green": colorGreen, "red": colorRed, "yellow": colorYellow,
-		"border": colorBorder, "bar": colorBar, "chip": colorChip,
+		"group": colorGroup, "border": colorBorder, "bar": colorBar,
+		"chip": colorChip, "selSidebar": colorSelSidebar,
+		"selCursor": colorSelCursor, "visBg": colorVisBg,
 	} {
 		assert.NotEmptyf(t, c.Light, "%s has no light side", name)
 		assert.NotEmptyf(t, c.Dark, "%s has no dark side", name)
 	}
+}
+
+// A group header is the one label a reader hunts for in a long list, so it
+// cannot be the dimmest thing on screen. colorMuted — what every other section
+// label here uses — measures 2.72:1 on Nord and One Dark, under the 3:1 a
+// non-text element needs; colorGroup is one step up on dark terminals and is
+// muted's own value on light ones, where that already clears 4.9:1.
+func TestColorGroup_ReadsAsAHeaderOnCommonTerminals(t *testing.T) {
+	const minUIContrast = 3.0
+
+	dark := map[string]string{
+		"GitHub Dark":  "#0d1117",
+		"true black":   "#000000",
+		"VS Code dark": "#1e1e1e",
+		"One Dark":     "#282c34",
+		"Nord":         "#2e3440",
+	}
+	for name, bg := range dark {
+		got := contrastRatio(t, colorGroup.Dark, bg)
+		assert.GreaterOrEqualf(t, got, minUIContrast,
+			"group header %s on %s (%s) is %.2f:1, below %.1f:1 — it stops being findable",
+			colorGroup.Dark, name, bg, got, minUIContrast)
+	}
+
+	light := map[string]string{
+		"white":        "#ffffff",
+		"GitHub Light": "#f6f8fa",
+		"off-white":    "#fafafa",
+	}
+	for name, bg := range light {
+		got := contrastRatio(t, colorGroup.Light, bg)
+		assert.GreaterOrEqualf(t, got, minUIContrast,
+			"group header %s on %s (%s) is %.2f:1, below %.1f:1 — it stops being findable",
+			colorGroup.Light, name, bg, got, minUIContrast)
+	}
+}
+
+// It also has to be brighter than muted, or it is not solving the problem muted
+// had — and dimmer than a service name, or it is not telling them apart.
+func TestColorGroup_SitsBetweenMutedAndServiceText(t *testing.T) {
+	for _, bg := range []string{"#0d1117", "#2e3440"} {
+		group := contrastRatio(t, colorGroup.Dark, bg)
+		muted := contrastRatio(t, colorMuted.Dark, bg)
+		text := contrastRatio(t, colorText.Dark, bg)
+		assert.Greaterf(t, group, muted, "a header must out-read muted on %s", bg)
+		assert.Lessf(t, group, text, "but stay quieter than a service name on %s", bg)
+	}
+
+	// And be told apart from a service name directly: on the header row itself,
+	// grey-against-grey is the only thing separating them.
+	got := contrastRatio(t, colorText.Dark, colorGroup.Dark)
+	assert.Greaterf(t, got, 1.4,
+		"a service name (%s) and a group header (%s) are only %.2f:1 apart",
+		colorText.Dark, colorGroup.Dark, got)
 }
