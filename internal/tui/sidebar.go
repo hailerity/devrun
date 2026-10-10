@@ -20,12 +20,32 @@ type sidebarTarget struct {
 // allServicesLabel names the "no filter" choice in the target picker.
 const allServicesLabel = "All services"
 
+// rowKind distinguishes what a drawn line of the list is.
+type rowKind int
+
+const (
+	rowService rowKind = iota
+	rowHeader
+)
+
+// sidebarRow is one line of the list as drawn. The cursor indexes these rather
+// than s.services, because once the list is grouped a header is a line the
+// cursor can sit on — and one that has no service behind it. With a single
+// group there are no headers and the two indexes coincide, which is why
+// introducing this changed no behaviour.
+type sidebarRow struct {
+	kind  rowKind
+	group string // the header's group, or the group a service row sits under
+	svc   int    // index into s.services; -1 on a header
+}
+
 type sidebar struct {
 	allServices []ipc.ServiceInfo // full scoped list, by Name
 	services    []ipc.ServiceInfo // allServices narrowed by the target filter and the name query
-	selected    int               // cursor within services
-	top         int               // first visible services row — the scroll window's offset
-	rows        int               // visible row count, set by the model's layout; 0 = not laid out yet
+	rows        []sidebarRow      // services as drawn: headers interleaved, collapsed groups omitted
+	selected    int               // cursor within rows
+	top         int               // first visible row — the scroll window's offset
+	paneRows    int               // visible row count, set by the model's layout; 0 = not laid out yet
 
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
@@ -97,21 +117,21 @@ func (s *sidebar) keepingCursor(change func()) {
 }
 
 // recordAnchor remembers the service under the cursor. It deliberately does
-// nothing when the list is empty: there is no service to anchor to, and
-// overwriting the anchor with "" is how a no-match query used to lose the
-// cursor for good.
+// nothing when there is no service there — an empty list, or a group header —
+// because overwriting the anchor with "" is how a no-match query used to lose
+// the cursor for good.
 func (s *sidebar) recordAnchor() {
-	if s.selected < len(s.services) {
-		s.anchor = s.services[s.selected].Name
+	if svc := s.serviceAt(s.selected); svc != nil {
+		s.anchor = svc.Name
 	}
 }
 
-// selectServiceByName moves the service cursor to the row named n, or to row 0
-// when there is no such row. Call after the filtered service list changes.
+// selectServiceByName moves the cursor to the row showing the service named n,
+// or to row 0 when no row does. Call after the drawn rows change.
 func (s *sidebar) selectServiceByName(n string) {
 	s.selected = 0
-	for i, svc := range s.services {
-		if svc.Name == n {
+	for i := range s.rows {
+		if svc := s.serviceAt(i); svc != nil && svc.Name == n {
 			s.selected = i
 			break
 		}
@@ -188,9 +208,33 @@ func (s *sidebar) refilter() {
 		}
 		s.services = out
 	}
-	if s.selected >= len(s.services) {
-		s.selected = max(0, len(s.services)-1)
+	s.rebuildRows()
+	if s.selected >= len(s.rows) {
+		s.selected = max(0, len(s.rows)-1)
 	}
+}
+
+// rebuildRows lays s.services out as drawn lines. With one distinct group there
+// is nothing to label, so the rows are the services and the list looks exactly
+// as it did before grouping existed; a header only earns its line when it is
+// telling the reader something.
+func (s *sidebar) rebuildRows() {
+	s.rows = make([]sidebarRow, 0, len(s.services))
+	for i := range s.services {
+		s.rows = append(s.rows, sidebarRow{kind: rowService, svc: i})
+	}
+}
+
+// serviceAt returns the service a row points at, or nil for a header.
+func (s *sidebar) serviceAt(row int) *ipc.ServiceInfo {
+	if row < 0 || row >= len(s.rows) {
+		return nil
+	}
+	r := s.rows[row]
+	if r.kind != rowService || r.svc < 0 || r.svc >= len(s.services) {
+		return nil
+	}
+	return &s.services[r.svc]
 }
 
 // setFilter makes the target called name the service filter ("" or an unknown
@@ -233,7 +277,7 @@ func (s *sidebar) setQuery(q string) {
 // setRows tells the sidebar how many rows its pane can show, and re-anchors the
 // scroll window on the cursor.
 func (s *sidebar) setRows(n int) {
-	s.rows = n
+	s.paneRows = n
 	s.scrollToCursor()
 }
 
@@ -241,42 +285,43 @@ func (s *sidebar) setRows(n int) {
 // and never leaves blank rows below the list when there is more above. Called
 // after anything that moves the cursor or changes the list.
 func (s *sidebar) scrollToCursor() {
-	if s.rows <= 0 {
+	if s.paneRows <= 0 {
 		s.top = 0 // not laid out yet: render() shows everything
 		return
 	}
 	if s.selected < s.top {
 		s.top = s.selected
 	}
-	if s.selected >= s.top+s.rows {
-		s.top = s.selected - s.rows + 1
+	if s.selected >= s.top+s.paneRows {
+		s.top = s.selected - s.paneRows + 1
 	}
-	s.top = max(0, min(s.top, len(s.services)-s.rows))
+	s.top = max(0, min(s.top, len(s.rows)-s.paneRows))
 }
 
-// moveDown / moveUp walk the (filtered) service list, wrapping at the ends.
+// moveDown / moveUp walk the drawn rows, headers included, wrapping at the ends.
 
 func (s *sidebar) moveDown() {
-	if len(s.services) == 0 {
+	if len(s.rows) == 0 {
 		return
 	}
-	s.selected = (s.selected + 1) % len(s.services)
+	s.selected = (s.selected + 1) % len(s.rows)
 	s.scrollToCursor()
 }
 
 func (s *sidebar) moveUp() {
-	if len(s.services) == 0 {
+	if len(s.rows) == 0 {
 		return
 	}
-	s.selected = (s.selected - 1 + len(s.services)) % len(s.services)
+	s.selected = (s.selected - 1 + len(s.rows)) % len(s.rows)
 	s.scrollToCursor()
 }
 
+// selectedService is the service under the cursor, or nil when the cursor is on
+// a group header or the list is empty. Every caller already had to handle nil
+// for the empty list, which is why headers became cursorable without a hunt
+// through the key handlers.
 func (s *sidebar) selectedService() *ipc.ServiceInfo {
-	if len(s.services) == 0 {
-		return nil
-	}
-	return &s.services[s.selected]
+	return s.serviceAt(s.selected)
 }
 
 // stateLabel returns the short status token for a service: its port when
@@ -419,9 +464,10 @@ func (s *sidebar) frame(focused bool, width int) paneFrame {
 		}
 		f.footLeft = styleMuted.Render(fmt.Sprintf("%d/%d up", up, len(s.services)))
 		// Say so when the list is windowed — otherwise rows above or below the
-		// fold are invisible with nothing to hint they exist.
-		if first, last := s.window(); last-first < len(s.services) {
-			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.services)))
+		// fold are invisible with nothing to hint they exist. Counted in drawn
+		// rows, which is what is actually scrolling.
+		if first, last := s.window(); last-first < len(s.rows) {
+			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.rows)))
 		}
 	}
 	return f
@@ -449,21 +495,24 @@ func (s *sidebar) render(width int) string {
 		return styleMuted.Render(" (no services in target)")
 	}
 	first, last := s.window()
-	rows := make([]string, 0, last-first)
+	out := make([]string, 0, last-first)
 	for i := first; i < last; i++ {
-		svc := s.services[i]
-		rows = append(rows, serviceRow(width, svc, i == s.selected, s.exposed[svc.Name]))
+		svc := s.serviceAt(i)
+		if svc == nil {
+			continue // a header; drawn once grouping lands
+		}
+		out = append(out, serviceRow(width, *svc, i == s.selected, s.exposed[svc.Name]))
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(out, "\n")
 }
 
-// window returns the half-open range of service rows currently visible.
+// window returns the half-open range of drawn rows currently visible.
 func (s *sidebar) window() (first, last int) {
-	if s.rows <= 0 {
-		return 0, len(s.services)
+	if s.paneRows <= 0 {
+		return 0, len(s.rows)
 	}
-	first = max(0, min(s.top, len(s.services)))
-	return first, min(len(s.services), first+s.rows)
+	first = max(0, min(s.top, len(s.rows)))
+	return first, min(len(s.rows), first+s.paneRows)
 }
 
 // Column widths of a service row: " ● name  ▲  :8080   2.1%".
