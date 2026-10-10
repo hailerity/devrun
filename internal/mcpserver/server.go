@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -37,7 +38,7 @@ Prefer these tools over running a dev server yourself: a service started here ke
 
 Config: a devrun.yaml in the project directory defines the project's services and targets; without one, the user's global registry is used. Every tool accepts project_dir (default: the directory you were launched in) and every result says which file it used.
 
-Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it.
+Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it; if the group you want is the one every service in the project already shows, just omit it.
 
 Typical flow: list_services → add_service if what you need is missing → start (it waits and tells you whether the service came up, with its log tail if not) → logs to check on it → stop when done.`
 
@@ -118,6 +119,40 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 func checkName(kind, name string) error {
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf("invalid %s name %q: use 1–64 letters, digits, '.', '_' or '-', starting with a letter or digit", kind, name)
+	}
+	return nil
+}
+
+// maxGroupLen caps a group label. Generous — a project directory name can be
+// long — but bounded, because this is a label drawn on one row of a pane that is
+// at most 47 columns wide, and an unbounded one is only a way to make a config
+// file unreadable.
+const maxGroupLen = 128
+
+// checkGroup refuses a group that would not survive being drawn. Unlike a
+// service name it is free-form — it is a display label, never a filename or an
+// identity — so there is no name rule to apply; the bar is only that it be one
+// printable line.
+//
+// A newline is the one that matters. The sidebar's row model assumes one row is
+// one terminal line, and lipgloss.Width reports the *widest* line of a multi-line
+// string — so "a\nb" measures 1, is never truncated, and draws two lines for a
+// row the scroll window counts as one, throwing the cursor and the pane height
+// out by one per occurrence.
+func checkGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	if len(group) > maxGroupLen {
+		return fmt.Errorf("group is %d bytes, over the %d-byte limit", len(group), maxGroupLen)
+	}
+	for _, r := range group {
+		if r == '\n' || r == '\r' {
+			return fmt.Errorf("group must be a single line: it contains a line break")
+		}
+		if unicode.IsControl(r) {
+			return fmt.Errorf("group contains a control character (%U)", r)
+		}
 	}
 	return nil
 }

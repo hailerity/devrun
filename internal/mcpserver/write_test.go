@@ -1,8 +1,10 @@
 package mcpserver
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -161,4 +163,142 @@ func TestStop_NothingRunningIsANoOp(t *testing.T) {
 	require.Empty(t, e.call("stop", map[string]any{"target": "stack"}, &out))
 	assert.Equal(t, []StopState{{Name: "web", State: "stopped"}}, out.Services)
 	assert.Contains(t, out.Note, "was not started as a target")
+}
+
+// An agent passing the group it saw in list_services — which for a project
+// service is the project's name applied as a default — must not thereby pin the
+// service to that name. Nothing in the read output distinguishes the default
+// from a group a service set for itself, and the instructions tell the agent to
+// match an existing group, so this is the path it is actively steered onto.
+func TestAddService_GroupMatchingTheProjectNameStaysInherited(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"project_dir": dir, "name": "api", "command": "go run .", "group": "shop",
+	}, &out))
+
+	// What the agent asked for, honoured: the service is in the shop section.
+	assert.Equal(t, "shop", out.Service.Group)
+
+	// But not pinned to it.
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Empty(t, proj.Services["api"].Group,
+		"the project's own name is the default, so it is stored as inherited")
+
+	// Which is what it buys: renaming the project carries both along, instead of
+	// leaving api behind under a group of one.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, config.ProjectFileName),
+		[]byte("name: market\nservices:\n  web:\n    command: npm start\n  api:\n    command: go run .\n"), 0644))
+	proj, err = config.LoadProject(dir)
+	require.NoError(t, err)
+	cfgs := proj.ToServiceConfigs(dir)
+	assert.Equal(t, "market", cfgs["web"].Group)
+	assert.Equal(t, "market", cfgs["api"].Group)
+}
+
+// A group that is not the project's default is stored as given, including one
+// that merely resembles it.
+func TestAddService_ADifferentGroupIsStoredLiterally(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	for _, group := range []string{"backend", "Shop", "shop-api"} {
+		var out AddServiceOutput
+		require.Empty(t, e.call("add_service", map[string]any{
+			"project_dir": dir, "name": "svc-" + group, "command": "x", "group": group,
+		}, &out))
+		proj, err := config.LoadProject(dir)
+		require.NoError(t, err)
+		assert.Equal(t, group, proj.Services["svc-"+group].Group,
+			"%q is not the project's name, so it is the service's own", group)
+	}
+}
+
+// In global scope there is no project name to collide with, so a group is always
+// stored as given.
+func TestAddService_GlobalScopeStoresAnyGroupLiterally(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"name": "api", "command": "x", "group": filepath.Base(e.root),
+	}, &out))
+	assert.Equal(t, filepath.Base(e.root), out.Service.Group,
+		"nothing is inherited globally, so nothing is normalised away")
+}
+
+// The group is the only free-form string this surface writes into a committed
+// file, and hardening_test.go's contract is that malformed input is refused
+// before anything is written. A newline is the one that matters: the sidebar
+// counts one row as one terminal line, and lipgloss.Width measures the widest
+// line of a multi-line string — so it would never be truncated and would draw
+// two lines for one row.
+func TestAddService_RefusesAnUndrawableGroup(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	for _, tc := range []struct{ name, group, want string }{
+		{"newline", "back\nend", "single line"},
+		{"carriage return", "back\rend", "single line"},
+		{"control character", "back\x07end", "control character"},
+		{"too long", strings.Repeat("g", maxGroupLen+1), "over the"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out AddServiceOutput
+			errText := e.call("add_service", map[string]any{
+				"project_dir": dir, "name": "api", "command": "x", "group": tc.group,
+			}, &out)
+			require.NotEmpty(t, errText, "must be refused")
+			assert.Contains(t, errText, tc.want, "the message names the problem")
+
+			// And nothing was written: the service does not exist.
+			proj, err := config.LoadProject(dir)
+			require.NoError(t, err)
+			assert.NotContains(t, proj.Services, "api", "refused before the write")
+		})
+	}
+}
+
+// A group at the limit, and one with punctuation and non-ASCII, are fine — the
+// bar is one printable line, not a name rule.
+func TestAddService_AcceptsAFreeFormGroup(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+
+	for i, group := range []string{
+		strings.Repeat("g", maxGroupLen),
+		"back end / api",
+		"сервисы",
+	} {
+		var out AddServiceOutput
+		require.Empty(t, e.call("add_service", map[string]any{
+			"name": fmt.Sprintf("svc%d", i), "command": "x", "group": group,
+		}, &out), "group %q should be accepted", group)
+		assert.Equal(t, group, out.Service.Group)
+	}
+}
+
+// The normalisation keys on whether the config is a project file, not on the
+// `global` flag: a directory with no devrun.yaml resolves to the global registry
+// with the flag unset, and there a group matching the directory's name is an
+// ordinary group — nothing inherits, so there is nothing to normalise away.
+func TestAddService_NoProjectFileMeansNoInheritance(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+	require.NoFileExists(t, filepath.Join(e.root, config.ProjectFileName),
+		"the default dir has no project file")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		// No project_dir and no global flag: the default dir, which has no
+		// devrun.yaml, so this lands in the global registry.
+		"name": "api", "command": "x", "group": filepath.Base(e.root),
+	}, &out))
+	assert.Equal(t, "global", out.Scope)
+	assert.Equal(t, filepath.Base(e.root), out.Service.Group,
+		"kept: there is no project to inherit from")
 }

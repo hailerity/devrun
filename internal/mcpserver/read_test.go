@@ -74,14 +74,19 @@ func TestListServices_GroupAndTargetsAreSeparate(t *testing.T) {
 	var out ListOutput
 	require.Empty(t, e.call("list_services", map[string]any{"project_dir": dir}, &out))
 
-	for _, s := range out.Services {
-		switch s.Name {
-		case "web":
-			assert.Equal(t, "frontend", s.Group)
-			assert.Equal(t, []string{"dev"}, s.Targets)
-		case "api":
-			assert.Equal(t, "backend", s.Group)
-			assert.Equal(t, []string{"dev"}, s.Targets)
-		}
+	// Compared as a whole rather than asserted inside a switch: a switch with no
+	// default passes vacuously if the list comes back empty or the names change,
+	// which is a test that cannot fail.
+	type gt struct {
+		group   string
+		targets []string
 	}
+	got := map[string]gt{}
+	for _, s := range out.Services {
+		got[s.Name] = gt{s.Group, s.Targets}
+	}
+	assert.Equal(t, map[string]gt{
+		"web": {"frontend", []string{"dev"}},
+		"api": {"backend", []string{"dev"}},
+	}, got)
 }
