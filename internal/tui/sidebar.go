@@ -371,15 +371,21 @@ func (s *sidebar) hasHeaders() bool {
 }
 
 // revealGroup unfolds the named group, so a service that has just moved into it
-// is on screen rather than hidden behind a fold the reader set earlier. A no-op
-// when the group was not folded, and when nothing is folded at all.
+// is on screen rather than hidden behind a fold the reader set earlier.
+//
+// Through keepingCursor, not a bare refilter: unfolding inserts rows, s.selected
+// is a row index, and renumbering it without re-anchoring moves the cursor —
+// which the next poll then commits as the anchor. Doing that here would have
+// reintroduced the drift this function exists to prevent, one layer down.
+//
+// isCollapsed, not s.collapsed: a query suspends every fold, so there is nothing
+// hidden to reveal, and deleting the entry would silently unfold a group the
+// reader had folded once the query cleared.
 func (s *sidebar) revealGroup(group string) {
-	if !s.collapsed[group] {
+	if !s.isCollapsed(group) {
 		return
 	}
-	delete(s.collapsed, group)
-	s.refilter()
-	s.scrollToCursor()
+	s.keepingCursor(func() { delete(s.collapsed, group) })
 }
 
 // onGroupHeader reports whether the cursor is on a group header — a row with no

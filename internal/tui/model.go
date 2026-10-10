@@ -870,10 +870,7 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 		m.editC.errMsg = err.Error()
 		return m, nil
 	}
-	// Only a change to what the daemon runs needs the process restarted. A
-	// group is a label the daemon never reads, so relabelling must not kill a
-	// warm dev server or a database to move it under another header.
-	needsRestart := m.editC.runtimeChanged() && m.serviceIsRunning(oldName)
+	needsRestart := m.runtimeChanged() && m.serviceIsRunning(oldName)
 	m.applyEditToRegistry(oldName, name, command, cwd, group)
 	// A regroup can send the service into a folded section, where it would have
 	// no row at all: the cursor would fall back to an unrelated service and the
@@ -894,6 +891,27 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 	}
 	m.footerC.showToast("saved " + name)
 	return m, m.pollDaemon()
+}
+
+// runtimeChanged reports whether the open edit changes anything the daemon
+// actually runs — the name (its identity and its log file), the command, or the
+// working directory. Only those are worth restarting a process for.
+//
+// The group is deliberately not among them: it is a label the sidebar sections
+// by and the daemon never reads, so relabelling a service must not kill a warm
+// dev server or a database to move it under another header.
+//
+// The cwd is compared in its *stored* form. The form shows a project service's
+// resolved absolute path while the file holds a relative one — empty at the
+// project root — so the field and the file disagree by construction, and
+// comparing the raw text read blanking the field as a change when it was a
+// no-op on disk.
+func (m model) runtimeChanged() bool {
+	name, command, cwd, _ := m.editC.values()
+	oldName, oldCommand, oldCWD := m.editC.originals()
+	return name != oldName ||
+		command != oldCommand ||
+		config.StoredCWD(m.source, cwd) != config.StoredCWD(m.source, oldCWD)
 }
 
 // serviceIsRunning reports whether the sidebar's last daemon view shows the

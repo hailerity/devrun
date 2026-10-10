@@ -92,20 +92,51 @@ func TestEditPanel_GlobalScopeHasNoInheritedGroup(t *testing.T) {
 }
 
 // Only a change to what the daemon runs is a change it has to be restarted for.
-func TestEditPanel_RuntimeChangedIgnoresTheGroup(t *testing.T) {
-	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "yarn", CWD: "/app"}, "", "shop")
-	assert.False(t, p.runtimeChanged(), "untouched")
+// Compared at the model, which knows the config scope the cwd has to be
+// normalised against.
+func TestModel_RuntimeChangedIgnoresTheGroup(t *testing.T) {
+	open := func(t *testing.T) model {
+		t.Helper()
+		m := newModel("", &config.Registry{Services: map[string]*config.ServiceConfig{
+			"web": {Name: "web", Command: "yarn", CWD: "/app"},
+		}}, config.Source{}, "", clipboard{})
+		m.editC.openFor("web", &config.ServiceConfig{Command: "yarn", CWD: "/app"}, "", "")
+		return m
+	}
 
-	p.inputs[fieldGroup].SetValue("frontend")
-	assert.False(t, p.runtimeChanged(), "a group is a label, not a runtime change")
+	m := open(t)
+	assert.False(t, m.runtimeChanged(), "untouched")
+
+	m.editC.inputs[fieldGroup].SetValue("frontend")
+	assert.False(t, m.runtimeChanged(), "a group is a label, not a runtime change")
 
 	for _, f := range []editField{fieldName, fieldCommand, fieldCWD} {
-		p := newEditPanel()
-		p.openFor("web", &config.ServiceConfig{Command: "yarn", CWD: "/app"}, "", "shop")
-		p.inputs[f].SetValue("changed")
-		assert.Truef(t, p.runtimeChanged(), "%s is a runtime change", editFieldLabels[f])
+		m := open(t)
+		m.editC.inputs[f].SetValue("changed")
+		assert.Truef(t, m.runtimeChanged(), "%s is a runtime change", editFieldLabels[f])
 	}
+}
+
+// A project service's cwd is shown resolved and stored relative, so the field
+// and the file disagree by construction: blanking it is a no-op on disk and must
+// not be read as a change worth restarting a process for.
+func TestModel_RuntimeChangedComparesTheStoredCWD(t *testing.T) {
+	m, dir := projectEditModel(t, "name: shop\nservices:\n  web:\n    command: yarn\n")
+	m.sidebarC.selectServiceByName("web")
+
+	m2, _ := m.openEditor()
+	m = m2.(model)
+	require.Equal(t, dir, m.editC.inputs[fieldCWD].Value(),
+		"the form shows the resolved project root")
+
+	// Blanking it stores the same thing the file already holds: nothing.
+	m.editC.inputs[fieldCWD].SetValue("")
+	assert.False(t, m.runtimeChanged(),
+		"the project root and an empty cwd are the same stored value")
+
+	// A real move is still a change.
+	m.editC.inputs[fieldCWD].SetValue(filepath.Join(dir, "client"))
+	assert.True(t, m.runtimeChanged())
 }
 
 // A refused save has to say why, and overlay() clips the modal from the bottom —
@@ -210,9 +241,12 @@ func TestModel_EditingAnotherFieldDoesNotStampTheInheritedGroup(t *testing.T) {
 	assert.Equal(t, "bazaar", cfgs["api"].Group)
 }
 
-// Typing the inherited name explicitly is equivalent to leaving it inherited:
-// the field means "a group of its own", and the project's name is not one.
-func TestModel_TypingTheInheritedNameLeavesItInherited(t *testing.T) {
+// Typing the inherited name is *not* the same as leaving the field empty: it
+// pins the service to that group. The two look identical today — the derived
+// group is the project's name either way — and differ the moment the project is
+// renamed, which is the whole reason to pin one. (The neighbouring tests cover
+// that divergence; this one covers the storing.)
+func TestModel_TypingTheInheritedNameStoresItExplicitly(t *testing.T) {
 	m, dir := projectEditModel(t, "name: shop\nservices:\n  web:\n    command: yarn\n")
 	m.sidebarC.selectServiceByName("web")
 
@@ -304,8 +338,51 @@ func TestModel_RegroupingIntoAFoldedGroupUnfoldsIt(t *testing.T) {
 	require.False(t, m.editC.open, "saved: %s", m.editC.errMsg)
 
 	assert.False(t, m.sidebarC.collapsed["backend"], "the destination unfolded")
+
+	// The cursor stays on the edited service. Unfolding inserts rows above it —
+	// `backend` sorts before `frontend` — and renumbering them without
+	// re-anchoring moved the cursor onto a header, which the next poll then
+	// committed as the anchor, ending up on `api` with the log pane following.
+	require.NotNil(t, m.sidebarC.selectedService(), "not parked on a header")
+	assert.Equal(t, "web", m.sidebarC.selectedService().Name)
+
+	// And it survives the poll that brings the new grouping in.
 	m.sidebarC.update(m.scopedServices(nil), nil)
-	assert.Contains(t, rowShape(&m.sidebarC), "svc:web", "and the moved service has a row")
+	assert.Contains(t, rowShape(&m.sidebarC), "svc:web", "the moved service has a row")
+	require.NotNil(t, m.sidebarC.selectedService())
+	assert.Equal(t, "web", m.sidebarC.selectedService().Name, "still on it after the poll")
+}
+
+// A query suspends folds, so there is nothing hidden to reveal — and the
+// collapsed set must come out of the save exactly as it went in, or clearing the
+// query unfolds a group the reader never touched.
+func TestModel_RegroupingUnderAQueryLeavesTheFoldSetAlone(t *testing.T) {
+	m, _ := projectEditModel(t, "name: shop\nservices:\n"+
+		"  web:\n    command: yarn\n    group: frontend\n"+
+		"  api:\n    command: go run .\n    group: backend\n")
+
+	m.sidebarC.selectGroupHeader("backend")
+	require.True(t, m.sidebarC.toggleCollapse())
+	require.True(t, m.sidebarC.collapsed["backend"])
+
+	// A committed query suspends the fold.
+	m.sidebarC.setQuery("web")
+	require.False(t, m.sidebarC.isCollapsed("backend"), "suspended")
+
+	m.sidebarC.selectServiceByName("web")
+	m2, _ := m.openEditor()
+	m = m2.(model)
+	m.editC.inputs[fieldGroup].SetValue("backend")
+	m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	require.False(t, m.editC.open, "saved: %s", m.editC.errMsg)
+
+	assert.True(t, m.sidebarC.collapsed["backend"],
+		"the fold is still remembered; the query only suspended it")
+
+	// So clearing the query folds it back, as the reader left it.
+	m.sidebarC.setQuery("")
+	assert.True(t, m.sidebarC.isCollapsed("backend"))
 }
 
 // Relabelling must not kill a running process. The daemon never reads a group,

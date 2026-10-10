@@ -39,16 +39,13 @@ type editPanel struct {
 	errMsg      string
 }
 
-// runtimeChanged reports whether the edit touches anything the daemon actually
-// runs — the name (which is its identity and its log file), the command, or the
-// working directory.
-//
-// The group is deliberately not among them. It is a label the sidebar sections
-// by, which the daemon never reads, so relabelling a service must not kill a
-// warm dev server or a database to put it under a different header.
-func (p *editPanel) runtimeChanged() bool {
-	name, command, cwd, _ := p.values()
-	return name != p.origName || command != p.origCommand || cwd != p.origCWD
+// originals returns the name, command and cwd the form opened with — what the
+// daemon is running right now. The caller compares against them to decide
+// whether an edit needs the process restarted; it does the comparing because
+// only it knows the config scope, and a project service's cwd has to be
+// compared in its stored form rather than as the form shows it.
+func (p *editPanel) originals() (name, command, cwd string) {
+	return p.origName, p.origCommand, p.origCWD
 }
 
 func newEditPanel() editPanel {

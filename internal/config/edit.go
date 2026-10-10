@@ -34,6 +34,21 @@ func SaveServiceEdit(src Source, oldName, newName, command, cwd, group string) e
 	return editRegistryService(RegistryPath(), oldName, newName, command, cwd, group)
 }
 
+// StoredCWD is the value SaveServiceEdit would persist for cwd in the config src
+// points at: relative to the project dir for a devrun.yaml, and empty when it is
+// the project root; as given for the global registry.
+//
+// For callers deciding whether an edit actually changed anything. The TUI's form
+// shows a project service's *resolved absolute* cwd, so the field and the file
+// disagree by construction — blanking the field is a no-op on disk, and
+// comparing the raw text would read it as a change.
+func StoredCWD(src Source, cwd string) string {
+	if src.IsLocal() {
+		return relProjectCWD(src.Dir, cwd)
+	}
+	return cwd
+}
+
 func editRegistryService(path, oldName, newName, command, cwd, group string) error {
 	reg, err := LoadRegistry(path)
 	if err != nil {
