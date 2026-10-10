@@ -803,8 +803,18 @@ func (m model) openEditor() (tea.Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.ServiceConfig{Name: svc.Name}
 	}
-	m.editC.openFor(svc.Name, cfg)
+	m.editC.openFor(svc.Name, cfg, m.inheritedGroup())
 	return m, textinput.Blink
+}
+
+// inheritedGroup is the group a service in the active config falls back to when
+// it names none of its own: the project's name for a devrun.yaml, and nothing
+// for the global registry, which has no owner to inherit from.
+func (m model) inheritedGroup() string {
+	if !m.source.IsLocal() {
+		return ""
+	}
+	return config.ProjectGroupName(m.source.Dir)
 }
 
 // handleEditKey routes a key to the open edit modal: Esc cancels, Enter saves,
@@ -1286,10 +1296,10 @@ func (m model) sidebarWidth() int {
 	// while a query is being typed.
 	//
 	// Only when there is more than one group, because that is exactly when a
-	// header is drawn. A devrun.yaml stamps every service with the project's
-	// name, so every local project is a single group — reserving the room
-	// unconditionally took columns off the log pane, for every one of them, for
-	// a row that never renders.
+	// header is drawn. A devrun.yaml whose services name no group of their own
+	// is a single group — they all inherit the project's name — which is the
+	// common shape, and reserving the room unconditionally took columns off the
+	// log pane for every one of those, for a row that never renders.
 	if widths := m.sidebarC.groupLabelWidths(); len(widths) > 1 {
 		for _, g := range widths {
 			if n := g + groupRowChrome + paneChrome; n > w {

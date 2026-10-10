@@ -106,7 +106,12 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 		// The project's name is the default group, not an override: a service
 		// that names its own group keeps it, so one devrun.yaml can section
 		// itself instead of arriving as a single block.
-		group := svc.Group
+		//
+		// Trimmed here rather than only at the writers, because this is the one
+		// path every reader goes through and the file can be hand-written: a
+		// `group: '  '` would otherwise be a group, filing the service under a
+		// blank-looking header of its own instead of falling back.
+		group := strings.TrimSpace(svc.Group)
 		if group == "" {
 			group = p.Name
 		}

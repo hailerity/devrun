@@ -67,7 +67,7 @@ func AddService(s Scope, svc NewService) (*AddResult, error) {
 		Name:    svc.Name,
 		Command: svc.Command,
 		CWD:     svcCWD,
-		Group:   svc.Group,
+		Group:   strings.TrimSpace(svc.Group),
 		Env:     svc.Env,
 	}
 	if reg.Version == "" {
@@ -111,8 +111,11 @@ func addToProject(projDir, base string, svc NewService) (*AddResult, error) {
 	proj.Services[svc.Name] = &config.ProjectServiceConfig{
 		Command: svc.Command,
 		CWD:     svcCWD,
-		Group:   svc.Group,
-		Env:     env,
+		// Trimmed so `--group '  '` does not write whitespace into a committed
+		// file; ToServiceConfigs trims on the way out too, for files written by
+		// hand.
+		Group: strings.TrimSpace(svc.Group),
+		Env:   env,
 	}
 	if err := config.SaveProject(projDir, proj); err != nil {
 		return nil, err

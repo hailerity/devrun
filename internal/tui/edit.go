@@ -47,8 +47,19 @@ func newEditPanel() editPanel {
 	return p
 }
 
-// openFor prefills the form for service `name` with cfg and focuses the name field.
-func (p *editPanel) openFor(name string, cfg *config.ServiceConfig) {
+// openFor prefills the form for service `name` with cfg and focuses the name
+// field.
+//
+// inherited is the group this service would fall back to with none of its own —
+// a project's name, or "" for the global registry, where nothing is inherited.
+// cfg.Group is the *derived* group, so a project service that sets none arrives
+// here already carrying the project's name; prefilling that would make editing
+// the command write `group: <project>` into the committed devrun.yaml, grouping
+// a service nobody asked to group and freezing it against a later rename of the
+// project. The field therefore holds the service's *own* group, shown empty
+// with the inherited value as a placeholder, and saving an empty field means
+// "inherit" rather than "no group".
+func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, inherited string) {
 	p.open = true
 	p.origName = name
 	p.errMsg = ""
@@ -59,7 +70,11 @@ func (p *editPanel) openFor(name string, cfg *config.ServiceConfig) {
 		vals[fieldCommand] = cfg.Command
 		vals[fieldCWD] = cfg.CWD
 		vals[fieldGroup] = cfg.Group
+		if cfg.Group == inherited {
+			vals[fieldGroup] = ""
+		}
 	}
+	p.inputs[fieldGroup].Placeholder = inherited
 	for i := range p.inputs {
 		p.inputs[i].SetValue(vals[i])
 		p.inputs[i].CursorEnd()

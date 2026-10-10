@@ -287,8 +287,9 @@ func TestSidebar_WindowOmitsTheUnitWhenThereAreNoHeaders(t *testing.T) {
 }
 
 // The pane sizes itself to the longest service name; a group header is a row
-// too, and a project's name is every one of its services' group, so it has to
-// count as well or headers truncate while the pane could have grown.
+// too, and a group name can be as long — a project's name is the default for
+// every service that sets none — so it has to count as well or headers truncate
+// while the pane could have grown.
 func TestModel_SidebarWidthAccountsForGroupNames(t *testing.T) {
 	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
@@ -311,10 +312,11 @@ func TestModel_SidebarWidthAccountsForGroupNames(t *testing.T) {
 	assert.Contains(t, plain(m.sidebarC.render(w)), "customer-portal-backend")
 }
 
-// ...but only when a header is actually drawn. A devrun.yaml stamps every
-// service with the project's name, so every local project is one group and
-// never gets a header — reserving room for one took columns off the log pane
-// for every single-project user, for a row that never renders.
+// ...but only when a header is actually drawn. A project whose services set no
+// `group:` of their own is one group — every service inherits the project's
+// name — and one group gets no header, so reserving room for one took columns
+// off the log pane for a row that never renders. Still the common shape of a
+// devrun.yaml, even now that a service can name its own group.
 func TestModel_SidebarWidthIgnoresGroupNamesWithOnlyOneGroup(t *testing.T) {
 	m := newModel("", nil, config.Source{}, "", clipboard{})
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})

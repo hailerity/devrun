@@ -283,8 +283,8 @@ func (s *sidebar) refilter() {
 }
 
 // ungroupedLabel heads the services that carry no group. Only the global
-// registry can produce them: a devrun.yaml stamps every service with the
-// project's name.
+// registry can produce them: a service in a devrun.yaml that names no group of
+// its own inherits the project's name, so it always has one.
 //
 // Parenthesised, and phrased as the absence of a group rather than as a name,
 // because a real group can be called anything — including "ungrouped", via
