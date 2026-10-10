@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +29,7 @@ var addFlags struct {
 
 func init() {
 	addCmd.Flags().StringVar(&addFlags.cwd, "cwd", "", "Working directory (default: current dir)")
-	addCmd.Flags().StringVar(&addFlags.group, "group", "", "Assign to a group")
+	addCmd.Flags().StringVar(&addFlags.group, "group", "", "Assign to a group (the dashboard sections the list by it)")
 	addCmd.Flags().StringArrayVar(&addFlags.env, "env", nil, "Set environment variable (KEY=VALUE)")
 }
 
@@ -67,10 +66,6 @@ func runAdd(cmd *cobra.Command, args []string) error {
 
 	// A project devrun.yaml, when present, is the config all commands write to.
 	if res.Local {
-		if res.GroupIgnored {
-			fmt.Fprintln(os.Stderr, "note: --group is ignored for a project "+config.ProjectFileName+
-				" (the group is its top-level name)")
-		}
 		fmt.Printf("added %s to %s\n", name, config.ProjectFileName)
 		return nil
 	}

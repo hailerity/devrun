@@ -14,8 +14,11 @@ type NewService struct {
 	Command string
 	// CWD is the service's working directory. Relative paths are taken against
 	// the scope's Dir. Empty means the scope's Dir.
-	CWD   string
-	Group string // global registry only; a project file's group is its name
+	CWD string
+	// Group sections the service in the dashboard. Written to whichever config
+	// is in scope; empty leaves a project service inheriting the project's
+	// name, and a global service ungrouped.
+	Group string
 	Env   map[string]string
 	// Overwrite replaces an existing global service of the same name. A project
 	// devrun.yaml always refuses a duplicate. The CLI's `devrun add` sets this
@@ -28,9 +31,6 @@ type NewService struct {
 type AddResult struct {
 	// Local is true when it went into the project devrun.yaml.
 	Local bool
-	// GroupIgnored is true when a Group was given for a project file, which has
-	// no per-service group.
-	GroupIgnored bool
 }
 
 // AddService writes a new service into the config the scope resolves to: the
@@ -111,12 +111,13 @@ func addToProject(projDir, base string, svc NewService) (*AddResult, error) {
 	proj.Services[svc.Name] = &config.ProjectServiceConfig{
 		Command: svc.Command,
 		CWD:     svcCWD,
+		Group:   svc.Group,
 		Env:     env,
 	}
 	if err := config.SaveProject(projDir, proj); err != nil {
 		return nil, err
 	}
-	return &AddResult{Local: true, GroupIgnored: svc.Group != ""}, nil
+	return &AddResult{Local: true}, nil
 }
 
 // EditTargets loads the config the scope resolves to (project devrun.yaml or

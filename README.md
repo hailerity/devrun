@@ -102,7 +102,7 @@ devrun list --global   # ignore devrun.yaml, act on the global registry
 ```
 --cwd <path>      Working directory (default: current dir)
 --env KEY=VALUE   Set environment variable (repeatable)
---group <name>    Assign to a group (ignored when writing to a devrun.yaml)
+--group <name>    Assign to a group (the dashboard sections the list by it)
 ```
 
 ### Lifecycle
@@ -541,9 +541,11 @@ Three things worth knowing about folding:
   services: a query or a target changes what you are working on, while folding
   only gets a group out of the way on screen.
 
-Where the group comes from: a `devrun.yaml` gives every one of its services the
-project's name, so a project is a group. In the global registry, `devrun add
---group` sets it per service.
+Where the group comes from: a service's `group:` in a
+[`devrun.yaml`](#project-local-devrunyaml), or `devrun add --group` in either
+config. A project service that sets no group inherits the project's name, so a
+file that never mentions groups is one group — and a single group draws no
+header.
 
 The sidebar is one list of services, and two things can narrow it:
 
