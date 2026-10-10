@@ -121,6 +121,23 @@ func TestProjectConfig_ToServiceConfigs_NoGroupsIsUnchanged(t *testing.T) {
 	assert.Equal(t, "myapp", cfgs["api"].Group)
 }
 
+// A devrun.yaml is written by hand, so a whitespace-only group has to read as
+// no group rather than as a distinct, blank-looking section of its own.
+func TestProjectConfig_ToServiceConfigs_TrimsTheGroup(t *testing.T) {
+	proj := &ProjectConfig{
+		Name: "myapp",
+		Services: map[string]*ProjectServiceConfig{
+			"web":   {Command: "yarn", Group: "  "},
+			"api":   {Command: "go run .", Group: "  backend  "},
+			"other": {Command: "x", Group: "\t\n"},
+		},
+	}
+	cfgs := proj.ToServiceConfigs("/projects/myapp")
+	assert.Equal(t, "myapp", cfgs["web"].Group, "whitespace falls back to the project")
+	assert.Equal(t, "myapp", cfgs["other"].Group)
+	assert.Equal(t, "backend", cfgs["api"].Group, "and a real group is trimmed")
+}
+
 // It round-trips through the file, not just the struct.
 func TestLoadProject_ReadsPerServiceGroup(t *testing.T) {
 	dir := t.TempDir()

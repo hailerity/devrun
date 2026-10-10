@@ -175,6 +175,16 @@ func TestAddService_Project(t *testing.T) {
 	proj, _ := config.LoadProject(dir)
 	assert.Equal(t, "backend", proj.Services["api"].Group)
 
+	// Trimmed, so `--group '  '` does not write whitespace into a committed
+	// file and leave the service under a blank-looking section of its own.
+	_, err = AddService(s, NewService{Name: "blank", Command: "x", Group: "  "})
+	require.NoError(t, err)
+	_, err = AddService(s, NewService{Name: "padded", Command: "x", Group: "  edge  "})
+	require.NoError(t, err)
+	proj, _ = config.LoadProject(dir)
+	assert.Empty(t, proj.Services["blank"].Group)
+	assert.Equal(t, "edge", proj.Services["padded"].Group)
+
 	_, err = AddService(s, NewService{Name: "api", Command: "again", Overwrite: true})
 	assert.EqualError(t, err, `service "api" already defined in devrun.yaml`, "a project file never overwrites")
 

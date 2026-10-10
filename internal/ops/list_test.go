@@ -87,3 +87,24 @@ func TestActiveTargets_WithoutDaemonIsEmpty(t *testing.T) {
 	sandbox(t)
 	assert.Empty(t, ActiveTargets())
 }
+
+// The active config is the authority on a service's group, not the daemon's
+// copy — which the supervisor freezes at the moment the service started. So
+// clearing a group has to clear it here, and this has to agree with listOffline
+// below and with the TUI's scopedServices, which all read the same field.
+func TestScopeToRegistry_TakesTheGroupFromTheConfig(t *testing.T) {
+	reg := &config.Registry{Services: map[string]*config.ServiceConfig{
+		"web": {Name: "web", Command: "yarn"},                     // group cleared
+		"api": {Name: "api", Command: "go run .", Group: "fresh"}, // group changed
+	}}
+
+	got := ScopeToRegistry([]ipc.ServiceInfo{
+		{Name: "web", Group: "stale", State: "running"},
+		{Name: "api", Group: "stale", State: "running"},
+	}, reg)
+
+	require.Len(t, got, 2)
+	byName := map[string]ipc.ServiceInfo{got[0].Name: got[0], got[1].Name: got[1]}
+	assert.Empty(t, byName["web"].Group, "cleared in the config, so cleared here")
+	assert.Equal(t, "fresh", byName["api"].Group, "and a change is picked up")
+}
