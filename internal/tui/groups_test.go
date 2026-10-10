@@ -27,16 +27,24 @@ func groupedServices() []ipc.ServiceInfo {
 	}
 }
 
-// rowShape renders the row list as "header:name" / "svc:name" so a test can
-// assert the whole layout in one line.
+// rowShape renders the row list as "header:name" / "svc:name" / "gap" so a test
+// can assert the whole layout in one line.
+//
+// Gaps are reported rather than filtered: the blank line between groups is a
+// real row that the scroll window counts, and a test that hid it could not
+// catch one appearing where it should not — above the first group, say, or
+// inside one.
 func rowShape(sb *sidebar) []string {
 	out := make([]string, 0, len(sb.rows))
 	for i := range sb.rows {
-		if svc := sb.serviceAt(i); svc != nil {
-			out = append(out, "svc:"+svc.Name)
-			continue
+		switch {
+		case sb.rows[i].kind == rowSpacer:
+			out = append(out, "gap")
+		case sb.serviceAt(i) != nil:
+			out = append(out, "svc:"+sb.serviceAt(i).Name)
+		default:
+			out = append(out, "header:"+groupLabel(sb.rows[i].group))
 		}
-		out = append(out, "header:"+groupLabel(sb.rows[i].group))
 	}
 	return out
 }
@@ -46,9 +54,7 @@ func TestSidebar_GroupsAreSectionedAlphabeticallyWithUngroupedLast(t *testing.T)
 	sb.update(groupedServices(), nil)
 
 	assert.Equal(t, []string{
-		"header:backend", "svc:api", "svc:db", "svc:worker",
-		"header:frontend", "svc:assets", "svc:web",
-		"header:(no group)", "svc:scratch",
+		"header:backend", "svc:api", "svc:db", "svc:worker", "gap", "header:frontend", "svc:assets", "svc:web", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 }
 
@@ -116,9 +122,7 @@ func TestSidebar_QueryDropsEmptiedGroupsAndTheirHeaders(t *testing.T) {
 
 	sb.setQuery("a") // api, assets, scratch — one from each group
 	assert.Equal(t, []string{
-		"header:backend", "svc:api",
-		"header:frontend", "svc:assets",
-		"header:(no group)", "svc:scratch",
+		"header:backend", "svc:api", "gap", "header:frontend", "svc:assets", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 
 	// Narrow to one group's worth and the headers go entirely: one group left.
@@ -258,7 +262,7 @@ func TestSidebar_CursorSurvivesAPollWithGroups(t *testing.T) {
 func TestSidebar_WindowCountsHeaderRowsAndNamesTheUnit(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(groupedServices(), nil)
-	require.Len(t, sb.rows, 9) // 6 services + 3 headers
+	require.Len(t, sb.rows, 11) // 6 services + 3 headers + 2 gaps
 	sb.setRows(4)
 
 	first, last := sb.window()
@@ -266,7 +270,7 @@ func TestSidebar_WindowCountsHeaderRowsAndNamesTheUnit(t *testing.T) {
 	assert.Equal(t, 4, last)
 
 	f := sb.frame(true, 40)
-	assert.Contains(t, plain(f.footRight), "rows 1–4 of 9")
+	assert.Contains(t, plain(f.footRight), "rows 1–4 of 11")
 	assert.Contains(t, plain(f.footLeft), "3/6 up", "services, not rows")
 }
 
@@ -352,4 +356,113 @@ func TestSidebar_RenderDrawsAHeaderPerGroup(t *testing.T) {
 	assert.Contains(t, out, "backend")
 	assert.Contains(t, out, "frontend")
 	assert.Contains(t, out, "(no group)")
+}
+
+// --- the blank line between groups ---
+
+// A gap above every header but the first. Not above the first, where it would
+// only waste the pane's top row and read as a gap the list had failed to fill.
+func TestSidebar_GapSeparatesGroupsButNotTheFirst(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+
+	shape := rowShape(sb)
+	assert.NotEqual(t, "gap", shape[0], "nothing above the first group")
+	for i, r := range shape {
+		if strings.HasPrefix(r, "header:") && i > 0 {
+			assert.Equal(t, "gap", shape[i-1], "a gap above %s", r)
+		}
+	}
+	// Exactly one per header after the first: 3 groups → 2 gaps.
+	gaps := 0
+	for _, r := range shape {
+		if r == "gap" {
+			gaps++
+		}
+	}
+	assert.Equal(t, 2, gaps)
+}
+
+// One group draws no header, so there is nothing to separate and no gap.
+func TestSidebar_NoGapWithoutHeaders(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{{Name: "api", Group: "g"}, {Name: "web", Group: "g"}}, nil)
+	assert.NotContains(t, rowShape(sb), "gap")
+}
+
+// The cursor must never rest on a blank line — it would simply be invisible.
+// j and k step over them in both directions, including across the wrap.
+func TestSidebar_CursorNeverRestsOnAGap(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(20)
+
+	// Walk the whole list forwards, then backwards, twice round each way.
+	for i := 0; i < 2*len(sb.rows); i++ {
+		sb.moveDown()
+		require.NotEqualf(t, rowSpacer, sb.rows[sb.selected].kind,
+			"landed on a gap after %d moveDown", i+1)
+	}
+	for i := 0; i < 2*len(sb.rows); i++ {
+		sb.moveUp()
+		require.NotEqualf(t, rowSpacer, sb.rows[sb.selected].kind,
+			"landed on a gap after %d moveUp", i+1)
+	}
+}
+
+// Walking down still reaches every service and every header — stepping over
+// gaps must not step over anything else with them.
+func TestSidebar_WalkingDownVisitsEveryRowButTheGaps(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(20)
+
+	seen := map[int]bool{sb.selected: true}
+	for i := 0; i < len(sb.rows); i++ {
+		sb.moveDown()
+		seen[sb.selected] = true
+	}
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowSpacer {
+			assert.Falsef(t, seen[i], "row %d is a gap and was visited", i)
+			continue
+		}
+		assert.Truef(t, seen[i], "row %d (%v) was never visited", i, sb.rows[i].kind)
+	}
+}
+
+// A gap is a row, so it occupies a line and the render has to emit one for it —
+// otherwise the pane would draw fewer lines than the window claims and the rows
+// below would shift up by one per gap.
+func TestSidebar_GapRendersAsABlankFullWidthLine(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(20)
+
+	lines := strings.Split(plain(sb.render(31)), "\n")
+	require.Len(t, lines, len(sb.rows), "one line per row, gaps included")
+	for i := range sb.rows {
+		if sb.rows[i].kind != rowSpacer {
+			continue
+		}
+		assert.Empty(t, strings.TrimSpace(lines[i]), "row %d is blank", i)
+		assert.Equal(t, 31, len([]rune(lines[i])), "and still fills its width")
+	}
+}
+
+// The arithmetic path to the cursor — refilter's clamp — can also land on a gap,
+// and it is the one that arrives without choosing.
+func TestSidebar_ClampDoesNotLeaveTheCursorOnAGap(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+
+	// Park the cursor past the end, then make the list shorter so the clamp
+	// runs. Folding every group leaves [header, gap, header, gap, header].
+	for _, g := range []string{"backend", "frontend", ""} {
+		sb.selectGroupHeader(g)
+		require.True(t, sb.toggleCollapse())
+	}
+	sb.selected = len(sb.rows) - 1
+	sb.refilter()
+	assert.NotEqual(t, rowSpacer, sb.rows[sb.selected].kind)
 }

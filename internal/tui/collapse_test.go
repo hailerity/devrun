@@ -35,9 +35,7 @@ func TestSidebar_CollapseHidesAGroupsServicesAndKeepsItsHeader(t *testing.T) {
 
 	require.True(t, sb.toggleCollapse())
 	assert.Equal(t, []string{
-		"header:backend",
-		"header:frontend", "svc:assets", "svc:web",
-		"header:(no group)", "svc:scratch",
+		"header:backend", "gap", "header:frontend", "svc:assets", "svc:web", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 
 	// And the cursor stays on the header the key was pressed on, so pressing
@@ -175,9 +173,7 @@ func TestSidebar_QuerySuspendsCollapseAndRestoresIt(t *testing.T) {
 	// A query spanning groups unfolds them all — including the folded one.
 	sb.setQuery("a") // api (backend), assets (frontend), scratch (ungrouped)
 	assert.Equal(t, []string{
-		"header:backend", "svc:api",
-		"header:frontend", "svc:assets",
-		"header:(no group)", "svc:scratch",
+		"header:backend", "svc:api", "gap", "header:frontend", "svc:assets", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb), "backend is folded, yet its match shows")
 
 	// Space is refused while a query is in force: it could only change state
@@ -192,9 +188,7 @@ func TestSidebar_QuerySuspendsCollapseAndRestoresIt(t *testing.T) {
 	sb.setQuery("")
 	assert.True(t, sb.collapsed["backend"], "the fold was remembered throughout")
 	assert.Equal(t, []string{
-		"header:backend",
-		"header:frontend", "svc:assets", "svc:web",
-		"header:(no group)", "svc:scratch",
+		"header:backend", "gap", "header:frontend", "svc:assets", "svc:web", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 }
 
@@ -226,12 +220,15 @@ func TestSidebar_UnfoldRevealsChildrenAtTheBottomOfTheWindow(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(svcs, nil)
 	sb.setRows(8)
-	require.Len(t, sb.rows, 14) // 12 services + 2 headers
+	require.Len(t, sb.rows, 15) // 12 services + 2 headers + 1 gap
 
-	// Fold bbb, whose header is then the last visible row.
+	// Fold bbb, whose header is then at the very bottom of the window.
 	sb.selectGroupHeader("bbb")
 	require.True(t, sb.toggleCollapse())
-	require.Equal(t, 7, sb.selected)
+	require.True(t, sb.onGroupHeader())
+	require.Equal(t, "bbb", sb.rows[sb.selected].group)
+	_, last := sb.window()
+	require.Equal(t, last-1, sb.selected, "the last row the pane can show")
 
 	// Unfold it: at least one of its services must now be on screen.
 	require.True(t, sb.toggleCollapse())
@@ -484,9 +481,7 @@ func TestSidebar_ARealGroupNamedUngroupedIsDistinctFromTheNoGroupBucket(t *testi
 	// The real group sorts by its name; the bucket stays last and is labelled
 	// as the absence of a group rather than as one called "ungrouped".
 	assert.Equal(t, []string{
-		"header:ungrouped", "svc:api",
-		"header:zoo", "svc:zed",
-		"header:(no group)", "svc:scratch",
+		"header:ungrouped", "svc:api", "gap", "header:zoo", "svc:zed", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 
 	// And the two headers are distinguishable on screen, not just internally.
@@ -498,9 +493,7 @@ func TestSidebar_ARealGroupNamedUngroupedIsDistinctFromTheNoGroupBucket(t *testi
 	sb.selectGroupHeader("ungrouped")
 	require.True(t, sb.toggleCollapse())
 	assert.Equal(t, []string{
-		"header:ungrouped",
-		"header:zoo", "svc:zed",
-		"header:(no group)", "svc:scratch",
+		"header:ungrouped", "gap", "header:zoo", "svc:zed", "gap", "header:(no group)", "svc:scratch",
 	}, rowShape(sb), "only the named group folded")
 }
 

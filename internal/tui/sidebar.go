@@ -26,6 +26,13 @@ type rowKind int
 const (
 	rowService rowKind = iota
 	rowHeader
+	// rowSpacer is the blank line above a group header. A real row, not a
+	// render-time flourish, because it occupies a line: the scroll window and
+	// the pane's row budget have to count it or the list would overflow its
+	// border and be silently clipped. The cursor steps over it — moveUp and
+	// moveDown skip it, and nothing else ever selects it — so it is a line on
+	// screen and nothing else.
+	rowSpacer
 )
 
 // sidebarRow is one line of the list as drawn. The cursor indexes these rather
@@ -280,6 +287,12 @@ func (s *sidebar) refilter() {
 	if s.selected >= len(s.rows) {
 		s.selected = max(0, len(s.rows)-1)
 	}
+	// A clamp can land on a blank line between groups, where the cursor would
+	// be invisible. Every other path that moves it already avoids one; this is
+	// the one that arrives by arithmetic rather than by choice.
+	if s.selected < len(s.rows) && s.rows[s.selected].kind == rowSpacer {
+		s.selected = s.firstServiceRow()
+	}
 }
 
 // ungroupedLabel heads the services that carry no group. Only the global
@@ -322,7 +335,15 @@ func (s *sidebar) rebuildRows() {
 		return
 	}
 
-	for _, g := range groups {
+	for i, g := range groups {
+		// A blank line above each header but the first: the headers were hard
+		// to pick out of the list because nothing separated a group's last
+		// service from the next group's label. Not above the first one, where
+		// it would only waste the top row of the pane and read as a gap the
+		// list had failed to fill.
+		if i > 0 {
+			s.rows = append(s.rows, sidebarRow{kind: rowSpacer, group: g, svc: -1})
+		}
 		s.rows = append(s.rows, sidebarRow{kind: rowHeader, group: g, svc: -1})
 		if s.isCollapsed(g) {
 			continue
@@ -586,21 +607,28 @@ func (s *sidebar) scrollToCursor() {
 	s.top = max(0, min(s.top, len(s.rows)-s.paneRows))
 }
 
-// moveDown / moveUp walk the drawn rows, headers included, wrapping at the ends.
+// moveDown / moveUp walk the drawn rows, headers included, wrapping at the ends
+// and stepping over the blank lines between groups — a cursor you cannot see is
+// a cursor that has gone missing.
 
-func (s *sidebar) moveDown() {
-	if len(s.rows) == 0 {
+func (s *sidebar) moveDown() { s.step(1) }
+func (s *sidebar) moveUp()   { s.step(-1) }
+
+// step moves the cursor d rows, wrapping, and keeps going while it lands on a
+// spacer. Bounded by the row count: a spacer only ever precedes a header, so
+// there is always a non-spacer to reach, and the bound makes that an assertion
+// rather than an assumption.
+func (s *sidebar) step(d int) {
+	n := len(s.rows)
+	if n == 0 {
 		return
 	}
-	s.selected = (s.selected + 1) % len(s.rows)
-	s.scrollToCursor()
-}
-
-func (s *sidebar) moveUp() {
-	if len(s.rows) == 0 {
-		return
+	for i := 0; i < n; i++ {
+		s.selected = (s.selected + d + n) % n
+		if s.rows[s.selected].kind != rowSpacer {
+			break
+		}
 	}
-	s.selected = (s.selected - 1 + len(s.rows)) % len(s.rows)
 	s.scrollToCursor()
 }
 
@@ -796,6 +824,13 @@ func (s *sidebar) render(width int) string {
 	for i := first; i < last; i++ {
 		if svc := s.serviceAt(i); svc != nil {
 			out = append(out, serviceRow(width, *svc, i == s.selected, s.exposed[svc.Name]))
+			continue
+		}
+		if s.rows[i].kind == rowSpacer {
+			// Spaces, not "": the pane pads a short line anyway, but an
+			// explicit full-width row keeps every entry in `out` the same
+			// width, which is what the join relies on.
+			out = append(out, strings.Repeat(" ", max(0, width)))
 			continue
 		}
 		g := s.rows[i].group
