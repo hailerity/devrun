@@ -9,7 +9,7 @@ import (
 
 func TestEditPanel_OpenForPrefills(t *testing.T) {
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "yarn dev", CWD: "/app"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "yarn dev", CWD: "/app"}, "", "")
 
 	assert.True(t, p.open)
 	assert.Equal(t, fieldName, p.focus)
@@ -21,7 +21,7 @@ func TestEditPanel_OpenForPrefills(t *testing.T) {
 
 func TestEditPanel_FocusDeltaWraps(t *testing.T) {
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "x"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "x"}, "", "")
 
 	p.focusDelta(1)
 	assert.Equal(t, fieldCommand, p.focus)
@@ -39,7 +39,7 @@ func TestEditPanel_Validate(t *testing.T) {
 	existing := map[string]bool{"web": true, "api": true}
 
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "run"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "run"}, "", "")
 	assert.Empty(t, p.validate(existing), "unchanged name + non-empty command is valid")
 
 	p.inputs[fieldName].SetValue("  ")
@@ -59,7 +59,7 @@ func TestEditPanel_Validate(t *testing.T) {
 
 func TestEditPanel_ValuesTrim(t *testing.T) {
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "run"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "run"}, "", "")
 	p.inputs[fieldName].SetValue("  ui  ")
 	p.inputs[fieldCWD].SetValue("  /srv  ")
 	name, _, cwd, _ := p.values()
@@ -69,7 +69,7 @@ func TestEditPanel_ValuesTrim(t *testing.T) {
 
 func TestEditPanel_CloseBlurs(t *testing.T) {
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "run"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "run"}, "", "")
 	p.close()
 	assert.False(t, p.open)
 	assert.False(t, p.inputs[fieldName].Focused())
@@ -80,12 +80,12 @@ func TestEditPanel_CloseBlurs(t *testing.T) {
 // without renaming it.
 func TestEditPanel_ValidateNameRule(t *testing.T) {
 	p := newEditPanel()
-	p.openFor("web", &config.ServiceConfig{Command: "x"}, "")
+	p.openFor("web", &config.ServiceConfig{Command: "x"}, "", "")
 	p.inputs[fieldName].SetValue("../escape")
 	assert.Contains(t, p.validate(map[string]bool{"web": true}), "invalid service name")
 
 	legacy := newEditPanel()
-	legacy.openFor("my service", &config.ServiceConfig{Command: "x"}, "")
+	legacy.openFor("my service", &config.ServiceConfig{Command: "x"}, "", "")
 	assert.Equal(t, "", legacy.validate(map[string]bool{"my service": true}), "keeping a legacy name is fine")
 }
 

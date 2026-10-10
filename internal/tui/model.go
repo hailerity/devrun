@@ -803,7 +803,10 @@ func (m model) openEditor() (tea.Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.ServiceConfig{Name: svc.Name}
 	}
-	m.editC.openFor(svc.Name, cfg, m.inheritedGroup())
+	// The service's own group comes from the file, not from cfg: cfg.Group has
+	// already had the project's name applied as a default, and no comparison
+	// here can tell that from a service deliberately pinned to the same name.
+	m.editC.openFor(svc.Name, cfg, config.StoredGroup(m.source, svc.Name), m.inheritedGroup())
 	return m, textinput.Blink
 }
 
@@ -867,11 +870,20 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 		m.editC.errMsg = err.Error()
 		return m, nil
 	}
-	wasRunning := m.serviceIsRunning(oldName)
+	// Only a change to what the daemon runs needs the process restarted. A
+	// group is a label the daemon never reads, so relabelling must not kill a
+	// warm dev server or a database to move it under another header.
+	needsRestart := m.editC.runtimeChanged() && m.serviceIsRunning(oldName)
 	m.applyEditToRegistry(oldName, name, command, cwd, group)
+	// A regroup can send the service into a folded section, where it would have
+	// no row at all: the cursor would fall back to an unrelated service and the
+	// log pane would follow it, with only a toast to explain where the service
+	// went. Unfolding the destination is the least surprising answer — the
+	// reader put it there.
+	m.sidebarC.revealGroup(m.registry.Services[name].Group)
 	m.editC.close()
 
-	if wasRunning {
+	if needsRestart {
 		// A running service keeps its old definition (and, on rename, its old
 		// name) until it is restarted — do that now so the edit takes effect.
 		m.footerC.showToast("restarting " + name)

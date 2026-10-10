@@ -30,9 +30,25 @@ var editFieldLabels = [editFieldCount]string{"name", "command", "cwd", "group"}
 type editPanel struct {
 	open     bool
 	origName string // the service being edited; a changed name field means a rename
-	inputs   [editFieldCount]textinput.Model
-	focus    editField
-	errMsg   string
+	// What the daemon runs, as the form opened: a save compares against these to
+	// tell whether the edit needs the process restarted.
+	origCommand string
+	origCWD     string
+	inputs      [editFieldCount]textinput.Model
+	focus       editField
+	errMsg      string
+}
+
+// runtimeChanged reports whether the edit touches anything the daemon actually
+// runs — the name (which is its identity and its log file), the command, or the
+// working directory.
+//
+// The group is deliberately not among them. It is a label the sidebar sections
+// by, which the daemon never reads, so relabelling a service must not kill a
+// warm dev server or a database to put it under a different header.
+func (p *editPanel) runtimeChanged() bool {
+	name, command, cwd, _ := p.values()
+	return name != p.origName || command != p.origCommand || cwd != p.origCWD
 }
 
 func newEditPanel() editPanel {
@@ -50,31 +66,32 @@ func newEditPanel() editPanel {
 // openFor prefills the form for service `name` with cfg and focuses the name
 // field.
 //
-// inherited is the group this service would fall back to with none of its own —
-// a project's name, or "" for the global registry, where nothing is inherited.
-// cfg.Group is the *derived* group, so a project service that sets none arrives
-// here already carrying the project's name; prefilling that would make editing
-// the command write `group: <project>` into the committed devrun.yaml, grouping
-// a service nobody asked to group and freezing it against a later rename of the
-// project. The field therefore holds the service's *own* group, shown empty
-// with the inherited value as a placeholder, and saving an empty field means
-// "inherit" rather than "no group".
-func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, inherited string) {
+// The group needs two values that cfg cannot supply. `own` is the group the
+// service sets for itself in the file, which is what the field holds and what
+// a save writes back — prefilling cfg.Group instead would stamp the project's
+// name into the committed devrun.yaml the first time any field was edited,
+// since ToServiceConfigs has already applied it as the default. `inherited` is
+// what an empty field falls back to, shown as the placeholder.
+//
+// Both come from the caller rather than being compared here: `own == inherited`
+// is a real state (a service deliberately pinned to the project's name) and
+// deriving one from the other cannot tell it from inheritance.
+func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, own, inherited string) {
 	p.open = true
 	p.origName = name
 	p.errMsg = ""
 	p.focus = fieldName
 
-	vals := [editFieldCount]string{fieldName: name}
+	vals := [editFieldCount]string{fieldName: name, fieldGroup: own}
 	if cfg != nil {
 		vals[fieldCommand] = cfg.Command
 		vals[fieldCWD] = cfg.CWD
-		vals[fieldGroup] = cfg.Group
-		if cfg.Group == inherited {
-			vals[fieldGroup] = ""
-		}
 	}
 	p.inputs[fieldGroup].Placeholder = inherited
+	// What the daemon actually runs, kept so a save can tell a relabelling from
+	// a change that needs the process restarted.
+	p.origCommand = vals[fieldCommand]
+	p.origCWD = strings.TrimSpace(vals[fieldCWD])
 	for i := range p.inputs {
 		p.inputs[i].SetValue(vals[i])
 		p.inputs[i].CursorEnd()
@@ -139,6 +156,14 @@ func (p *editPanel) validate(existing map[string]bool) string {
 func (p editPanel) view() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", styleAccent.Bold(true).Render("Edit "+p.origName))
+	// Above the fields, not below them. overlay() clips the modal from the
+	// bottom, and at four fields the panel is tall enough that a short terminal
+	// loses its last rows — which would make a refused save look like a key
+	// that did nothing. The reason it was refused is the one line that cannot
+	// afford to be the casualty.
+	if p.errMsg != "" {
+		fmt.Fprintf(&b, "%s\n\n", styleRed.Render(p.errMsg))
+	}
 	for i := range p.inputs {
 		label := editFieldLabels[i]
 		if editField(i) == p.focus {
@@ -147,9 +172,6 @@ func (p editPanel) view() string {
 			label = styleMuted.Render("  " + label)
 		}
 		fmt.Fprintf(&b, "%s\n  %s\n", label, p.inputs[i].View())
-	}
-	if p.errMsg != "" {
-		fmt.Fprintf(&b, "\n%s\n", styleRed.Render(p.errMsg))
 	}
 	b.WriteString("\n" + styleMuted.Render("Tab move · Enter save · Esc cancel"))
 

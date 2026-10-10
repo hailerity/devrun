@@ -135,13 +135,50 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 // the TUI's editor, mirroring a cleared group field without re-resolving the
 // whole config.
 //
-// Falls back to the directory name on any read error, which is also what
-// LoadProject would have defaulted to.
+// A read error also yields the directory name. That is LoadProject's default
+// for a *missing* `name:` but not its behaviour on a parse or permission error,
+// which it propagates — so on a broken file this answers with a plausible group
+// rather than the real one. Acceptable only because every caller runs against a
+// file that has just loaded successfully; it is not a general-purpose reader.
 func ProjectGroupName(dir string) string {
 	if p, err := LoadProject(dir); err == nil && p != nil && p.Name != "" {
 		return p.Name
 	}
 	return sanitizeName(filepath.Base(dir))
+}
+
+// StoredGroup is the group the service called name sets for *itself* in the
+// config src points at, or "" when it sets none.
+//
+// Distinct from ServiceConfig.Group, which for a project service has already had
+// the project's name applied as a default by ToServiceConfigs. Anything that
+// needs to tell "inherits the project's name" from "explicitly set to the
+// project's name" — the editor, so it can round-trip the field rather than
+// rewriting it — has to read the file, because the derived value cannot
+// distinguish them.
+//
+// A service that is not in the config, or a config that will not load, reads as
+// "" the same way a service with no group does: the caller is prefilling a form,
+// and an empty field is the safe answer.
+func StoredGroup(src Source, name string) string {
+	if !src.IsLocal() {
+		reg, err := LoadRegistry(RegistryPath())
+		if err != nil {
+			return ""
+		}
+		if svc := reg.Services[name]; svc != nil {
+			return svc.Group
+		}
+		return ""
+	}
+	proj, err := LoadProject(src.Dir)
+	if err != nil || proj == nil {
+		return ""
+	}
+	if svc := proj.Services[name]; svc != nil {
+		return svc.Group
+	}
+	return ""
 }
 
 // sanitizeName replaces characters that are not safe in a project/group name

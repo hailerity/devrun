@@ -370,6 +370,18 @@ func (s *sidebar) hasHeaders() bool {
 	return false
 }
 
+// revealGroup unfolds the named group, so a service that has just moved into it
+// is on screen rather than hidden behind a fold the reader set earlier. A no-op
+// when the group was not folded, and when nothing is folded at all.
+func (s *sidebar) revealGroup(group string) {
+	if !s.collapsed[group] {
+		return
+	}
+	delete(s.collapsed, group)
+	s.refilter()
+	s.scrollToCursor()
+}
+
 // onGroupHeader reports whether the cursor is on a group header — a row with no
 // service behind it, where the keys that act on a service have nothing to do.
 func (s *sidebar) onGroupHeader() bool {
