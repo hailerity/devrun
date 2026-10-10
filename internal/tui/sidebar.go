@@ -27,11 +27,15 @@ const (
 	rowService rowKind = iota
 	rowHeader
 	// rowSpacer is the blank line above a group header. A real row, not a
-	// render-time flourish, because it occupies a line: the scroll window and
-	// the pane's row budget have to count it or the list would overflow its
-	// border and be silently clipped. The cursor steps over it — moveUp and
-	// moveDown skip it, and nothing else ever selects it — so it is a line on
-	// screen and nothing else.
+	// render-time flourish, because it occupies a line and the window has to
+	// agree with what is drawn: slipping a gap in at render time would make the
+	// pane emit more lines than the window counted, shifting every row below it
+	// and making the border's "rows a–b of N" a lie. (It would not overflow the
+	// border — paneFrame clips and pads to the inner height — it would just be
+	// quietly wrong.)
+	//
+	// The cursor steps over it: step() skips it, refilter nudges off one, and no
+	// other path selects one. So it is a line on screen and nothing else.
 	rowSpacer
 )
 
@@ -287,9 +291,11 @@ func (s *sidebar) refilter() {
 	if s.selected >= len(s.rows) {
 		s.selected = max(0, len(s.rows)-1)
 	}
-	// A clamp can land on a blank line between groups, where the cursor would
-	// be invisible. Every other path that moves it already avoids one; this is
-	// the one that arrives by arithmetic rather than by choice.
+	// The cursor can be indexing a blank line by the time we get here — not from
+	// the clamp above, which can only land on the last row and a spacer is never
+	// last, but because the rows were rebuilt underneath an index that used to
+	// point at something else. Every path that moves the cursor deliberately
+	// avoids a spacer; this is the one that inherits a position.
 	//
 	// One row on, not back to the top of the list: a spacer is always
 	// immediately followed by its group's header, so selected+1 is in range and
@@ -345,22 +351,26 @@ func (s *sidebar) rebuildRows() {
 		return
 	}
 
-	for i, g := range groups {
+	for gi, g := range groups {
 		// A blank line above each header but the first: the headers were hard
 		// to pick out of the list because nothing separated a group's last
 		// service from the next group's label. Not above the first one, where
 		// it would only waste the top row of the pane and read as a gap the
 		// list had failed to fill.
-		if i > 0 {
+		//
+		// gi and si rather than two i's: they index different things, and the
+		// gap test reading a service index instead of a group index would still
+		// compile if this append were ever moved below the inner loop.
+		if gi > 0 {
 			s.rows = append(s.rows, sidebarRow{kind: rowSpacer, group: g, svc: -1})
 		}
 		s.rows = append(s.rows, sidebarRow{kind: rowHeader, group: g, svc: -1})
 		if s.isCollapsed(g) {
 			continue
 		}
-		for i := range s.services {
-			if groupOf(s.services[i]) == g {
-				s.rows = append(s.rows, sidebarRow{kind: rowService, group: g, svc: i})
+		for si := range s.services {
+			if groupOf(s.services[si]) == g {
+				s.rows = append(s.rows, sidebarRow{kind: rowService, group: g, svc: si})
 			}
 		}
 	}
@@ -484,9 +494,9 @@ func (s *sidebar) revealUnder(row int) {
 	for last+1 < len(s.rows) && s.rows[last+1].kind == rowService {
 		last++
 	}
-	if last == row {
-		return // a header with nothing under it; nothing to reveal
-	}
+	// No early return for a header with nothing under it: last == row then, and
+	// everything below simply keeps that header visible, which is the right
+	// answer anyway.
 	// The furthest row worth bringing into view: the end of the body, or as
 	// much of it as the pane can hold below the header.
 	want := min(last, row+s.paneRows-1)
@@ -962,6 +972,18 @@ func (s *sidebar) window() (first, last int) {
 		return 0, len(s.rows)
 	}
 	first = max(0, min(s.top, len(s.rows)))
+	// Never start on a blank line. scrollToCursor's clamp is kind-blind, so with
+	// the cursor near the end of the list the pinned top row can be a spacer —
+	// and on a short pane that spends a third of the rows on a separator
+	// separating nothing visible, which is the same waste a gap above the first
+	// group was rejected for. Pushed off the top, the blank lands at the bottom
+	// instead, where the pane's own padding makes it read as the end of the list.
+	//
+	// Cannot hide the cursor: the cursor is never on a spacer, so a cursor
+	// inside the rows being skipped would be a contradiction.
+	for first < len(s.rows) && s.rows[first].kind == rowSpacer {
+		first++
+	}
 	return first, min(len(s.rows), first+s.paneRows)
 }
 

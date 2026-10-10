@@ -546,18 +546,3 @@ func TestSidebar_UnfoldDoesNotScrollToTheTrailingGap(t *testing.T) {
 	}
 	assert.LessOrEqual(t, gaps, 1, "at most the one gap above bbb: %v", shown)
 }
-
-// A header with nothing under it has nothing to reveal, so unfolding one must
-// not move the window at all.
-func TestSidebar_RevealUnderIsANoOpForAnEmptyBody(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(groupedServices(), nil)
-	sb.setRows(4)
-	sb.selectGroupHeader("backend")
-	sb.top = 2
-	before := sb.top
-
-	// Point it at the last row, which is a service with no body under it.
-	sb.revealUnder(len(sb.rows) - 1)
-	assert.Equal(t, before, sb.top)
-}

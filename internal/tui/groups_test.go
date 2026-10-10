@@ -533,3 +533,62 @@ func TestSidebar_ASelectedGapStillShowsTheCursor(t *testing.T) {
 		"a selected gap must not render as plain spaces")
 	assert.Empty(t, strings.TrimSpace(plain(lines[gap])), "but is still blank text")
 }
+
+// The window never starts on a blank line. scrollToCursor's clamp is kind-blind,
+// so with the cursor near the end of a short pane the pinned top row can be a
+// gap — spending a third of a three-row pane on a separator that separates
+// nothing visible, the same waste a gap above the first group was rejected for.
+func TestSidebar_WindowNeverStartsOnAGap(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(3)
+
+	// The reported case: the cursor on the very last service, where the clamp
+	// has no freedom and lands on the gap before the last header.
+	sb.selectServiceByName("scratch")
+	first, last := sb.window()
+	shape := rowShape(sb)
+	require.Less(t, first, last)
+	assert.NotEqual(t, "gap", shape[first],
+		"window starts on a gap: %v", shape[first:last])
+	assert.Contains(t, shape[first:last], "svc:scratch", "and the cursor is still shown")
+
+	// Exhaustively: no cursor position, at any pane height, starts the window
+	// on a gap.
+	for _, rows := range []int{1, 2, 3, 4, 5, 20} {
+		sb.setRows(rows)
+		for i := range sb.rows {
+			if sb.rows[i].kind == rowSpacer {
+				continue
+			}
+			sb.selected = i
+			sb.scrollToCursor()
+			first, last := sb.window()
+			if first >= last {
+				continue
+			}
+			require.NotEqualf(t, rowSpacer, sb.rows[first].kind,
+				"paneRows=%d cursor=%d starts the window on a gap", rows, i)
+			require.GreaterOrEqualf(t, i, first, "cursor %d above the window", i)
+			require.Lessf(t, i, last, "cursor %d below the window", i)
+		}
+	}
+}
+
+// Pushing the leading gap off the top puts the blank at the bottom instead,
+// where the pane's own padding makes it read as the end of the list rather than
+// as a stray separator.
+func TestSidebar_LeadingGapBecomesTrailingBlank(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(3)
+	sb.selectServiceByName("scratch")
+
+	first, last := sb.window()
+	assert.Equal(t, len(sb.rows), last, "the window runs to the end of the list")
+	assert.Less(t, last-first, 3, "showing fewer rows than the pane holds")
+
+	// Which the pane then pads, so the blank is below the content.
+	lines := strings.Split(plain(sb.render(31)), "\n")
+	assert.Len(t, lines, last-first)
+}
