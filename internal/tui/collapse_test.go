@@ -537,12 +537,15 @@ func TestSidebar_UnfoldDoesNotScrollToTheTrailingGap(t *testing.T) {
 	assert.Contains(t, shown, "header:bbb")
 	assert.Contains(t, shown, "svc:b1")
 	assert.Contains(t, shown, "svc:b2")
-	// ...and the window is not padded out with blank rows to get there.
-	gaps := 0
-	for _, r := range shown {
-		if r == "gap" {
-			gaps++
-		}
-	}
-	assert.LessOrEqual(t, gaps, 1, "at most the one gap above bbb: %v", shown)
+
+	// ...and so is the row above bbb's gap, which is the part that pins the
+	// *minimal* scroll. Aiming at the trailing gap instead moves top one row
+	// further and drops that context; window()'s skip-a-leading-gap then hides
+	// the blank, so the only visible difference is this row. Asserting on the
+	// gap count alone could not tell the two apart.
+	assert.Contains(t, shown, "svc:a2",
+		"over-scrolled by one row, losing the row above the group: %v", shown)
+
+	// And no blank is left at the top of the pane.
+	assert.NotEqual(t, "gap", shown[0], "%v", shown)
 }
