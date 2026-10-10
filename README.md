@@ -494,6 +494,39 @@ focused pane has the accent-coloured border, and the main pane's border always
 names the service whose logs or details it shows. Colours adapt to light and
 dark terminals.
 
+When more than one `group` is in play the list is **sectioned by group**, with a
+header per group carrying its running count:
+
+```
+╭─ SERVICES ──────────────────╮
+│ ▾ backend              2/3  │
+│ ● api       :8080     2.1%  │
+│ ● db        :5432     0.4%  │
+│ ✖ worker    crashed         │
+│ ▸ frontend             1/2  │
+│ ▾ ungrouped            0/1  │
+│ ○ scratch   stopped         │
+╰─ 3/6 up ────────────────────╯
+```
+
+`Space` (or `↵`) on a header folds the group shut; the cursor walks headers as
+it does in a file tree. Groups are alphabetical with the ungrouped ones last,
+and a header only appears when there is more than one group — a single project
+looks exactly as it did before. A group's services keep their place inside it,
+so a service still never moves because its state changed.
+
+Two things worth knowing about folding:
+
+- **A collapsed group hides what is inside it, including a failure.** The
+  header's count (`1/3`) is the only hint; there is no crash marker on a folded
+  group. That is deliberate — collapsing hides what it hides.
+- **An active `/` query suspends every fold**, so a match is never hidden
+  behind one. The folds come back as they were when the query is cleared.
+
+Where the group comes from: a `devrun.yaml` gives every one of its services the
+project's name, so a project is a group. In the global registry, `devrun add
+--group` sets it per service.
+
 The sidebar is one list of services, and two things can narrow it:
 
 - **`/` filters by name** — with the sidebar focused, `/` opens a query input
@@ -519,7 +552,7 @@ the reason a service is missing from the list is always on screen.
 | `j` / `↓` | Move down |
 | `←` / `→` | Focus sidebar / main panel |
 | `Tab` | Toggle focus between sidebar and main panel |
-| `↵` | Toggle DETAILS / LOGS for the selected service |
+| `↵` | Toggle DETAILS / LOGS for the selected service (on a group header: fold it) |
 | `Esc` | Back out of DETAILS to LOGS |
 
 On a terminal narrower than 70 columns only the focused pane is shown, at full
@@ -533,6 +566,7 @@ width: `Tab` swaps panes, and `↵` on a service opens it.
 | `r` | Restart the selected service (starts it if it is not running) |
 | `S` / `X` | Start / stop everything the list is showing — narrowed by `/` and `t`, or every service when neither is active |
 | `/` | Filter the service list by name (sidebar focused — `↵` keeps it, `Esc` in the input cancels, `Esc` on the list clears) |
+| `Space` | Fold or unfold the group under the cursor (group headers only; `↵` does the same there) |
 | `t` | Open the target picker (`↵` filter, `e` edit target, `Esc` close) |
 | `e` | Edit the selected service (sidebar focused) |
 | `d` | Remove the selected service (sidebar focused, asks to confirm) |

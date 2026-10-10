@@ -374,6 +374,14 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// the one being driven. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
+		// On a group header there is no service to show, so Enter folds the
+		// group as it would in a file tree. Without this it toggled to a
+		// DETAILS pane with nothing in it — and in the narrow layout opened
+		// that empty pane full-screen.
+		case m.focus == focusSidebar && m.sidebarC.onGroupHeader():
+			if m.sidebarC.toggleCollapse() {
+				m.relayout()
+			}
 		case m.narrow() && m.focus == focusSidebar:
 			// One pane at a time: the view Enter would toggle is not on
 			// screen, so Enter opens the selected service instead.
@@ -587,6 +595,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.pickerC.openAt(m.sidebarC.targets, m.sidebarC.filterTarget)
+
+	// Space folds the group under the cursor. Only a header answers it; on a
+	// service row it falls through to nothing, so the key is not a surprise
+	// anywhere else in the list.
+	case m.focus == focusSidebar && key.Matches(msg, keys.Collapse):
+		if m.sidebarC.toggleCollapse() {
+			m.updateLogFile()
+			m.relayout()
+		}
 
 	// e opens the editor for the highlighted service.
 	case key.Matches(msg, keys.Edit):
@@ -1590,20 +1607,21 @@ func (m model) View() string {
 	}
 
 	footer := m.footerC.render(footerCtx{
-		tab:          m.activeTab,
-		focus:        m.focus,
-		visual:       m.logsC.sb.visualMode,
-		onServiceRow: m.onServiceRow(),
-		editing:      m.editC.open || m.targetEditC.open,
-		confirming:   m.removeC.open,
-		picking:      m.pickerC.open,
-		helping:      m.helpC.open,
-		searching:    m.searching,
-		searchScope:  m.searchScope,
-		hasQuery:     m.logsC.sb.search.active(),
-		hasFilter:    m.sidebarC.filterQuery != "",
-		searchInput:  m.searchC.View(),
-		narrow:       m.narrow(),
+		tab:           m.activeTab,
+		focus:         m.focus,
+		visual:        m.logsC.sb.visualMode,
+		onServiceRow:  m.onServiceRow(),
+		onGroupHeader: m.focus == focusSidebar && m.sidebarC.onGroupHeader(),
+		editing:       m.editC.open || m.targetEditC.open,
+		confirming:    m.removeC.open,
+		picking:       m.pickerC.open,
+		helping:       m.helpC.open,
+		searching:     m.searching,
+		searchScope:   m.searchScope,
+		hasQuery:      m.logsC.sb.search.active(),
+		hasFilter:     m.sidebarC.filterQuery != "",
+		searchInput:   m.searchC.View(),
+		narrow:        m.narrow(),
 	}, m.width)
 
 	// The header and footer are full-width bars. A terminal has no half rows,

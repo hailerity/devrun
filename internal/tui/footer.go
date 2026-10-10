@@ -44,20 +44,21 @@ func (f *footerBar) tick(dt time.Duration) {
 
 // footerCtx is what the footer needs to know to pick its hints.
 type footerCtx struct {
-	tab          tabKind
-	focus        focusKind
-	visual       bool        // a visual selection is active in the log pane
-	onServiceRow bool        // e / d apply to the selected service
-	editing      bool        // a form modal (service or target editor) is open
-	confirming   bool        // the remove confirm is open
-	picking      bool        // the target picker is open
-	helping      bool        // the help overlay is open
-	searching    bool        // the search input has the keyboard
-	searchScope  searchScope // which list that input is narrowing
-	hasQuery     bool        // a search is active in the log pane
-	hasFilter    bool        // a name query is narrowing the service list
-	searchInput  string      // the rendered search input, shown while searching
-	narrow       bool        // one pane on screen at a time: switching panes is the key to show
+	tab           tabKind
+	focus         focusKind
+	visual        bool        // a visual selection is active in the log pane
+	onServiceRow  bool        // e / d apply to the selected service
+	onGroupHeader bool        // the cursor is on a group header: s / x / r have no target
+	editing       bool        // a form modal (service or target editor) is open
+	confirming    bool        // the remove confirm is open
+	picking       bool        // the target picker is open
+	helping       bool        // the help overlay is open
+	searching     bool        // the search input has the keyboard
+	searchScope   searchScope // which list that input is narrowing
+	hasQuery      bool        // a search is active in the log pane
+	hasFilter     bool        // a name query is narrowing the service list
+	searchInput   string      // the rendered search input, shown while searching
+	narrow        bool        // one pane on screen at a time: switching panes is the key to show
 }
 
 // hint is one key/label pair in the footer. pri ranks it for narrow terminals:
@@ -170,10 +171,20 @@ func (c footerCtx) baseHints() []hint {
 		// hint worth most — and the one a reader is least likely to guess.
 		out = append(out, hint{"Esc", "clear", 1})
 	}
+	if c.onGroupHeader {
+		// A group header has no service behind it, so s / x / r would be
+		// advertising keys that do nothing on the row the cursor is on.
+		// Folding is what this row does.
+		out = append(out, hint{"Space", "fold", 0})
+		enter = "fold"
+	} else {
+		out = append(out,
+			hint{"s", "start", 0},
+			hint{"x", "stop", 1},
+			hint{"r", "restart", 4},
+		)
+	}
 	out = append(out,
-		hint{"s", "start", 0},
-		hint{"x", "stop", 1},
-		hint{"r", "restart", 4},
 		hint{"↵", enter, 2},
 		// Above `t target`: a query always works, while filtering by target
 		// needs targets to have been configured — and at 100 columns only one

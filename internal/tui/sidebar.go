@@ -59,6 +59,12 @@ type sidebar struct {
 	// instead of back where they were.
 	anchor string
 
+	// collapsed holds the groups the reader has folded shut, by group name.
+	// Keyed by name rather than by index so it survives a poll re-grouping the
+	// list, and kept even for a group that is not currently listed — a query
+	// that hides a group should not forget that it was collapsed.
+	collapsed map[string]bool
+
 	// exposed names the services that may leave this machine. Held here, not
 	// read off ipc.ServiceInfo, because the allowlist belongs to the gateway
 	// and applies to services whether or not one is running.
@@ -256,12 +262,71 @@ func (s *sidebar) rebuildRows() {
 
 	for _, g := range groups {
 		s.rows = append(s.rows, sidebarRow{kind: rowHeader, group: g, svc: -1})
+		if s.isCollapsed(g) {
+			continue
+		}
 		for i := range s.services {
 			if groupOf(s.services[i]) == g {
 				s.rows = append(s.rows, sidebarRow{kind: rowService, group: g, svc: i})
 			}
 		}
 	}
+}
+
+// isCollapsed reports whether a group is folded shut *right now*.
+//
+// An active name query suspends every collapse. A reader who types a query is
+// asking to be shown what matches, and a match hidden inside a folded group
+// would make the filter a liar — worse, the empty-state and the header counts
+// would disagree with what is on screen. The collapsed set is left untouched
+// while this is in force, so clearing the query folds the groups back exactly
+// as they were.
+func (s *sidebar) isCollapsed(group string) bool {
+	if s.filterQuery != "" {
+		return false
+	}
+	return s.collapsed[group]
+}
+
+// onGroupHeader reports whether the cursor is on a group header — a row with no
+// service behind it, where the keys that act on a service have nothing to do.
+func (s *sidebar) onGroupHeader() bool {
+	return s.selected < len(s.rows) && s.rows[s.selected].kind == rowHeader
+}
+
+// toggleCollapse folds or unfolds the group under the cursor and leaves the
+// cursor on its header, which is the row the reader pressed the key on and the
+// row they need to press it again.
+//
+// A no-op on a service row: collapsing the group a service belongs to would
+// move the cursor off the row the reader was looking at, and put it on a header
+// they did not aim at.
+func (s *sidebar) toggleCollapse() bool {
+	if s.selected >= len(s.rows) || s.rows[s.selected].kind != rowHeader {
+		return false
+	}
+	g := s.rows[s.selected].group
+	if s.collapsed == nil {
+		s.collapsed = map[string]bool{}
+	}
+	s.collapsed[g] = !s.collapsed[g]
+	s.refilter()
+	s.selectGroupHeader(g)
+	return true
+}
+
+// selectGroupHeader puts the cursor on the named group's header, or leaves it
+// clamped into the list when that group is no longer drawn.
+func (s *sidebar) selectGroupHeader(group string) {
+	for i := range s.rows {
+		if s.rows[i].kind == rowHeader && s.rows[i].group == group {
+			s.selected = i
+			s.scrollToCursor()
+			return
+		}
+	}
+	s.selected = min(s.selected, max(0, len(s.rows)-1))
+	s.scrollToCursor()
 }
 
 // groupOf is a service's group as the sidebar labels it, mapping the empty
@@ -584,7 +649,7 @@ func (s *sidebar) render(width int) string {
 		}
 		g := s.rows[i].group
 		up, total := s.groupCount(g)
-		out = append(out, groupRow(width, g, up, total, i == s.selected))
+		out = append(out, groupRow(width, g, up, total, i == s.selected, s.isCollapsed(g)))
 	}
 	return strings.Join(out, "\n")
 }
@@ -609,7 +674,7 @@ func (s *sidebar) groupCount(group string) (up, total int) {
 // columns wide. The running count is the whole of what the header says about
 // its members, and it is the only thing on screen about a group that is
 // collapsed — a service that is down inside one is not otherwise visible.
-func groupRow(width int, group string, up, total int, selected bool) string {
+func groupRow(width int, group string, up, total int, selected, collapsed bool) string {
 	base := lipgloss.NewStyle()
 	if selected {
 		base = base.Background(colorSelSidebar)
@@ -620,7 +685,7 @@ func groupRow(width int, group string, up, total int, selected bool) string {
 	// a header reads as structure rather than as another service.
 	nameW := max(1, width-3-1-lipgloss.Width(count))
 
-	row := base.Foreground(colorMuted).Render(" "+collapseGlyph(false)) +
+	row := base.Foreground(colorMuted).Render(" "+collapseGlyph(collapsed)) +
 		base.Foreground(colorText).Bold(true).Render(" "+padRight(truncateName(group, nameW), nameW)) +
 		base.Foreground(colorMuted).Render(" "+count)
 	if pad := width - lipgloss.Width(row); pad > 0 {

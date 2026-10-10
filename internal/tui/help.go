@@ -32,7 +32,7 @@ func helpGroups() [][]helpGroup {
 			{"LOGS", []key.Binding{keys.Search, keys.Next, keys.Prev, keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
 		},
 		{ // right column
-			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.Restart, keys.StartAll, keys.StopAll, keys.Expose, keys.Target, keys.Filter, keys.Edit, keys.Remove}},
+			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.Restart, keys.StartAll, keys.StopAll, keys.Expose, keys.Target, keys.Filter, keys.Collapse, keys.Edit, keys.Remove}},
 			{"OTHER", []key.Binding{keys.Escape, keys.Help, keys.Quit}},
 		},
 	}

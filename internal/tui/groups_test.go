@@ -98,7 +98,7 @@ func TestSidebar_GroupCountFollowsTheFilter(t *testing.T) {
 }
 
 func TestGroupRow_ShowsGlyphNameAndCount(t *testing.T) {
-	out := plain(groupRow(31, "backend", 2, 3, false))
+	out := plain(groupRow(31, "backend", 2, 3, false, false))
 	assert.Contains(t, out, "▾")
 	assert.Contains(t, out, "backend")
 	assert.Contains(t, out, "2/3")
@@ -107,7 +107,7 @@ func TestGroupRow_ShowsGlyphNameAndCount(t *testing.T) {
 
 // A long group name must not push the count off the row.
 func TestGroupRow_FitsALongGroupName(t *testing.T) {
-	out := plain(groupRow(sidebarMinW-2, "a-very-long-group-name-indeed", 1, 9, false))
+	out := plain(groupRow(sidebarMinW-2, "a-very-long-group-name-indeed", 1, 9, false, false))
 	assert.Equal(t, sidebarMinW-2, len([]rune(out)))
 	assert.Contains(t, out, "1/9", "the count survives")
 	assert.Contains(t, out, "…", "the name is shortened instead")

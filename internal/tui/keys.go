@@ -27,6 +27,7 @@ type keyMap struct {
 	Help     key.Binding
 	Search   key.Binding
 	Filter   key.Binding
+	Collapse key.Binding
 	Next     key.Binding
 	Prev     key.Binding
 	Restart  key.Binding
@@ -62,10 +63,13 @@ var keys = keyMap{
 	// focus: narrow what is on screen. Two bindings rather than one so the help
 	// overlay can word each under the heading it belongs to; handleKey tries
 	// Filter first and only while the sidebar has focus.
-	Search:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
-	Filter:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter the list by name")),
-	Next:    key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match (down)")),
-	Prev:    key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match (up)")),
-	Restart: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart the selected service")),
-	Expose:  key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "let the selected service leave this machine, or stop it")),
+	Search: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
+	Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter the list by name")),
+	// Space, as a file tree binds it. Only a group header answers it, so it
+	// stays free on every other row.
+	Collapse: key.NewBinding(key.WithKeys(" "), key.WithHelp("Space", "fold or unfold the group")),
+	Next:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match (down)")),
+	Prev:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match (up)")),
+	Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart the selected service")),
+	Expose:   key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "let the selected service leave this machine, or stop it")),
 }
