@@ -304,15 +304,24 @@ func TestModel_SpaceUnderAQuerySaysWhyItRefused(t *testing.T) {
 	assert.False(t, m.sidebarC.collapsed["backend"], "no state changed")
 }
 
-// `/` then Esc from a group header has to come back to that header. The model
-// snapshots the cursor, and taking only a service name left the restore falling
-// back to a stale anchor in some other group.
+// `/` then Esc from a group header has to come back to that header.
+//
+// The query deliberately dissolves the header on the way: `api` narrows to one
+// service, so the list drops to a single group and stops having headers at all.
+// That is what makes the open-time snapshot load-bearing — the running anchor
+// gets overwritten with a service once the header it named stops being drawn,
+// so only the position saved when `/` opened can bring the cursor back. A query
+// that leaves the header standing (`we` does) would pass either way.
 func TestModel_EscFromAGroupHeaderReturnsToThatHeader(t *testing.T) {
 	m := groupModel()
 	m.sidebarC.selectGroupHeader("frontend")
 	require.True(t, m.sidebarC.onGroupHeader())
 
-	m = typeString(pressKey(m, '/'), "we")
+	m = typeString(pressKey(m, '/'), "api")
+	require.Equal(t, []string{"svc:api"}, rowShape(&m.sidebarC),
+		"one group left, so no headers survive the query")
+	require.False(t, m.sidebarC.onGroupHeader())
+
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = m2.(model)
 

@@ -380,11 +380,10 @@ func (s *sidebar) toggleCollapse() bool {
 	}
 	s.collapsed[g] = !s.collapsed[g]
 	s.refilter()
-	// Anchor the header, not just the cursor: the dashboard rebuilds its rows
-	// every two seconds, and an anchor still naming a service would pull the
-	// highlight off this header on the next poll.
-	s.anchor = cursorPos{group: g}
 	s.selectGroupHeader(g)
+	// No need to set the anchor here: every rebuild goes through keepingCursor,
+	// whose recordAnchor reads the cursor first and so picks this header up by
+	// itself. That is what makes the fold survive the two-second poll.
 	return true
 }
 
