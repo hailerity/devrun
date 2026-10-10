@@ -451,21 +451,28 @@ func TestSidebar_GapRendersAsABlankFullWidthLine(t *testing.T) {
 	}
 }
 
-// The arithmetic path to the cursor — refilter's clamp — can also land on a gap,
-// and it is the one that arrives without choosing.
-func TestSidebar_ClampDoesNotLeaveTheCursorOnAGap(t *testing.T) {
+// refilter's postcondition: the cursor is never left on a gap. Reached by
+// putting it there directly, which is how a shifted row index would arrive —
+// every public path re-anchors by name afterwards, so this is the backstop
+// under them rather than something they can produce.
+func TestSidebar_RefilterNeverLeavesTheCursorOnAGap(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(groupedServices(), nil)
 
-	// Park the cursor past the end, then make the list shorter so the clamp
-	// runs. Folding every group leaves [header, gap, header, gap, header].
-	for _, g := range []string{"backend", "frontend", ""} {
-		sb.selectGroupHeader(g)
-		require.True(t, sb.toggleCollapse())
+	gap := -1
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowSpacer {
+			gap = i
+			break
+		}
 	}
-	sb.selected = len(sb.rows) - 1
+	require.GreaterOrEqual(t, gap, 0, "the fixture has gaps")
+
+	sb.selected = gap
 	sb.refilter()
-	assert.NotEqual(t, rowSpacer, sb.rows[sb.selected].kind)
+	assert.NotEqual(t, rowSpacer, sb.rows[sb.selected].kind,
+		"refilter moved the cursor off the gap")
+	assert.NotNil(t, sb.selectedService(), "and onto something selectable")
 }
 
 // fgSeq is the escape sequence a foreground colour emits, for asserting which
