@@ -18,6 +18,15 @@ type ProjectServiceConfig struct {
 	CWD     string            `yaml:"cwd,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 	Desc    string            `yaml:"desc,omitempty"`
+	// Group sections this service in the dashboard. Empty inherits the
+	// project's name, which is what every service in a devrun.yaml got before
+	// this field existed — so a file that says nothing about groups behaves
+	// exactly as it did.
+	//
+	// An explicit group replaces that default rather than nesting inside it:
+	// groups are a flat set, so a project that groups some of its services
+	// simply shows the project's name as the header for the rest.
+	Group string `yaml:"group,omitempty"`
 	// Port overrides detection; see ServiceConfig.Port.
 	Port int `yaml:"port,omitempty"`
 }
@@ -94,11 +103,18 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 		} else if !filepath.IsAbs(cwd) {
 			cwd = filepath.Join(dir, cwd)
 		}
+		// The project's name is the default group, not an override: a service
+		// that names its own group keeps it, so one devrun.yaml can section
+		// itself instead of arriving as a single block.
+		group := svc.Group
+		if group == "" {
+			group = p.Name
+		}
 		out[name] = &ServiceConfig{
 			Name:    name,
 			Command: svc.Command,
 			CWD:     cwd,
-			Group:   p.Name,
+			Group:   group,
 			Env:     svc.Env,
 			Desc:    svc.Desc,
 			Port:    svc.Port,

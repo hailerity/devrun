@@ -192,7 +192,7 @@ Project services are sent to the daemon with their full definition inline and ar
 
 ### Project-local: `devrun.yaml`
 
-Place this file in your project root and commit it. Running `devrun up` starts every service in the daemon, grouped under the project name. The definitions are sent to the daemon inline for the duration of the run — they are not written to the global `services.yaml` (see [Config resolution](#config-resolution) above).
+Place this file in your project root and commit it. Running `devrun up` starts every service in the daemon, grouped under the project name unless a service names its own group. The definitions are sent to the daemon inline for the duration of the run — they are not written to the global `services.yaml` (see [Config resolution](#config-resolution) above).
 
 ```yaml
 name: myapp      # optional — defaults to directory name
@@ -201,23 +201,38 @@ services:
   web:
     command: yarn dev
     cwd: ./frontend  # relative to devrun.yaml; defaults to project root
+    group: frontend  # optional — defaults to the project name
     env:
       PORT: "3000"
       NODE_ENV: development
 
   api:
     command: go run ./cmd/api
+    group: backend
     env:
       PORT: "4000"
 
   db:
     command: postgres -D ./pgdata
+    group: backend
 
 # Optional: named subsets you can start/stop as a unit.
 targets:
   frontend: [web]
   backend:  [api, db]
 ```
+
+`group:` is what the dashboard sections the list by — see
+[the TUI's groups](#tui-dashboard-devrun). It is a flat label, not a path: an
+explicit group replaces the project-name default rather than nesting inside it,
+so a file that groups only some of its services shows the project's name as the
+header for the rest. A file that says nothing about groups behaves exactly as
+before, with every service under the project name.
+
+Note that `group:` and `targets:` answer different questions. A group is where a
+service *lives* in the list — one group per service, so the list can be
+sectioned and folded. A target is a set you *act on* — a service can be in
+several, and `devrun target start` runs them as a unit.
 
 ### Global registry: `~/.config/devrun/services.yaml`
 
