@@ -5,6 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hailerity/devrun/internal/config"
+	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,16 +76,57 @@ func TestSidebar_CollapseIsANoOpOnAServiceRow(t *testing.T) {
 }
 
 // Collapse is keyed by group name, so a poll that rebuilds every row from
-// scratch must not quietly unfold everything.
-func TestSidebar_CollapseSurvivesAPoll(t *testing.T) {
+// scratch must not quietly unfold everything — nor move the cursor off the
+// header it was left on. The dashboard polls every two seconds, so a cursor
+// that only survives until the next one does not survive at all.
+func TestSidebar_CollapseAndTheCursorBothSurviveAPoll(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(groupedServices(), nil)
 	sb.selectGroupHeader("backend")
 	require.True(t, sb.toggleCollapse())
 	folded := rowShape(sb)
+	require.True(t, sb.onGroupHeader())
 
 	sb.update(groupedServices(), nil)
-	assert.Equal(t, folded, rowShape(sb))
+	assert.Equal(t, folded, rowShape(sb), "still folded")
+	require.True(t, sb.onGroupHeader(), "still on a header")
+	assert.Equal(t, "backend", sb.rows[sb.selected].group, "still the same header")
+
+	// And again, because the anchor has to be re-recorded each time, not just
+	// set once by the toggle.
+	sb.update(groupedServices(), nil)
+	require.True(t, sb.onGroupHeader())
+	assert.Equal(t, "backend", sb.rows[sb.selected].group)
+}
+
+// A header the reader walked onto without folding anything must hold the cursor
+// across a poll too — the anchor is about where the cursor is, not about folds.
+func TestSidebar_CursorOnAnUnfoldedHeaderSurvivesAPoll(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.selectGroupHeader("frontend")
+	require.True(t, sb.onGroupHeader())
+
+	sb.update(groupedServices(), nil)
+	require.True(t, sb.onGroupHeader())
+	assert.Equal(t, "frontend", sb.rows[sb.selected].group)
+}
+
+// A group that stops being drawn cannot hold the cursor, so it falls back to a
+// service rather than parking somewhere that selects nothing.
+func TestSidebar_HeaderAnchorFallsBackWhenTheGroupGoesAway(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.selectGroupHeader("frontend")
+	require.True(t, sb.onGroupHeader())
+
+	// Only backend services remain: one group, so no headers at all.
+	sb.update([]ipc.ServiceInfo{
+		{Name: "api", Group: "backend"}, {Name: "db", Group: "backend"},
+	}, nil)
+	assert.False(t, sb.onGroupHeader())
+	require.NotNil(t, sb.selectedService())
+	assert.Equal(t, "api", sb.selectedService().Name)
 }
 
 // The decision: an active query suspends every collapse. A reader who typed a
@@ -110,6 +152,14 @@ func TestSidebar_QuerySuspendsCollapseAndRestoresIt(t *testing.T) {
 		"header:ungrouped", "svc:scratch",
 	}, rowShape(sb), "backend is folded, yet its match shows")
 
+	// Space is refused while a query is in force: it could only change state
+	// the reader cannot see — arming a fold that springs when the query clears,
+	// or disarming one they deliberately set.
+	sb.selectGroupHeader("frontend")
+	require.True(t, sb.onGroupHeader())
+	assert.False(t, sb.toggleCollapse(), "refused under a query")
+	assert.False(t, sb.collapsed["frontend"], "and left no hidden state behind")
+
 	// Clearing the query folds it back exactly as it was: suspended, not lost.
 	sb.setQuery("")
 	assert.True(t, sb.collapsed["backend"], "the fold was remembered throughout")
@@ -126,13 +176,13 @@ func TestSidebar_CollapseLeavesTheCursorOnTheHeader(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(groupedServices(), nil)
 	sb.setRows(20)
-	sb.selectGroupHeader("ungrouped") // the last group, so folding shortens the end
+	sb.selectGroupHeader("") // the no-group bucket: last, so folding shortens the end
 	require.Equal(t, len(sb.rows)-2, sb.selected)
 
 	require.True(t, sb.toggleCollapse())
 	assert.Less(t, sb.selected, len(sb.rows), "cursor is inside the list")
 	assert.Equal(t, rowHeader, sb.rows[sb.selected].kind)
-	assert.Equal(t, "ungrouped", sb.rows[sb.selected].group)
+	assert.Equal(t, "", sb.rows[sb.selected].group, "the no-group bucket")
 }
 
 // --- through the key handler ---
@@ -239,6 +289,63 @@ func TestFooter_GroupHeaderOffersFoldNotStartStop(t *testing.T) {
 	assert.Contains(t, header, "fold")
 	assert.NotContains(t, header, "start", "nothing here to start")
 	assert.NotContains(t, header, "restart")
+}
+
+// Refusing has to say so, or Space just looks broken.
+func TestModel_SpaceUnderAQuerySaysWhyItRefused(t *testing.T) {
+	m := groupModel()
+	m.sidebarC.setQuery("a")
+	m.sidebarC.selectGroupHeader("backend")
+	require.True(t, m.sidebarC.onGroupHeader())
+
+	m = pressSpace(m)
+	assert.Contains(t, m.footerC.toast, "suspended")
+	assert.Contains(t, m.footerC.toast, "/a", "and names the query holding it")
+	assert.False(t, m.sidebarC.collapsed["backend"], "no state changed")
+}
+
+// `/` then Esc from a group header has to come back to that header. The model
+// snapshots the cursor, and taking only a service name left the restore falling
+// back to a stale anchor in some other group.
+func TestModel_EscFromAGroupHeaderReturnsToThatHeader(t *testing.T) {
+	m := groupModel()
+	m.sidebarC.selectGroupHeader("frontend")
+	require.True(t, m.sidebarC.onGroupHeader())
+
+	m = typeString(pressKey(m, '/'), "we")
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+
+	require.True(t, m.sidebarC.onGroupHeader(), "back on a header, not on some service")
+	assert.Equal(t, "frontend", m.sidebarC.rows[m.sidebarC.selected].group)
+}
+
+// A group genuinely named "ungrouped" is its own group: it sorts alphabetically
+// and folds independently of the services that have no group at all.
+func TestSidebar_ARealGroupNamedUngroupedIsNotTheNoGroupBucket(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "api", Group: "ungrouped"},
+		{Name: "zed", Group: "zoo"},
+		{Name: "scratch"}, // genuinely no group
+	}, nil)
+
+	// Two distinct headers, and the real group sorts by its name while the
+	// no-group bucket stays last.
+	assert.Equal(t, []string{
+		"header:ungrouped", "svc:api",
+		"header:zoo", "svc:zed",
+		"header:ungrouped", "svc:scratch",
+	}, rowShape(sb))
+
+	// Folding the real one leaves the bucket alone.
+	sb.selectGroupHeader("ungrouped")
+	require.True(t, sb.toggleCollapse())
+	assert.Equal(t, []string{
+		"header:ungrouped",
+		"header:zoo", "svc:zed",
+		"header:ungrouped", "svc:scratch",
+	}, rowShape(sb), "only the named group folded")
 }
 
 // The log pane follows the cursor, and folding moves the cursor onto a header

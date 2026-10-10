@@ -32,7 +32,7 @@ func rowShape(sb *sidebar) []string {
 			out = append(out, "svc:"+svc.Name)
 			continue
 		}
-		out = append(out, "header:"+sb.rows[i].group)
+		out = append(out, "header:"+groupLabel(sb.rows[i].group))
 	}
 	return out
 }
@@ -65,7 +65,7 @@ func TestSidebar_GroupOrderIsCaseInsensitive(t *testing.T) {
 	var headers []string
 	for i := range sb.rows {
 		if sb.rows[i].kind == rowHeader {
-			headers = append(headers, sb.rows[i].group)
+			headers = append(headers, groupLabel(sb.rows[i].group))
 		}
 	}
 	assert.Equal(t, []string{"api", "Backend", "charlie", "Zebra", ungroupedLabel}, headers)
@@ -84,7 +84,7 @@ func TestSidebar_GroupOrderIsTotalForCaseOnlyDifferences(t *testing.T) {
 	var headers []string
 	for i := range sb.rows {
 		if sb.rows[i].kind == rowHeader {
-			headers = append(headers, sb.rows[i].group)
+			headers = append(headers, groupLabel(sb.rows[i].group))
 		}
 	}
 	assert.Equal(t, []string{"WEB", "Web", "web"}, headers)

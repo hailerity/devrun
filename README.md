@@ -515,7 +515,7 @@ and a header only appears when there is more than one group — a single project
 looks exactly as it did before. A group's services keep their place inside it,
 so a service still never moves because its state changed.
 
-Two things worth knowing about folding:
+Three things worth knowing about folding:
 
 - **A collapsed group hides what is inside it, including a failure.** The
   header's count (`1/3`) is the only hint; there is no crash marker on a folded

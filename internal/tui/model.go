@@ -91,7 +91,7 @@ type model struct {
 	searching    bool            // the footer's search input has the keyboard
 	searchScope  searchScope     // which list that input is narrowing
 	searchPrev   string          // the query the input opened on, restored if it is cancelled
-	searchAnchor string          // the service the cursor was on then, restored with it
+	searchAnchor cursorPos       // where the cursor was then, restored with it
 	searchC      textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
 	headerC      headerBar
 	footerC      footerBar
@@ -462,11 +462,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// `/` prefills with the live query so an existing filter can be
 		// amended, which only works if backing out puts the old one back —
 		// along with the cursor, which the narrowing is about to move.
+		// cursorAt, not selectedService: the cursor may be on a group header,
+		// and taking only the service name would leave the restore falling
+		// back to a stale anchor in some other group.
 		m.searchPrev = m.sidebarC.filterQuery
-		m.searchAnchor = ""
-		if svc := m.sidebarC.selectedService(); svc != nil {
-			m.searchAnchor = svc.Name
-		}
+		m.searchAnchor = m.sidebarC.cursorAt()
 		m.searchC.SetValue(m.sidebarC.filterQuery)
 		m.searchC.CursorEnd()
 		m.searchC.Focus()
@@ -600,9 +600,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// service row it falls through to nothing, so the key is not a surprise
 	// anywhere else in the list.
 	case m.focus == focusSidebar && key.Matches(msg, keys.Collapse):
-		if m.sidebarC.toggleCollapse() {
+		switch {
+		case m.sidebarC.toggleCollapse():
 			m.updateLogFile()
 			m.relayout()
+		// Refused rather than silently doing nothing: with a query in force
+		// every group is shown open, so a fold could only change state the
+		// reader cannot see.
+		case m.sidebarC.onGroupHeader() && m.sidebarC.filterQuery != "":
+			m.footerC.showToast("folding is suspended while /" + m.sidebarC.filterQuery + " is active")
 		}
 
 	// e opens the editor for the highlighted service.
