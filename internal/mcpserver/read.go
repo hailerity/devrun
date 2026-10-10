@@ -29,6 +29,7 @@ type ServiceInfo struct {
 	UptimeS  int64    `json:"uptime_s,omitempty"`
 	CPUPct   float64  `json:"cpu_pct,omitempty"`
 	MemBytes int64    `json:"mem_bytes,omitempty"`
+	Group    string   `json:"group,omitempty" jsonschema:"The section it is filed under in the dashboard. One per service, unlike targets."`
 	Targets  []string `json:"targets,omitempty" jsonschema:"Targets this service belongs to."`
 	URL      string   `json:"url,omitempty" jsonschema:"Where this service can be opened, when the gateway is serving it. Absent means it has no address: no gateway, no detected port, or it is withheld from publishing."`
 }
@@ -261,7 +262,7 @@ func serviceInfo(s ipc.ServiceInfo, targets []string) ServiceInfo {
 	return ServiceInfo{
 		Name: s.Name, State: s.State, PID: s.PID, Port: s.Port,
 		UptimeS: s.UptimeSec, CPUPct: s.CPUPct, MemBytes: s.MemBytes,
-		Targets: targets, URL: s.URL,
+		Group: s.Group, Targets: targets, URL: s.URL,
 	}
 }
 

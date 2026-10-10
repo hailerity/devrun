@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,6 +28,7 @@ type AddServiceInput struct {
 	Name    string            `json:"name" jsonschema:"Name for the new service: letters, digits, '.', '_' or '-'."`
 	Command string            `json:"command" jsonschema:"Shell command that runs the service in the foreground, e.g. 'npm run dev'. It is run with sh -c."`
 	CWD     string            `json:"cwd,omitempty" jsonschema:"Working directory. A relative path is taken against the project directory. Defaults to the project directory."`
+	Group   string            `json:"group,omitempty" jsonschema:"Section to file the service under in the dashboard, e.g. 'backend'. One line, at most 128 characters; a service belongs to exactly one group. Use list_services to see the groups in use and match one rather than inventing a synonym. Omit it to leave the service in the default section, which is the project's name for a devrun.yaml and no group at all for the global registry."`
 	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables to set for the service."`
 }
 
@@ -34,6 +36,7 @@ type ServiceDef struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"`
 	CWD     string   `json:"cwd"`
+	Group   string   `json:"group,omitempty"`
 	EnvKeys []string `json:"env_keys,omitempty"`
 }
 
@@ -90,7 +93,8 @@ func registerWriteTools(s *mcp.Server, h *handlers) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "add_service",
 		Title: "Add a service",
-		Description: "Define a new service in the project's devrun.yaml (or the global registry when the project has none). " +
+		Description: "Define a new service in the project's devrun.yaml (or the global registry when the project has none), " +
+			"optionally in a group — the section it is filed under in the dashboard. " +
 			"It does not start it — call start next. Refuses a name that already exists.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, h.addService)
@@ -128,11 +132,24 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 			return nil, AddServiceOutput{}, fmt.Errorf("invalid environment variable name %q", k)
 		}
 	}
+	// Trimmed once, here, and everything downstream sees the trimmed value:
+	// validating the raw string refused " "+128 chars+" " for being 130 when
+	// what would be written is exactly at the limit, and let a whitespace-only
+	// group through to be normalised to "" — after which the echo reported the
+	// project's name as the group just set, matching neither the request nor
+	// "no group".
+	group := strings.TrimSpace(in.Group)
+	if err := checkGroup(group); err != nil {
+		return nil, AddServiceOutput{}, err
+	}
 	s, err := h.scope(in.Scoped)
 	if err != nil {
 		return nil, AddServiceOutput{}, err
 	}
-	if _, err := ops.AddService(s, ops.NewService{Name: in.Name, Command: in.Command, CWD: in.CWD, Env: in.Env}); err != nil {
+	if _, err := ops.AddService(s, ops.NewService{
+		Name: in.Name, Command: in.Command, CWD: in.CWD,
+		Group: h.ownGroup(in.Scoped, group), Env: in.Env,
+	}); err != nil {
 		return nil, AddServiceOutput{}, err
 	}
 
@@ -146,12 +163,55 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 	if err != nil {
 		return nil, AddServiceOutput{}, err
 	}
-	def := ServiceDef{Name: in.Name, Command: cfg.Command, CWD: cfg.CWD}
+	// cfg.Group, not in.Group: for a project service an omitted group has been
+	// resolved to the project's name by now, and echoing the input back would
+	// report an empty group for a service that has one.
+	def := ServiceDef{Name: in.Name, Command: cfg.Command, CWD: cfg.CWD, Group: cfg.Group}
 	for k := range cfg.Env {
 		def.EnvKeys = append(def.EnvKeys, k)
 	}
 	sort.Strings(def.EnvKeys)
 	return nil, AddServiceOutput{Origin: sourceOf(r), Service: def}, nil
+}
+
+// ownGroup is the group to *store* for a service an agent asked to put in
+// `group`: the value itself, unless it is the group the service would inherit
+// anyway, in which case nothing is stored and it inherits.
+//
+// Both read tools report a project service's group after the project's name has
+// been applied as a default, and nothing in that output says whether a group was
+// the service's own or the default. An agent told to match an existing group
+// therefore sees `shop` and passes `shop` — which pins the service to that name,
+// so renaming the project leaves it behind while its siblings follow, splitting
+// one group into two. The TUI editor avoids the same trap by prefilling
+// config.StoredGroup instead of the resolved group.
+//
+// Normalising rather than refusing, because the agent's intent — put it in the
+// section called shop — is honoured exactly either way: the resolved group is
+// `shop` whichever is stored. Only the brittle encoding is dropped. Deliberately
+// not done in ops, which `devrun add` shares: a human typing the flag is making
+// a choice, and the CLI has always stored it literally.
+// Keyed on whether the config being written is a project file, via
+// Resolved.IsLocal — not on the `global` flag. A directory with no devrun.yaml
+// resolves to the global registry with `global` false, and there a group that
+// happens to match the directory's name is a group like any other: nothing
+// inherits, so there is nothing to normalise away.
+//
+// Takes `group` already trimmed — its caller trims once, before validating, so
+// that what is checked, compared here and stored are the same string. Trimming
+// again here would only hide a caller that did not.
+func (h *handlers) ownGroup(sc Scoped, group string) string {
+	if group == "" {
+		return ""
+	}
+	r, err := h.resolve(sc)
+	if err != nil || !r.IsLocal() {
+		return group
+	}
+	if group == config.ProjectGroupName(r.Dir) {
+		return ""
+	}
+	return group
 }
 
 func (h *handlers) addToTarget(_ context.Context, _ *mcp.CallToolRequest, in AddToTargetInput) (*mcp.CallToolResult, AddToTargetOutput, error) {

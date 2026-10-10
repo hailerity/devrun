@@ -592,3 +592,42 @@ func TestSidebar_LeadingGapBecomesTrailingBlank(t *testing.T) {
 	lines := strings.Split(plain(sb.render(31)), "\n")
 	assert.Len(t, lines, last-first)
 }
+
+// A group reaches the sidebar from three writers — `devrun add --group`, the
+// TUI's own editor, and a hand-written devrun.yaml — and only the MCP server
+// refuses a malformed one. So the row is made safe where it is drawn, which
+// covers the file nobody validates.
+//
+// The newline is what matters: a row is one terminal line, and lipgloss.Width
+// reports the widest line of a multi-line string, so "a\nb" measures 1, is never
+// truncated, and would draw two lines for a row the window counts as one.
+func TestGroupLabel_FlattensControlCharacters(t *testing.T) {
+	assert.Equal(t, "back end", groupLabel("back\nend"), "newline")
+	assert.Equal(t, "back end", groupLabel("back\rend"), "carriage return")
+	assert.Equal(t, "back end", groupLabel("back\tend"), "tab")
+	assert.Equal(t, "back end", groupLabel("back\x07end"), "bell")
+
+	// Untouched when there is nothing to replace, which is every real name.
+	for _, g := range []string{"backend", "back end / api", "сервисы", "a-b_c.d"} {
+		assert.Equal(t, g, groupLabel(g))
+	}
+	assert.Equal(t, ungroupedLabel, groupLabel(""), "the bucket is unaffected")
+}
+
+// End to end: a group with a newline in the config draws one line per row, so
+// the row count and the rendered line count still agree.
+func TestSidebar_AMultilineGroupStillDrawsOneLinePerRow(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "api", Group: "back\nend"},
+		{Name: "web", Group: "frontend"},
+	}, nil)
+	sb.setRows(20)
+
+	lines := strings.Split(plain(sb.render(31)), "\n")
+	assert.Len(t, lines, len(sb.rows),
+		"one line per row, or the scroll window and the pane disagree")
+	for i, l := range lines {
+		assert.Equal(t, 31, len([]rune(l)), "row %d is exactly one full-width line", i)
+	}
+}

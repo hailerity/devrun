@@ -15,9 +15,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ops"
 )
 
@@ -36,6 +39,8 @@ const instructions = `devrun manages long-running development processes (dev ser
 Prefer these tools over running a dev server yourself: a service started here keeps running after the call returns, its output is captured, and the user sees it live in the devrun dashboard.
 
 Config: a devrun.yaml in the project directory defines the project's services and targets; without one, the user's global registry is used. Every tool accepts project_dir (default: the directory you were launched in) and every result says which file it used.
+
+Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it, and pass it explicitly: omitting group does not mean "the same as the others", it means the default — the project's name for a devrun.yaml, and no group at all for the global registry.
 
 Typical flow: list_services → add_service if what you need is missing → start (it waits and tells you whether the service came up, with its log tail if not) → logs to check on it → stop when done.`
 
@@ -116,6 +121,38 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 func checkName(kind, name string) error {
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf("invalid %s name %q: use 1–64 letters, digits, '.', '_' or '-', starting with a letter or digit", kind, name)
+	}
+	return nil
+}
+
+// checkGroup refuses a group that would not survive being drawn. Unlike a
+// service name it is free-form — it is a display label, never a filename or an
+// identity — so there is no name rule to apply; the bar is only that it be one
+// printable line.
+//
+// A newline is the one that matters. The sidebar's row model assumes one row is
+// one terminal line, and lipgloss.Width reports the *widest* line of a multi-line
+// string — so "a\nb" measures 1, is never truncated, and draws two lines for a
+// row the scroll window counts as one, throwing the cursor and the pane height
+// out by one per occurrence.
+func checkGroup(group string) error {
+	if group == "" {
+		return nil
+	}
+	// Characters, not bytes: the TUI editor's input limit counts runes, and a
+	// byte comparison here made 128 Cyrillic characters — 256 bytes — pass in
+	// the editor and fail through this tool. Characters is also the unit the
+	// limit is justified in, which is how much fits on one row.
+	if n := utf8.RuneCountInString(group); n > config.MaxGroupLen {
+		return fmt.Errorf("group is %d characters, over the %d-character limit", n, config.MaxGroupLen)
+	}
+	for _, r := range group {
+		if r == '\n' || r == '\r' {
+			return fmt.Errorf("group must be a single line: it contains a line break")
+		}
+		if unicode.IsControl(r) {
+			return fmt.Errorf("group contains a control character (%U)", r)
+		}
 	}
 	return nil
 }
