@@ -311,6 +311,32 @@ func TestModel_SidebarWidthAccountsForGroupNames(t *testing.T) {
 	assert.Contains(t, plain(m.sidebarC.render(w)), "customer-portal-backend")
 }
 
+// ...but only when a header is actually drawn. A devrun.yaml stamps every
+// service with the project's name, so every local project is one group and
+// never gets a header — reserving room for one took columns off the log pane
+// for every single-project user, for a row that never renders.
+func TestModel_SidebarWidthIgnoresGroupNamesWithOnlyOneGroup(t *testing.T) {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = m2.(model)
+
+	short := []ipc.ServiceInfo{{Name: "a", Group: "cpb"}, {Name: "b", Group: "cpb"}}
+	long := []ipc.ServiceInfo{
+		{Name: "a", Group: "customer-portal-backend"},
+		{Name: "b", Group: "customer-portal-backend"},
+	}
+
+	m.sidebarC.update(short, nil)
+	require.False(t, m.sidebarC.hasHeaders(), "one group draws no header")
+	narrow := m.sidebarWidth()
+
+	m.sidebarC.update(long, nil)
+	require.False(t, m.sidebarC.hasHeaders())
+	assert.Equal(t, narrow, m.sidebarWidth(),
+		"a group name nobody will see must not cost the log pane a column")
+	assert.Equal(t, sidebarMinW, narrow, "and short service names keep the minimum")
+}
+
 // The render has to draw headers, not silently skip rows it cannot map to a
 // service — the bug the row model would most easily hide.
 func TestSidebar_RenderDrawsAHeaderPerGroup(t *testing.T) {

@@ -402,10 +402,43 @@ func (s *sidebar) toggleCollapse() bool {
 	s.collapsed[g] = !s.collapsed[g]
 	s.refilter()
 	s.selectGroupHeader(g)
+	if !s.collapsed[g] {
+		s.revealUnder(s.selected)
+	}
 	// No need to set the anchor here: every rebuild goes through keepingCursor,
 	// whose recordAnchor reads the cursor first and so picks this header up by
 	// itself. That is what makes the fold survive the two-second poll.
 	return true
+}
+
+// revealUnder scrolls so the rows beneath `row` are on screen, not just `row`
+// itself.
+//
+// scrollToCursor keeps the cursor visible and nothing more, and after an unfold
+// the cursor is on the header — which was already visible, so it moved nothing.
+// Unfolding a group whose header sat at the bottom of the window redrew an
+// identical pane with the glyph flipped, revealing none of the services it had
+// just opened. A tree scrolls to show what it opens.
+//
+// Scrolls the least it can, and never past the header: losing the row you
+// pressed the key on would be its own surprise.
+func (s *sidebar) revealUnder(row int) {
+	if s.paneRows <= 0 || row+1 >= len(s.rows) {
+		return
+	}
+	// The group's body runs to the next header, or to the end of the list.
+	last := row + 1
+	for last+1 < len(s.rows) && s.rows[last+1].kind != rowHeader {
+		last++
+	}
+	// The furthest row worth bringing into view: the end of the body, or as
+	// much of it as the pane can hold below the header.
+	want := min(last, row+s.paneRows-1)
+	if want >= s.top+s.paneRows {
+		s.top = want - s.paneRows + 1
+	}
+	s.top = max(0, min(s.top, max(0, len(s.rows)-s.paneRows)))
+	s.top = min(s.top, row)
 }
 
 // selectGroupHeader puts the cursor on the named group's header. When that

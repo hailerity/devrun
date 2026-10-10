@@ -1268,11 +1268,19 @@ func (m model) sidebarWidth() int {
 	}
 	// Group headers are rows too, and a project's name — which is every one of
 	// its services' group — is as likely to be long as a service name is. Sized
-	// from allServices like the loop above, so the pane does not resize while a
-	// query is being typed.
-	for _, g := range m.sidebarC.groupLabelWidths() {
-		if n := g + groupRowChrome + paneChrome; n > w {
-			w = n
+	// from allServices, not the filtered list, so the pane does not resize
+	// while a query is being typed.
+	//
+	// Only when there is more than one group, because that is exactly when a
+	// header is drawn. A devrun.yaml stamps every service with the project's
+	// name, so every local project is a single group — reserving the room
+	// unconditionally took columns off the log pane, for every one of them, for
+	// a row that never renders.
+	if widths := m.sidebarC.groupLabelWidths(); len(widths) > 1 {
+		for _, g := range widths {
+			if n := g + groupRowChrome + paneChrome; n > w {
+				w = n
+			}
 		}
 	}
 	w = min(w, sidebarMaxW)

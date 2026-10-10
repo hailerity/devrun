@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -211,6 +213,50 @@ func TestSidebar_CollapseLeavesTheCursorOnTheHeader(t *testing.T) {
 	assert.Equal(t, "", sb.rows[sb.selected].group, "the no-group bucket")
 }
 
+// Unfolding has to scroll to show what it opened. The cursor is on the header,
+// which was already visible, so keeping the cursor visible moves nothing —
+// unfolding a group whose header sat at the bottom of the window redrew an
+// identical pane with the glyph flipped and not one service revealed.
+func TestSidebar_UnfoldRevealsChildrenAtTheBottomOfTheWindow(t *testing.T) {
+	var svcs []ipc.ServiceInfo
+	for i := 0; i < 6; i++ {
+		svcs = append(svcs, ipc.ServiceInfo{Name: fmt.Sprintf("a%02d", i), Group: "aaa"})
+		svcs = append(svcs, ipc.ServiceInfo{Name: fmt.Sprintf("b%02d", i), Group: "bbb"})
+	}
+	sb := &sidebar{}
+	sb.update(svcs, nil)
+	sb.setRows(8)
+	require.Len(t, sb.rows, 14) // 12 services + 2 headers
+
+	// Fold bbb, whose header is then the last visible row.
+	sb.selectGroupHeader("bbb")
+	require.True(t, sb.toggleCollapse())
+	require.Equal(t, 7, sb.selected)
+
+	// Unfold it: at least one of its services must now be on screen.
+	require.True(t, sb.toggleCollapse())
+	first, last := sb.window()
+	assert.True(t, sb.selected >= first && sb.selected < last, "the header stays visible")
+
+	out := plain(sb.render(31))
+	assert.Contains(t, out, "bbb", "its header")
+	assert.Contains(t, out, "b00", "and the services it just opened")
+}
+
+// Scrolling to reveal must not overshoot: a header with room below it already
+// shows its children, so the window should not move at all.
+func TestSidebar_UnfoldDoesNotScrollWhenChildrenAlreadyFit(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(20) // the whole list fits
+	sb.selectGroupHeader("backend")
+	require.True(t, sb.toggleCollapse())
+	before := sb.top
+
+	require.True(t, sb.toggleCollapse())
+	assert.Equal(t, before, sb.top, "nothing to scroll when it all fits")
+}
+
 // --- through the key handler ---
 
 func TestModel_SpaceTogglesTheGroupUnderTheCursor(t *testing.T) {
@@ -386,6 +432,23 @@ func TestModel_EnterOnAHeaderUnderAQuerySaysWhyItRefused(t *testing.T) {
 	assert.Contains(t, m.footerC.toast, "suspended")
 	assert.Equal(t, tabLogs, m.activeTab, "and no switch to an empty DETAILS")
 	assert.False(t, m.sidebarC.collapsed["backend"])
+}
+
+// One action, one hint. `↵` folds too, but a second slot saying so costs a real
+// hint at the widths where they are scarcest — the header row must not end up
+// with fewer useful keys on screen than a service row.
+func TestFooter_HeaderNamesTheFoldOnceAndKeepsItsOtherHints(t *testing.T) {
+	f := &footerBar{}
+	ctx := footerCtx{focus: focusSidebar, tab: tabLogs, onGroupHeader: true}
+
+	wide := plain(f.render(ctx, 120))
+	assert.Equal(t, 1, strings.Count(wide, "fold"), "named once, not twice")
+	assert.Contains(t, wide, "Space")
+
+	// At 70 columns the duplicate used to push `t target` off the row.
+	at70 := plain(f.render(ctx, 70))
+	assert.Contains(t, at70, "fold")
+	assert.Contains(t, at70, "target")
 }
 
 // The footer must not promise a fold the query will refuse.

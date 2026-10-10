@@ -181,10 +181,12 @@ func (c footerCtx) baseHints() []hint {
 		showEnter = false
 	// A group header has no service behind it, so s / x / r would be
 	// advertising keys that do nothing on the row the cursor is on. Folding is
-	// what this row does.
+	// what this row does — named once. `↵` folds as well, but spending a second
+	// slot to say so costs `t target` at 70 columns and `/ filter` at 60, where
+	// hints are scarcest and the duplicate is worth least.
 	case c.onGroupHeader:
 		out = append(out, hint{"Space", "fold", 0})
-		enter = "fold"
+		showEnter = false
 	default:
 		out = append(out,
 			hint{"s", "start", 0},
