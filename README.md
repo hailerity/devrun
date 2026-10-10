@@ -518,11 +518,17 @@ header per group carrying its running count:
 │ ● api       :8080     2.1%  │
 │ ● db        :5432     0.4%  │
 │ ✖ worker    crashed         │
+│                             │
 │ ▸ frontend             1/2  │
+│                             │
 │ ▾ (no group)           0/1  │
 │ ○ scratch   stopped         │
 ╰─ 3/6 up ────────────────────╯
 ```
+
+A blank line sits above every header but the first, and a header is drawn in its
+own grey — quieter than a service name so it reads as a label rather than as an
+emphasised service.
 
 `Space` (or `↵`) on a header folds the group shut; the cursor walks headers as
 it does in a file tree. Groups are alphabetical with the ones with no group last,
