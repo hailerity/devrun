@@ -851,14 +851,14 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	oldName := m.editC.origName
-	name, command, cwd := m.editC.values()
+	name, command, cwd, group := m.editC.values()
 
-	if err := config.SaveServiceEdit(m.source, oldName, name, command, cwd); err != nil {
+	if err := config.SaveServiceEdit(m.source, oldName, name, command, cwd, group); err != nil {
 		m.editC.errMsg = err.Error()
 		return m, nil
 	}
 	wasRunning := m.serviceIsRunning(oldName)
-	m.applyEditToRegistry(oldName, name, command, cwd)
+	m.applyEditToRegistry(oldName, name, command, cwd, group)
 	m.editC.close()
 
 	if wasRunning {
@@ -938,15 +938,21 @@ func (m model) doRestart() tea.Cmd {
 
 // applyEditToRegistry mirrors the just-persisted edit into the in-memory
 // registry so the sidebar reflects it before the next daemon poll. For a project
-// source the cwd is resolved to absolute against the project dir, matching what
+// source the cwd is resolved to absolute against the project dir, and an empty
+// group falls back to the project's name — both matching what
 // ProjectConfig.ToServiceConfigs would produce on reload (and what the daemon
-// needs on restart).
-func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
+// needs on restart). Without the group fallback, clearing the field would file
+// the service under "(no group)" here while a reload put it back under the
+// project's name.
+func (m *model) applyEditToRegistry(oldName, newName, command, cwd, group string) {
 	if m.registry == nil {
 		return
 	}
 	if m.source.IsLocal() {
 		cwd = resolveProjectCWD(m.source.Dir, cwd)
+		if group == "" {
+			group = config.ProjectGroupName(m.source.Dir)
+		}
 	}
 	cur := m.registry.Services[oldName]
 	if cur == nil {
@@ -956,6 +962,7 @@ func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
 	updated.Name = newName
 	updated.Command = command
 	updated.CWD = cwd
+	updated.Group = group
 	if newName != oldName {
 		delete(m.registry.Services, oldName)
 	}
@@ -1198,7 +1205,14 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 		if !ok {
 			s = ipc.ServiceInfo{Name: name, State: string(config.StatusStopped)}
 		}
-		if cfg := m.registry.Services[name]; cfg != nil && cfg.Group != "" {
+		// The active config is the authority on a service's group, not the
+		// daemon's copy — which for a project service predates this view
+		// entirely, and for a global one can be whatever the registry said when
+		// the daemon last loaded it. Taken unconditionally, so clearing a group
+		// clears it on screen instead of leaving the daemon's stale value
+		// showing; a project service's empty group has already been resolved to
+		// the project's name by ToServiceConfigs.
+		if cfg := m.registry.Services[name]; cfg != nil {
 			s.Group = cfg.Group
 		}
 		out = append(out, s)

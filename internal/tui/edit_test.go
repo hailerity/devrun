@@ -13,7 +13,7 @@ func TestEditPanel_OpenForPrefills(t *testing.T) {
 
 	assert.True(t, p.open)
 	assert.Equal(t, fieldName, p.focus)
-	name, command, cwd := p.values()
+	name, command, cwd, _ := p.values()
 	assert.Equal(t, "web", name)
 	assert.Equal(t, "yarn dev", command)
 	assert.Equal(t, "/app", cwd)
@@ -28,9 +28,11 @@ func TestEditPanel_FocusDeltaWraps(t *testing.T) {
 	p.focusDelta(1)
 	assert.Equal(t, fieldCWD, p.focus)
 	p.focusDelta(1)
+	assert.Equal(t, fieldGroup, p.focus)
+	p.focusDelta(1)
 	assert.Equal(t, fieldName, p.focus, "wraps to the first field")
 	p.focusDelta(-1)
-	assert.Equal(t, fieldCWD, p.focus, "wraps backwards")
+	assert.Equal(t, fieldGroup, p.focus, "wraps backwards")
 }
 
 func TestEditPanel_Validate(t *testing.T) {
@@ -60,7 +62,7 @@ func TestEditPanel_ValuesTrim(t *testing.T) {
 	p.openFor("web", &config.ServiceConfig{Command: "run"})
 	p.inputs[fieldName].SetValue("  ui  ")
 	p.inputs[fieldCWD].SetValue("  /srv  ")
-	name, _, cwd := p.values()
+	name, _, cwd, _ := p.values()
 	assert.Equal(t, "ui", name)
 	assert.Equal(t, "/srv", cwd)
 }

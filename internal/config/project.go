@@ -123,6 +123,22 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 	return out
 }
 
+// ProjectGroupName is the group a service in dir's devrun.yaml inherits when it
+// names none of its own: the file's `name:`, or the sanitised directory name
+// when it does not set one. The same value ToServiceConfigs would apply, for
+// callers that hold only the derived ServiceConfigs and need the default back —
+// the TUI's editor, mirroring a cleared group field without re-resolving the
+// whole config.
+//
+// Falls back to the directory name on any read error, which is also what
+// LoadProject would have defaulted to.
+func ProjectGroupName(dir string) string {
+	if p, err := LoadProject(dir); err == nil && p != nil && p.Name != "" {
+		return p.Name
+	}
+	return sanitizeName(filepath.Base(dir))
+}
+
 // sanitizeName replaces characters that are not safe in a project/group name
 // with hyphens.
 func sanitizeName(s string) string {

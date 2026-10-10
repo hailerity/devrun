@@ -17,13 +17,14 @@ const (
 	fieldName editField = iota
 	fieldCommand
 	fieldCWD
+	fieldGroup
 	editFieldCount
 )
 
-var editFieldLabels = [editFieldCount]string{"name", "command", "cwd"}
+var editFieldLabels = [editFieldCount]string{"name", "command", "cwd", "group"}
 
-// editPanel is the modal service editor: three text fields (name / command /
-// cwd) over the selected service, with Tab/Shift-Tab moving focus and a
+// editPanel is the modal service editor: four text fields (name / command /
+// cwd / group) over the selected service, with Tab/Shift-Tab moving focus and a
 // validate() gate before save. It is not part of the sidebar/main focus model —
 // while open it consumes all key input.
 type editPanel struct {
@@ -57,6 +58,7 @@ func (p *editPanel) openFor(name string, cfg *config.ServiceConfig) {
 	if cfg != nil {
 		vals[fieldCommand] = cfg.Command
 		vals[fieldCWD] = cfg.CWD
+		vals[fieldGroup] = cfg.Group
 	}
 	for i := range p.inputs {
 		p.inputs[i].SetValue(vals[i])
@@ -88,17 +90,23 @@ func (p *editPanel) update(msg tea.Msg) tea.Cmd {
 	return cmd
 }
 
-// values returns the trimmed name/cwd and the raw command.
-func (p *editPanel) values() (name, command, cwd string) {
+// values returns the trimmed name/cwd/group and the raw command.
+func (p *editPanel) values() (name, command, cwd, group string) {
 	return strings.TrimSpace(p.inputs[fieldName].Value()),
 		p.inputs[fieldCommand].Value(),
-		strings.TrimSpace(p.inputs[fieldCWD].Value())
+		strings.TrimSpace(p.inputs[fieldCWD].Value()),
+		strings.TrimSpace(p.inputs[fieldGroup].Value())
 }
 
 // validate returns the first blocking problem, or "" when the form can be saved.
 // existing is the set of all current service names.
+//
+// The group is deliberately unvalidated beyond trimming: it is a display label
+// the sidebar sections by, never part of a service's identity and never a path
+// or a filename, so there is nothing for a name rule to protect. Clearing it is
+// meaningful too — a project service falls back to the project's name.
 func (p *editPanel) validate(existing map[string]bool) string {
-	name, command, _ := p.values()
+	name, command, _, _ := p.values()
 	switch {
 	case name == "":
 		return "name cannot be empty"
