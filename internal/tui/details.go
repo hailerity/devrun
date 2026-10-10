@@ -94,19 +94,27 @@ func detailLines(svc *ipc.ServiceInfo, cfg *config.ServiceConfig) []detailLine {
 		return out
 	}
 
+	// Drawn through sanitizeLabel, copied raw. Everything under CONFIG and ENV is
+	// free-form text out of a config file or an agent's add_service — unlike the
+	// STATUS values above, which the daemon derives from a pid, a port or a state
+	// name. A newline in one of them drew two terminal lines for a single
+	// detailLine, and since the panel's cursor and scrolling count detailLines,
+	// every line after it was off by one and the bottom of the pane fell outside
+	// its height. The clipboard keeps the real value: `y` is for pasting the
+	// command back into a shell, not for reproducing the pane.
 	cfgRows := [][3]string{
-		{"cmd", styleText.Render(cfg.Command), cfg.Command},
-		{"cwd", styleMuted.Render(cfg.CWD), cfg.CWD},
+		{"cmd", styleText.Render(sanitizeLabel(cfg.Command)), cfg.Command},
+		{"cwd", styleMuted.Render(sanitizeLabel(cfg.CWD)), cfg.CWD},
 	}
 	if cfg.Group != "" {
-		cfgRows = append(cfgRows, [3]string{"group", styleMuted.Render(cfg.Group), cfg.Group})
+		cfgRows = append(cfgRows, [3]string{"group", styleMuted.Render(sanitizeLabel(cfg.Group)), cfg.Group})
 	}
 	section("CONFIG", cfgRows)
 
 	if len(cfg.Env) > 0 {
 		var env [][3]string
 		for _, k := range sortedStringKeys(cfg.Env) {
-			env = append(env, [3]string{k, styleAccent.Render(cfg.Env[k]), cfg.Env[k]})
+			env = append(env, [3]string{sanitizeLabel(k), styleAccent.Render(sanitizeLabel(cfg.Env[k])), cfg.Env[k]})
 		}
 		section("ENV", env)
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hailerity/devrun/internal/ipc"
@@ -322,11 +323,40 @@ const ungroupedLabel = "(no group)"
 
 // groupLabel is how a group is drawn: its own name, or the label for the
 // no-group bucket.
+//
+// Also the one place a group becomes text on screen, which is where it is made
+// safe to draw. A group is free-form and reaches this from three writers —
+// `devrun add --group`, the TUI's own editor, and a hand-written devrun.yaml —
+// and only the MCP server refuses a malformed one. Guarding here covers all of
+// them, including the file nobody validates.
+//
+// The newline is what matters. A row is one terminal line, and lipgloss.Width
+// reports the *widest* line of a multi-line string — so "a\nb" measures 1, is
+// never truncated, and would draw two lines for a row the scroll window counts
+// as one, putting the cursor and the pane height out by one per occurrence.
 func groupLabel(group string) string {
 	if group == "" {
 		return ungroupedLabel
 	}
-	return group
+	return sanitizeLabel(group)
+}
+
+// sanitizeLabel makes a free-form string safe to draw on one row: every control
+// character, newline included, becomes a space. Width is left to truncateName —
+// this is about the line count, not the column count.
+//
+// Returns the input untouched when there is nothing to replace, which is every
+// real group name, so the common path allocates nothing.
+func sanitizeLabel(s string) string {
+	if !strings.ContainsFunc(s, unicode.IsControl) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // rebuildRows lays s.services out as drawn lines, one group at a time. With a
