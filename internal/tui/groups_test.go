@@ -212,6 +212,28 @@ func TestSidebar_FallbackCursorSkipsHeaders(t *testing.T) {
 	assert.NotNil(t, sb.selectedService(), "never parked on a header")
 }
 
+// selectServiceByName's own fallback, reached when the anchor names a real
+// service that the current filter excludes. The sibling paths (moveTo with no
+// anchor, selectGroupHeader for a vanished group) have their own fallbacks, so
+// this one needs a case that goes through none of them: an anchored service,
+// filtered out, with headers still drawn above it.
+func TestSidebar_FallbackSkipsHeadersWhenTheAnchoredServiceIsFilteredOut(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.selectServiceByName("db")
+	require.Equal(t, "db", sb.selectedService().Name)
+
+	// "e" keeps worker, web and assets — two groups, so headers are drawn — and
+	// drops db, so the anchor cannot be honoured.
+	sb.setQuery("e")
+	require.Equal(t, rowHeader, sb.rows[0].kind, "a header is row 0")
+	require.NotContains(t, rowShape(sb), "svc:db")
+
+	assert.False(t, sb.onGroupHeader(), "must not fall back onto that header")
+	require.NotNil(t, sb.selectedService())
+	assert.Equal(t, "worker", sb.selectedService().Name, "the first service row")
+}
+
 // A poll re-sorts and re-groups from scratch; the highlight is anchored by
 // service name and has to survive the headers shifting every index.
 func TestSidebar_CursorSurvivesAPollWithGroups(t *testing.T) {
