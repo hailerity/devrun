@@ -19,6 +19,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/hailerity/devrun/internal/config"
 	"github.com/hailerity/devrun/internal/ops"
 )
 
@@ -38,7 +39,7 @@ Prefer these tools over running a dev server yourself: a service started here ke
 
 Config: a devrun.yaml in the project directory defines the project's services and targets; without one, the user's global registry is used. Every tool accepts project_dir (default: the directory you were launched in) and every result says which file it used.
 
-Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it; if the group you want is the one every service in the project already shows, just omit it.
+Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it, and pass it explicitly: omitting group does not mean "the same as the others", it means the default — the project's name for a devrun.yaml, and no group at all for the global registry.
 
 Typical flow: list_services → add_service if what you need is missing → start (it waits and tells you whether the service came up, with its log tail if not) → logs to check on it → stop when done.`
 
@@ -123,12 +124,6 @@ func checkName(kind, name string) error {
 	return nil
 }
 
-// maxGroupLen caps a group label. Generous — a project directory name can be
-// long — but bounded, because this is a label drawn on one row of a pane that is
-// at most 47 columns wide, and an unbounded one is only a way to make a config
-// file unreadable.
-const maxGroupLen = 128
-
 // checkGroup refuses a group that would not survive being drawn. Unlike a
 // service name it is free-form — it is a display label, never a filename or an
 // identity — so there is no name rule to apply; the bar is only that it be one
@@ -143,8 +138,8 @@ func checkGroup(group string) error {
 	if group == "" {
 		return nil
 	}
-	if len(group) > maxGroupLen {
-		return fmt.Errorf("group is %d bytes, over the %d-byte limit", len(group), maxGroupLen)
+	if len(group) > config.MaxGroupLen {
+		return fmt.Errorf("group is %d bytes, over the %d-byte limit", len(group), config.MaxGroupLen)
 	}
 	for _, r := range group {
 		if r == '\n' || r == '\r' {

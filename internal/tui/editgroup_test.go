@@ -431,3 +431,11 @@ func TestModel_ScopedServicesTakesTheGroupFromTheConfig(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Empty(t, out[0].Group, "the config says ungrouped, so ungrouped it is")
 }
+
+// The editor's group field and the MCP server's refusal use one limit. They were
+// 512 and 128, which made the same field's cap depend on who was writing it.
+func TestEditPanel_GroupFieldSharesTheGroupLimit(t *testing.T) {
+	p := newEditPanel()
+	p.openFor("web", &config.ServiceConfig{Command: "yarn"}, "", "")
+	assert.Equal(t, config.MaxGroupLen, p.inputs[fieldGroup].CharLimit)
+}

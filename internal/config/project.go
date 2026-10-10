@@ -128,6 +128,16 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 	return out
 }
 
+// MaxGroupLen caps a group label, for every writer that validates one. Generous
+// — a project directory name can be long — but bounded: this is a label drawn on
+// one row of a pane at most 47 columns wide, so an unbounded one only makes a
+// config file unreadable.
+//
+// Shared so the MCP server's refusal and the TUI editor's input limit are the
+// same number. They were 128 and 512, which made the same field's limit depend
+// on who was writing it.
+const MaxGroupLen = 128
+
 // ProjectGroupName is the group a service in dir's devrun.yaml inherits when it
 // names none of its own: the file's `name:`, or the sanitised directory name
 // when it does not set one. The same value ToServiceConfigs would apply, for

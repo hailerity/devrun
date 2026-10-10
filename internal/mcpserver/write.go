@@ -93,7 +93,8 @@ func registerWriteTools(s *mcp.Server, h *handlers) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "add_service",
 		Title: "Add a service",
-		Description: "Define a new service in the project's devrun.yaml (or the global registry when the project has none). " +
+		Description: "Define a new service in the project's devrun.yaml (or the global registry when the project has none), " +
+			"optionally in a group — the section it is filed under in the dashboard. " +
 			"It does not start it — call start next. Refuses a name that already exists.",
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
 	}, h.addService)

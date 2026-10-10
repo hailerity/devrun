@@ -245,7 +245,7 @@ func TestAddService_RefusesAnUndrawableGroup(t *testing.T) {
 		{"newline", "back\nend", "single line"},
 		{"carriage return", "back\rend", "single line"},
 		{"control character", "back\x07end", "control character"},
-		{"too long", strings.Repeat("g", maxGroupLen+1), "over the"},
+		{"too long", strings.Repeat("g", config.MaxGroupLen+1), "over the"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out AddServiceOutput
@@ -270,7 +270,7 @@ func TestAddService_AcceptsAFreeFormGroup(t *testing.T) {
 	e.registry(map[string]string{}, nil)
 
 	for i, group := range []string{
-		strings.Repeat("g", maxGroupLen),
+		strings.Repeat("g", config.MaxGroupLen),
 		"back end / api",
 		"сервисы",
 	} {

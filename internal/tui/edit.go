@@ -85,6 +85,10 @@ func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, own, inherit
 		vals[fieldCWD] = cfg.CWD
 	}
 	p.inputs[fieldGroup].Placeholder = inherited
+	// The group's own cap, shared with the MCP server's refusal, rather than the
+	// 512 the other fields take: a command or a path is legitimately long, a
+	// label drawn on one row of a 47-column pane is not.
+	p.inputs[fieldGroup].CharLimit = config.MaxGroupLen
 	// What the daemon actually runs, kept so a save can tell a relabelling from
 	// a change that needs the process restarted.
 	p.origCommand = vals[fieldCommand]
