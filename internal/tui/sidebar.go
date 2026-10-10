@@ -20,15 +20,81 @@ type sidebarTarget struct {
 // allServicesLabel names the "no filter" choice in the target picker.
 const allServicesLabel = "All services"
 
+// rowKind distinguishes what a drawn line of the list is.
+type rowKind int
+
+const (
+	rowService rowKind = iota
+	rowHeader
+	// rowSpacer is the blank line above a group header. A real row, not a
+	// render-time flourish, because it occupies a line and the window has to
+	// agree with what is drawn: slipping a gap in at render time would make the
+	// pane emit more lines than the window counted, shifting every row below it
+	// and making the border's "rows a–b of N" a lie. (It would not overflow the
+	// border — paneFrame clips and pads to the inner height — it would just be
+	// quietly wrong.)
+	//
+	// The cursor steps over it: step() skips it, refilter nudges off one, and no
+	// other path selects one. So it is a line on screen and nothing else.
+	rowSpacer
+)
+
+// sidebarRow is one line of the list as drawn. The cursor indexes these rather
+// than s.services, because once the list is grouped a header is a line the
+// cursor can sit on — and one that has no service behind it. With a single
+// group there are no headers and the two indexes coincide, which is why
+// introducing this changed no behaviour.
+type sidebarRow struct {
+	kind  rowKind
+	group string // the header's group, or the group a service row sits under
+	svc   int    // index into s.services; -1 on a header
+}
+
+// cursorPos names where the cursor is in a way that survives the rows being
+// rebuilt: a service by name, or a group by its header.
+//
+// A header has to be nameable here, not just cursorable. Anchoring only
+// services meant every rebuild — and the dashboard rebuilds every two seconds —
+// restored the cursor to the last service it had seen, so folding a group and
+// waiting moved the highlight off the header and switched the log pane with it.
+//
+// `set` is carried explicitly rather than inferred from name != "", because ""
+// is a real group key: it is the no-group bucket. Inferring it left that one
+// header unanchorable and reintroduced the very drift described above, for the
+// one group whose key happens to be empty.
+type cursorPos struct {
+	kind rowKind // rowService or rowHeader
+	name string  // the service's name, or the group's key
+	set  bool
+}
+
+func (p cursorPos) empty() bool { return !p.set }
+
 type sidebar struct {
-	allServices []ipc.ServiceInfo // full scoped list: crashed first, then by Name
-	services    []ipc.ServiceInfo // allServices filtered to the active target
-	selected    int               // cursor within services
-	top         int               // first visible services row — the scroll window's offset
-	rows        int               // visible row count, set by the model's layout; 0 = not laid out yet
+	allServices []ipc.ServiceInfo // full scoped list, by Name
+	services    []ipc.ServiceInfo // allServices narrowed by the target filter and the name query
+	rows        []sidebarRow      // services as drawn: headers interleaved, collapsed groups omitted
+	selected    int               // cursor within rows
+	top         int               // first visible row — the scroll window's offset
+	paneRows    int               // visible row count, set by the model's layout; 0 = not laid out yet
 
 	targets      []sidebarTarget // configured targets, sorted; empty → nothing to filter by
 	filterTarget string          // name of the target filtering the list ("" = show all); set via the target picker
+	filterQuery  string          // name query narrowing the list ("" = no query); set via the `/` input
+
+	// anchor is where the cursor is, remembered so the highlight can be restored
+	// after the list is re-sorted, re-filtered or re-grouped. It is held here
+	// rather than re-read from the rows at restore time because a narrowing can
+	// empty the list: mid-query there is no row to read an anchor from, and
+	// clearing the query would then drop the reader on row 0 instead of back
+	// where they were.
+	anchor cursorPos
+
+	// collapsed holds the groups the reader has folded shut, by group name.
+	// Keyed by name rather than by index so it survives a poll re-grouping the
+	// list, and kept even for a group that is not currently listed — a query
+	// that hides a group should not forget that it was collapsed.
+	collapsed map[string]bool
 
 	// exposed names the services that may leave this machine. Held here, not
 	// read off ipc.ServiceInfo, because the allowlist belongs to the gateway
@@ -41,45 +107,115 @@ type sidebar struct {
 func (s *sidebar) update(svcs []ipc.ServiceInfo, targets []sidebarTarget) {
 	s.loaded = true
 
-	var curSvc string
-	if s.selected < len(s.services) {
-		curSvc = s.services[s.selected].Name
-	}
+	s.keepingCursor(func() {
+		// Plain alphabetical, with no state in the ordering: a row keeps its
+		// place for as long as it is configured, so the list a reader has
+		// learned does not reshuffle itself under the cursor every time a
+		// service changes state. A crash is announced by the row's ✖ and its
+		// colour, not by its position — which also leaves the order free to
+		// carry grouping later.
+		//
+		// Case-insensitively, so the order matches where a reader looks for a
+		// name — and matches the query, which is also case-insensitive. Byte
+		// order would file `Worker` under W-before-a, ahead of `api`, while
+		// `/work` still found it.
+		sorted := append([]ipc.ServiceInfo(nil), svcs...)
+		sort.Slice(sorted, func(i, j int) bool {
+			li, lj := strings.ToLower(sorted[i].Name), strings.ToLower(sorted[j].Name)
+			if li != lj {
+				return li < lj
+			}
+			// Names differing only in case still need a total order.
+			return sorted[i].Name < sorted[j].Name
+		})
+		s.allServices = sorted
+		s.targets = targets
 
-	// Crashed services lead the list so a failure is never below the fold;
-	// everything else stays alphabetical. The cursor follows its service by
-	// name (below), so a row that jumps to the top takes the highlight with it.
-	sorted := append([]ipc.ServiceInfo(nil), svcs...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		ci, cj := sorted[i].State == "crashed", sorted[j].State == "crashed"
-		if ci != cj {
-			return ci
+		// Keep the target filter across the poll; drop it only if that target
+		// is gone. The name query needs no such check — a query that matches
+		// nothing is still a query the user typed, and saying so (render's
+		// empty state) beats silently dropping it.
+		if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
+			s.filterTarget = ""
 		}
-		return sorted[i].Name < sorted[j].Name
 	})
-	s.allServices = sorted
-	s.targets = targets
-
-	// Keep the filter across the poll; drop it only if that target is gone.
-	if s.filterTarget != "" && !s.targetExists(s.filterTarget) {
-		s.filterTarget = ""
-	}
-
-	s.refilter()
-	s.selectServiceByName(curSvc)
 }
 
-// selectServiceByName moves the service cursor to the row named n, or to row 0
-// when there is no such row. Call after the filtered service list changes.
+// keepingCursor applies a change to what the list shows, then puts the
+// highlight back on the anchored service — by name, since the row index means
+// nothing once the list has been re-sorted or re-filtered. A service the change
+// filtered out keeps the anchor, so widening the list again returns the cursor
+// to it; the cursor sits at the top only while that service is not listed.
+func (s *sidebar) keepingCursor(change func()) {
+	s.recordAnchor()
+	change()
+	s.refilter()
+	s.moveTo(s.anchor)
+}
+
+// cursorAt is where the cursor currently is, or the zero cursorPos when it is
+// on neither a service nor a header — which only happens with an empty list.
+func (s *sidebar) cursorAt() cursorPos {
+	if svc := s.serviceAt(s.selected); svc != nil {
+		return cursorPos{kind: rowService, name: svc.Name, set: true}
+	}
+	if s.onGroupHeader() {
+		return cursorPos{kind: rowHeader, name: s.rows[s.selected].group, set: true}
+	}
+	return cursorPos{}
+}
+
+// recordAnchor remembers where the cursor is. It deliberately does nothing when
+// the cursor is on nothing — an empty list — because overwriting the anchor
+// there is how a no-match query used to lose the cursor for good.
+func (s *sidebar) recordAnchor() {
+	if p := s.cursorAt(); !p.empty() {
+		s.anchor = p
+	}
+}
+
+// moveTo puts the cursor back on a remembered position: the group's header when
+// it names one and that header is still drawn, else the service, else the first
+// service row.
+func (s *sidebar) moveTo(p cursorPos) {
+	switch {
+	case !p.set:
+		s.selected = s.firstServiceRow()
+		s.scrollToCursor()
+	case p.kind == rowHeader:
+		s.selectGroupHeader(p.name)
+	default:
+		s.selectServiceByName(p.name)
+	}
+}
+
+// selectServiceByName moves the cursor to the row showing the service named n,
+// or to the first service row when no row does. Call after the drawn rows
+// change.
 func (s *sidebar) selectServiceByName(n string) {
-	s.selected = 0
-	for i, svc := range s.services {
-		if svc.Name == n {
+	s.selected = s.firstServiceRow()
+	for i := range s.rows {
+		if svc := s.serviceAt(i); svc != nil && svc.Name == n {
 			s.selected = i
 			break
 		}
 	}
 	s.scrollToCursor()
+}
+
+// firstServiceRow is the first row with a service behind it, or 0 when there is
+// none. This is the fallback for "the service we wanted is not listed", and it
+// skips headers deliberately: row 0 of a grouped list is a header, so falling
+// back there would open the dashboard with the cursor on a row that selects
+// nothing — s/x/e/d inert and the log pane empty — which is how the list looks
+// on every first load once grouping is on.
+func (s *sidebar) firstServiceRow() int {
+	for i := range s.rows {
+		if s.serviceAt(i) != nil {
+			return i
+		}
+	}
+	return 0
 }
 
 // target returns the configured target called name, or nil.
@@ -95,48 +231,389 @@ func (s *sidebar) target(name string) *sidebarTarget {
 // targetExists reports whether a target with the given name is configured.
 func (s *sidebar) targetExists(name string) bool { return s.target(name) != nil }
 
-// refilter recomputes s.services from s.allServices and the active target
-// filter, then clamps the service cursor into range.
+// targetMembers is the member set of the active target filter, or nil when no
+// target is filtering — which callers read as "everything passes".
+func (s *sidebar) targetMembers() map[string]bool {
+	t := s.target(s.filterTarget)
+	if s.filterTarget == "" || t == nil {
+		return nil
+	}
+	members := make(map[string]bool, len(t.members))
+	for _, m := range t.members {
+		members[m] = true
+	}
+	return members
+}
+
+// inTargetCount is how many services the target filter alone would list: what
+// the list would hold if the query were cleared. The empty state needs it to
+// know which of the two narrowings to blame — a target that has already emptied
+// the list is not fixed by deleting the query.
+func (s *sidebar) inTargetCount() int {
+	members := s.targetMembers()
+	if members == nil {
+		return len(s.allServices)
+	}
+	n := 0
+	for _, svc := range s.allServices {
+		if members[svc.Name] {
+			n++
+		}
+	}
+	return n
+}
+
+// refilter recomputes s.services from s.allServices, the active target filter
+// and the active name query, then clamps the service cursor into range. The two
+// narrowings compose: a query searches within the filtering target rather than
+// escaping it, so what the frame's title says is on screen is what is on
+// screen.
 func (s *sidebar) refilter() {
-	if t := s.target(s.filterTarget); s.filterTarget == "" || t == nil {
+	members := s.targetMembers()
+	q := strings.ToLower(s.filterQuery)
+
+	if members == nil && q == "" {
 		s.services = s.allServices
 	} else {
-		members := make(map[string]bool, len(t.members))
-		for _, m := range t.members {
-			members[m] = true
-		}
 		out := make([]ipc.ServiceInfo, 0, len(s.allServices))
 		for _, svc := range s.allServices {
-			if members[svc.Name] {
-				out = append(out, svc)
+			if members != nil && !members[svc.Name] {
+				continue
 			}
+			if q != "" && !strings.Contains(strings.ToLower(svc.Name), q) {
+				continue
+			}
+			out = append(out, svc)
 		}
 		s.services = out
 	}
-	if s.selected >= len(s.services) {
-		s.selected = max(0, len(s.services)-1)
+	s.rebuildRows()
+	if s.selected >= len(s.rows) {
+		s.selected = max(0, len(s.rows)-1)
 	}
+	// The cursor can be indexing a blank line by the time we get here — not from
+	// the clamp above, which can only land on the last row and a spacer is never
+	// last, but because the rows were rebuilt underneath an index that used to
+	// point at something else. Every path that moves the cursor deliberately
+	// avoids a spacer; this is the one that inherits a position.
+	//
+	// One row on, not back to the top of the list: a spacer is always
+	// immediately followed by its group's header, so selected+1 is in range and
+	// is a row the cursor can sit on. Jumping to the first service would
+	// satisfy the same postcondition while moving the reader — and the log pane
+	// with them — somewhere they never asked to be, which matters the moment a
+	// caller stops re-anchoring after this.
+	if s.selected < len(s.rows) && s.rows[s.selected].kind == rowSpacer {
+		s.selected++
+	}
+}
+
+// ungroupedLabel heads the services that carry no group. Only the global
+// registry can produce them: a service in a devrun.yaml that names no group of
+// its own inherits the project's name, so it always has one.
+//
+// Parenthesised, and phrased as the absence of a group rather than as a name,
+// because a real group can be called anything — including "ungrouped", via
+// `devrun add --group ungrouped` or a project directory of that name. The
+// bucket's key is "" everywhere inside the sidebar, so the two are already
+// separate groups; this is what stops them drawing two identical headers that
+// fold independently with nothing to tell them apart.
+const ungroupedLabel = "(no group)"
+
+// groupLabel is how a group is drawn: its own name, or the label for the
+// no-group bucket.
+func groupLabel(group string) string {
+	if group == "" {
+		return ungroupedLabel
+	}
+	return group
+}
+
+// rebuildRows lays s.services out as drawn lines, one group at a time. With a
+// single distinct group there is nothing to tell the reader, so no header is
+// drawn and the rows are simply the services — the list looks exactly as it did
+// before grouping existed. A header only earns its line when it is dividing
+// something.
+//
+// Services arrive sorted by name and that order is kept within each group, so a
+// service's place is still predictable; only the grouping moves it.
+func (s *sidebar) rebuildRows() {
+	groups := s.groupOrder()
+	// Services, plus a header for each group and a gap between them. The old
+	// capacity counted only the services, so a grouped list reallocated on
+	// every poll.
+	s.rows = make([]sidebarRow, 0, len(s.services)+2*len(groups))
+
+	if len(groups) < 2 {
+		for i := range s.services {
+			s.rows = append(s.rows, sidebarRow{kind: rowService, svc: i})
+		}
+		return
+	}
+
+	for gi, g := range groups {
+		// A blank line above each header but the first: the headers were hard
+		// to pick out of the list because nothing separated a group's last
+		// service from the next group's label. Not above the first one, where
+		// it would only waste the top row of the pane and read as a gap the
+		// list had failed to fill.
+		//
+		// gi and si rather than two i's: they index different things, and the
+		// gap test reading a service index instead of a group index would still
+		// compile if this append were ever moved below the inner loop.
+		if gi > 0 {
+			s.rows = append(s.rows, sidebarRow{kind: rowSpacer, group: g, svc: -1})
+		}
+		s.rows = append(s.rows, sidebarRow{kind: rowHeader, group: g, svc: -1})
+		if s.isCollapsed(g) {
+			continue
+		}
+		for si := range s.services {
+			if groupOf(s.services[si]) == g {
+				s.rows = append(s.rows, sidebarRow{kind: rowService, group: g, svc: si})
+			}
+		}
+	}
+}
+
+// isCollapsed reports whether a group is folded shut *right now*.
+//
+// An active name query suspends every collapse. A reader who types a query is
+// asking to be shown what matches, and a match hidden inside a folded group
+// would make the filter a liar. The collapsed set is left untouched while this
+// is in force, so clearing the query folds the groups back exactly as they
+// were; toggleCollapse refuses meanwhile, so there is no hidden state to come
+// back to.
+//
+// The target filter deliberately does *not* suspend folds, and the asymmetry is
+// the point: a query is an active gesture — you type it, watch the list narrow,
+// and clear it — whereas a target is a mode you set once and work inside, like
+// a fold itself. Suspending folds for a target would mean a reader could never
+// fold a group while working in one. The cost is the cost of folding generally:
+// a group's members are counted by its header and by the border's "N/M up"
+// while having no row on screen. That is true with or without a target, and is
+// the accepted meaning of a fold.
+func (s *sidebar) isCollapsed(group string) bool {
+	if s.filterQuery != "" {
+		return false
+	}
+	return s.collapsed[group]
+}
+
+// hasHeaders reports whether the drawn list is sectioned, i.e. whether a row
+// count and a service count can differ.
+func (s *sidebar) hasHeaders() bool {
+	for i := range s.rows {
+		if s.rows[i].kind == rowHeader {
+			return true
+		}
+	}
+	return false
+}
+
+// revealGroup unfolds the named group, so a service that has just moved into it
+// is on screen rather than hidden behind a fold the reader set earlier.
+//
+// Through keepingCursor, not a bare refilter: unfolding inserts rows, s.selected
+// is a row index, and renumbering it without re-anchoring moves the cursor —
+// which the next poll then commits as the anchor. Doing that here would have
+// reintroduced the drift this function exists to prevent, one layer down.
+//
+// isCollapsed, not s.collapsed: a query suspends every fold, so there is nothing
+// hidden to reveal, and deleting the entry would silently unfold a group the
+// reader had folded once the query cleared.
+func (s *sidebar) revealGroup(group string) {
+	if !s.isCollapsed(group) {
+		return
+	}
+	s.keepingCursor(func() { delete(s.collapsed, group) })
+}
+
+// onGroupHeader reports whether the cursor is on a group header — a row with no
+// service behind it, where the keys that act on a service have nothing to do.
+func (s *sidebar) onGroupHeader() bool {
+	return s.selected < len(s.rows) && s.rows[s.selected].kind == rowHeader
+}
+
+// toggleCollapse folds or unfolds the group under the cursor and leaves the
+// cursor on its header, which is the row the reader pressed the key on and the
+// row they need to press it again.
+//
+// A no-op on a service row: collapsing the group a service belongs to would
+// move the cursor off the row the reader was looking at, and put it on a header
+// they did not aim at.
+func (s *sidebar) toggleCollapse() bool {
+	if !s.onGroupHeader() {
+		return false
+	}
+	// A query suspends every fold, so a toggle under one could only change
+	// state the reader cannot see — arming a fold that springs when the query
+	// clears, or disarming one they deliberately set. Refusing keeps the
+	// promise that the collapsed set is untouched while suspended; the caller
+	// says why.
+	if s.filterQuery != "" {
+		return false
+	}
+	g := s.rows[s.selected].group
+	if s.collapsed == nil {
+		s.collapsed = map[string]bool{}
+	}
+	s.collapsed[g] = !s.collapsed[g]
+	s.refilter()
+	s.selectGroupHeader(g)
+	if !s.collapsed[g] {
+		s.revealUnder(s.selected)
+	}
+	// No need to set the anchor here: every rebuild goes through keepingCursor,
+	// whose recordAnchor reads the cursor first and so picks this header up by
+	// itself. That is what makes the fold survive the two-second poll.
+	return true
+}
+
+// revealUnder scrolls so the rows beneath `row` are on screen, not just `row`
+// itself.
+//
+// scrollToCursor keeps the cursor visible and nothing more, and after an unfold
+// the cursor is on the header — which was already visible, so it moved nothing.
+// Unfolding a group whose header sat at the bottom of the window redrew an
+// identical pane with the glyph flipped, revealing none of the services it had
+// just opened. A tree scrolls to show what it opens.
+//
+// Scrolls the least it can, and never past the header: losing the row you
+// pressed the key on would be its own surprise.
+func (s *sidebar) revealUnder(row int) {
+	if s.paneRows <= 0 || row+1 >= len(s.rows) {
+		return
+	}
+	// The group's body is the run of service rows under its header — scanned
+	// for exactly that, rather than for "anything that is not a header".
+	// A blank line sits between a group's last service and the next header, so
+	// the looser test ran one row too far and aimed the scroll at a line with
+	// nothing on it, pushing a real row off the top to reveal it.
+	last := row
+	for last+1 < len(s.rows) && s.rows[last+1].kind == rowService {
+		last++
+	}
+	// No early return for a header with nothing under it: last == row then, and
+	// everything below simply keeps that header visible, which is the right
+	// answer anyway.
+	// The furthest row worth bringing into view: the end of the body, or as
+	// much of it as the pane can hold below the header.
+	want := min(last, row+s.paneRows-1)
+	if want >= s.top+s.paneRows {
+		s.top = want - s.paneRows + 1
+	}
+	s.top = max(0, min(s.top, max(0, len(s.rows)-s.paneRows)))
+	s.top = min(s.top, row)
+}
+
+// selectGroupHeader puts the cursor on the named group's header. When that
+// header is no longer drawn — the group was filtered away, or the list dropped
+// to a single group and stopped having headers — it falls back to the first
+// service row, the same fallback a missing service gets, so the cursor never
+// parks somewhere that selects nothing.
+func (s *sidebar) selectGroupHeader(group string) {
+	for i := range s.rows {
+		if s.rows[i].kind == rowHeader && s.rows[i].group == group {
+			s.selected = i
+			s.scrollToCursor()
+			return
+		}
+	}
+	s.selected = s.firstServiceRow()
+	s.scrollToCursor()
+}
+
+// groupOf is a service's group key: its Group verbatim, so the no-group bucket
+// is "" and cannot collide with a real group of any name.
+func groupOf(svc ipc.ServiceInfo) string { return svc.Group }
+
+// groupOrder lists the distinct group keys among the listed services,
+// alphabetical, with the no-group bucket last. Last because it is the absence
+// of an answer: a reader scanning for a named group should not have to pass a
+// pile of unlabelled services to reach it.
+func (s *sidebar) groupOrder() []string {
+	seen := make(map[string]bool, len(s.services))
+	var named []string
+	ungrouped := false
+	for _, svc := range s.services {
+		g := groupOf(svc)
+		if seen[g] {
+			continue
+		}
+		seen[g] = true
+		if g == "" {
+			ungrouped = true
+			continue
+		}
+		named = append(named, g)
+	}
+	sort.Slice(named, func(i, j int) bool {
+		li, lj := strings.ToLower(named[i]), strings.ToLower(named[j])
+		if li != lj {
+			return li < lj
+		}
+		return named[i] < named[j]
+	})
+	if ungrouped {
+		named = append(named, "")
+	}
+	return named
+}
+
+// serviceAt returns the service a row points at, or nil for a header.
+func (s *sidebar) serviceAt(row int) *ipc.ServiceInfo {
+	if row < 0 || row >= len(s.rows) {
+		return nil
+	}
+	r := s.rows[row]
+	if r.kind != rowService || r.svc < 0 || r.svc >= len(s.services) {
+		return nil
+	}
+	return &s.services[r.svc]
 }
 
 // setFilter makes the target called name the service filter ("" or an unknown
 // name clears it), keeping the highlight on the same service if it survived.
 func (s *sidebar) setFilter(name string) {
-	var curSvc string
-	if s.selected < len(s.services) {
-		curSvc = s.services[s.selected].Name
-	}
-	if !s.targetExists(name) {
-		name = ""
-	}
-	s.filterTarget = name
+	s.keepingCursor(func() {
+		if !s.targetExists(name) {
+			name = ""
+		}
+		s.filterTarget = name
+	})
+}
+
+// cancelQuery undoes an abandoned `/` session: the query the input opened on
+// goes back, and so does the cursor. Both are needed for the footer's "cancel"
+// to be honest — while the query was in force the narrowing will have forced
+// the cursor onto whichever row survived it, and restoring only the query
+// leaves the highlight (and the log pane behind it) on that row rather than on
+// the service the reader started from.
+//
+// Deliberately not keepingCursor: that records the cursor as it is now, which
+// is the forced row this is undoing.
+func (s *sidebar) cancelQuery(query string, at cursorPos) {
+	s.filterQuery = query
 	s.refilter()
-	s.selectServiceByName(curSvc)
+	if !at.empty() {
+		s.anchor = at
+	}
+	s.moveTo(s.anchor)
+}
+
+// setQuery narrows the list to the services whose name contains q, ignoring
+// case; "" clears it. Matching is a plain substring and deliberately not fuzzy:
+// a list you are scanning has to stay predictable, and "api" pulling in
+// "a-public-interface" is the opposite of that.
+func (s *sidebar) setQuery(q string) {
+	s.keepingCursor(func() { s.filterQuery = q })
 }
 
 // setRows tells the sidebar how many rows its pane can show, and re-anchors the
 // scroll window on the cursor.
 func (s *sidebar) setRows(n int) {
-	s.rows = n
+	s.paneRows = n
 	s.scrollToCursor()
 }
 
@@ -144,42 +621,50 @@ func (s *sidebar) setRows(n int) {
 // and never leaves blank rows below the list when there is more above. Called
 // after anything that moves the cursor or changes the list.
 func (s *sidebar) scrollToCursor() {
-	if s.rows <= 0 {
+	if s.paneRows <= 0 {
 		s.top = 0 // not laid out yet: render() shows everything
 		return
 	}
 	if s.selected < s.top {
 		s.top = s.selected
 	}
-	if s.selected >= s.top+s.rows {
-		s.top = s.selected - s.rows + 1
+	if s.selected >= s.top+s.paneRows {
+		s.top = s.selected - s.paneRows + 1
 	}
-	s.top = max(0, min(s.top, len(s.services)-s.rows))
+	s.top = max(0, min(s.top, len(s.rows)-s.paneRows))
 }
 
-// moveDown / moveUp walk the (filtered) service list, wrapping at the ends.
+// moveDown / moveUp walk the drawn rows, headers included, wrapping at the ends
+// and stepping over the blank lines between groups — a cursor you cannot see is
+// a cursor that has gone missing.
 
-func (s *sidebar) moveDown() {
-	if len(s.services) == 0 {
+func (s *sidebar) moveDown() { s.step(1) }
+func (s *sidebar) moveUp()   { s.step(-1) }
+
+// step moves the cursor d rows, wrapping, and keeps going while it lands on a
+// spacer. Bounded by the row count: a spacer only ever precedes a header, so
+// there is always a non-spacer to reach, and the bound makes that an assertion
+// rather than an assumption.
+func (s *sidebar) step(d int) {
+	n := len(s.rows)
+	if n == 0 {
 		return
 	}
-	s.selected = (s.selected + 1) % len(s.services)
+	for i := 0; i < n; i++ {
+		s.selected = (s.selected + d + n) % n
+		if s.rows[s.selected].kind != rowSpacer {
+			break
+		}
+	}
 	s.scrollToCursor()
 }
 
-func (s *sidebar) moveUp() {
-	if len(s.services) == 0 {
-		return
-	}
-	s.selected = (s.selected - 1 + len(s.services)) % len(s.services)
-	s.scrollToCursor()
-}
-
+// selectedService is the service under the cursor, or nil when the cursor is on
+// a group header or the list is empty. Every caller already had to handle nil
+// for the empty list, which is why headers became cursorable without a hunt
+// through the key handlers.
 func (s *sidebar) selectedService() *ipc.ServiceInfo {
-	if len(s.services) == 0 {
-		return nil
-	}
-	return &s.services[s.selected]
+	return s.serviceAt(s.selected)
 }
 
 // stateLabel returns the short status token for a service: its port when
@@ -269,16 +754,48 @@ func stateDot(state string) string {
 	return lipgloss.NewStyle().Foreground(fg).Render(glyph)
 }
 
-// frame is the sidebar's border: the title names the list and any target
-// filtering it — so the reason a service is missing is always on screen — and
-// the bottom edge counts how many of the listed services are up.
-func (s *sidebar) frame(focused bool) paneFrame {
-	title := styleMuted.Render("SERVICES")
+// frame is the sidebar's border: the title names the list and anything
+// narrowing it — the target, then the name query — so the reason a service is
+// missing is always on screen, and the bottom edge counts how many of the
+// listed services are up.
+func (s *sidebar) frame(focused bool, width int) paneFrame {
+	const label = "SERVICES"
+	title := styleMuted.Render(label)
 	if focused {
-		title = styleAccent.Bold(true).Render("SERVICES")
+		title = styleAccent.Bold(true).Render(label)
 	}
-	if s.filterTarget != "" {
-		title += styleMuted.Render(" · ") + styleAccent.Render(s.filterTarget)
+
+	// Both narrowings want a chip here, and at the minimum pane width (31
+	// columns) there is not room for both. edge() does fit an over-long title,
+	// with an ellipsis — but it cuts from the tail, which eats the query chip
+	// whole and leaves a title naming only the target. Fitting here instead
+	// keeps the chip that matters and shortens it in the middle, so both ends
+	// of the query stay readable.
+	chip := func(s string) string { return styleMuted.Render(" · ") + styleAccent.Render(s) }
+	const sep = 3 // " · "
+	room := titleRoom(width) - lipgloss.Width(label)
+
+	target := s.filterTarget
+	// The query carries its "/" so it reads as the query it is rather than as a
+	// second target name.
+	query := ""
+	if s.filterQuery != "" {
+		query = "/" + s.filterQuery
+	}
+	// The target gives way first: the picker can always show it again, while
+	// the query is the one the reader just typed and is about to undo.
+	if target != "" && query != "" && 2*sep+lipgloss.Width(target)+lipgloss.Width(query) > room {
+		target = ""
+	}
+	// Each chip is fitted, not only the query: a target name comes from user
+	// config and can be long enough to overrun on its own.
+	if target != "" {
+		target = truncateName(target, max(1, room-sep))
+		title += chip(target)
+		room -= sep + lipgloss.Width(target)
+	}
+	if query != "" {
+		title += chip(truncateName(query, max(1, room-sep)))
 	}
 	f := paneFrame{title: title, focused: focused}
 	if len(s.services) > 0 {
@@ -290,9 +807,19 @@ func (s *sidebar) frame(focused bool) paneFrame {
 		}
 		f.footLeft = styleMuted.Render(fmt.Sprintf("%d/%d up", up, len(s.services)))
 		// Say so when the list is windowed — otherwise rows above or below the
-		// fold are invisible with nothing to hint they exist.
-		if first, last := s.window(); last-first < len(s.services) {
-			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.services)))
+		// fold are invisible with nothing to hint they exist. Counted in drawn
+		// rows, which is what is actually scrolling.
+		//
+		// Named "rows" only once headers exist, because then the total differs
+		// from the service count beside it and "1–9 of 9" next to "2/6 up"
+		// reads as two counts of the same thing. With no headers the two are
+		// the same number and the bare range is what it has always been.
+		if first, last := s.window(); last-first < len(s.rows) {
+			unit := ""
+			if s.hasHeaders() {
+				unit = "rows "
+			}
+			f.footRight = styleMuted.Render(fmt.Sprintf("%s%d–%d of %d", unit, first+1, last, len(s.rows)))
 		}
 	}
 	return f
@@ -306,25 +833,158 @@ func (s *sidebar) render(width int) string {
 		return styleMuted.Render(" Loading services…")
 	case len(s.allServices) == 0:
 		return styleMuted.Render(" No services — run devrun add <name>")
+	// Which of the two narrowings emptied the list, named: "nothing here" with
+	// no cause is the one empty state a reader cannot act on. The query is
+	// blamed only when clearing it would actually bring rows back — a target
+	// that has already emptied the list on its own is the real cause, and
+	// pointing at the query would send the reader to fix the wrong thing. The
+	// query is fitted here rather than left to the pane's own truncation, which
+	// cuts from the tail and would stop the sentence mid-query.
+	case len(s.services) == 0 && s.filterQuery != "" && s.inTargetCount() > 0:
+		const lead = " no match for /"
+		return styleMuted.Render(lead + truncateName(s.filterQuery, max(1, width-lipgloss.Width(lead))))
 	case len(s.services) == 0:
 		return styleMuted.Render(" (no services in target)")
 	}
 	first, last := s.window()
-	rows := make([]string, 0, last-first)
+	out := make([]string, 0, last-first)
 	for i := first; i < last; i++ {
-		svc := s.services[i]
-		rows = append(rows, serviceRow(width, svc, i == s.selected, s.exposed[svc.Name]))
+		if svc := s.serviceAt(i); svc != nil {
+			out = append(out, serviceRow(width, *svc, i == s.selected, s.exposed[svc.Name]))
+			continue
+		}
+		if s.rows[i].kind == rowSpacer {
+			// Spaces, not "": the pane pads a short line anyway, but an
+			// explicit full-width row keeps every entry in `out` the same
+			// width, which is what the join relies on.
+			//
+			// Carries the selection background if the cursor is somehow on it.
+			// It should never be — step() skips spacers and refilter nudges off
+			// one — but those are the only two things holding that up, and the
+			// failure mode of an unstyled row is a cursor that is nowhere on
+			// screen. A highlighted blank line is a strange sight; an invisible
+			// cursor is an unusable list.
+			blank := strings.Repeat(" ", max(0, width))
+			if i == s.selected {
+				blank = lipgloss.NewStyle().Background(colorSelSidebar).Render(blank)
+			}
+			out = append(out, blank)
+			continue
+		}
+		g := s.rows[i].group
+		up, total := s.groupCount(g)
+		out = append(out, groupRow(width, groupLabel(g), up, total, i == s.selected, s.isCollapsed(g)))
 	}
-	return strings.Join(rows, "\n")
+	return strings.Join(out, "\n")
 }
 
-// window returns the half-open range of service rows currently visible.
-func (s *sidebar) window() (first, last int) {
-	if s.rows <= 0 {
-		return 0, len(s.services)
+// groupRowChrome is what a group header spends on everything but its name: the
+// margin, the fold glyph, the gaps, and the widest plausible count. It lets
+// sidebarWidth ask for a pane that fits the header without duplicating
+// groupRow's layout.
+const groupRowChrome = 3 + 1 + 7 // " ▾" + " " + name + " " + "999/999"
+
+// groupLabelWidths is the display width of every group label among *all*
+// scoped services, filtered or not — what sidebarWidth needs to size the pane
+// without it twitching as a query narrows the list.
+func (s *sidebar) groupLabelWidths() []int {
+	seen := make(map[string]bool, len(s.allServices))
+	var out []int
+	for _, svc := range s.allServices {
+		g := groupOf(svc)
+		if seen[g] {
+			continue
+		}
+		seen[g] = true
+		out = append(out, lipgloss.Width(groupLabel(g)))
 	}
-	first = max(0, min(s.top, len(s.services)))
-	return first, min(len(s.services), first+s.rows)
+	return out
+}
+
+// groupCount is how many of a group's listed services are running, and how many
+// there are. Counted over s.services, so it describes the group as filtered —
+// the header cannot claim members a query has hidden.
+func (s *sidebar) groupCount(group string) (up, total int) {
+	for _, svc := range s.services {
+		if groupOf(svc) != group {
+			continue
+		}
+		total++
+		if svc.State == "running" {
+			up++
+		}
+	}
+	return up, total
+}
+
+// groupRow renders a group header: "▾ backend              2/3", exactly width
+// columns wide. The running count is the whole of what the header says about
+// its members, and it is the only thing on screen about a group that is
+// collapsed — a service that is down inside one is not otherwise visible.
+func groupRow(width int, group string, up, total int, selected, collapsed bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = base.Background(colorSelSidebar)
+	}
+
+	count := fmt.Sprintf("%d/%d", up, total)
+	// A quieter grey than a service name, with the weight kept. It read as
+	// another service when the name took colorText — exactly a service name's
+	// colour, so bold made it look like an emphasised service rather than a
+	// label for the ones beneath it.
+	//
+	// Not colorMuted, which is what every other section label here uses (the
+	// help overlay's titles, an unfocused pane's own title, the target picker's
+	// heading) — it measures 2.72:1 on Nord, and a label a reader hunts for in
+	// a long list cannot be the dimmest thing on screen. colorGroup sits one
+	// step up. A hue would have been louder but every one is taken: accent
+	// means focus and also a running service's port on the rows just below, and
+	// green, red and amber are service states and the exposed mark.
+	//
+	// So the separation is grey against grey, weight against the state words,
+	// and above all the blank line.
+	//
+	// The state column a service row carries is left out entirely: a group has
+	// no state, only a count of the states under it.
+	nameW := max(1, width-3-1-lipgloss.Width(count))
+
+	row := base.Foreground(colorGroup).Render(" "+collapseGlyph(collapsed)) +
+		base.Foreground(colorGroup).Bold(true).Render(" "+padRight(truncateName(group, nameW), nameW)) +
+		base.Foreground(colorGroup).Render(" "+count)
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += base.Render(strings.Repeat(" ", pad))
+	}
+	return row
+}
+
+// collapseGlyph is the header's disclosure marker. Shape alone carries it, as
+// the state glyphs do, so it survives --no-color.
+func collapseGlyph(collapsed bool) string {
+	if collapsed {
+		return "▸"
+	}
+	return "▾"
+}
+
+// window returns the half-open range of drawn rows currently visible.
+func (s *sidebar) window() (first, last int) {
+	if s.paneRows <= 0 {
+		return 0, len(s.rows)
+	}
+	first = max(0, min(s.top, len(s.rows)))
+	// Never start on a blank line. scrollToCursor's clamp is kind-blind, so with
+	// the cursor near the end of the list the pinned top row can be a spacer —
+	// and on a short pane that spends a third of the rows on a separator
+	// separating nothing visible, which is the same waste a gap above the first
+	// group was rejected for. Pushed off the top, the blank lands at the bottom
+	// instead, where the pane's own padding makes it read as the end of the list.
+	//
+	// Cannot hide the cursor: the cursor is never on a spacer, so a cursor
+	// inside the rows being skipped would be a contradiction.
+	for first < len(s.rows) && s.rows[first].kind == rowSpacer {
+		first++
+	}
+	return first, min(len(s.rows), first+s.paneRows)
 }
 
 // Column widths of a service row: " ● name  ▲  :8080   2.1%".

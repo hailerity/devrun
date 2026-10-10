@@ -132,7 +132,7 @@ func TestSidebar_EmptyStateAfterFirstPoll(t *testing.T) {
 
 func intp(n int) *int { return &n }
 
-func TestSidebar_CrashedSortsFirst(t *testing.T) {
+func TestSidebar_StateDoesNotAffectOrder(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{
 		{Name: "api", State: "running"},
@@ -140,20 +140,34 @@ func TestSidebar_CrashedSortsFirst(t *testing.T) {
 		{Name: "chat", State: "crashed"},
 		{Name: "db", State: "stopped"},
 	}, nil)
-	assert.Equal(t, []string{"chat", "web", "api", "db"}, svcNames(sb),
-		"crashed services lead, alphabetical within each group")
+	assert.Equal(t, []string{"api", "chat", "db", "web"}, svcNames(sb),
+		"plain alphabetical: a crashed service does not jump the queue")
 }
 
-// A service that crashes jumps to the top of the list; the highlight must go
-// with it rather than stay on whatever row now holds its old index.
-func TestSidebar_CursorFollowsServiceThatCrashes(t *testing.T) {
+// A service that crashes keeps its row, so the highlight on a neighbour stays
+// where the reader left it rather than being shoved down by a reshuffle.
+func TestSidebar_CrashKeepsEveryRowInPlace(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "running"}}, nil)
 	sb.selected = 1 // "web"
 
-	sb.update([]ipc.ServiceInfo{{Name: "api", State: "running"}, {Name: "web", State: "crashed"}}, nil)
+	sb.update([]ipc.ServiceInfo{{Name: "api", State: "crashed"}, {Name: "web", State: "running"}}, nil)
+	assert.Equal(t, []string{"api", "web"}, svcNames(sb))
 	assert.Equal(t, "web", sb.selectedService().Name)
-	assert.Equal(t, 0, sb.selected)
+	assert.Equal(t, 1, sb.selected)
+}
+
+// The cursor is anchored to its service by name, not by index: a service
+// appearing above it must take the highlight along rather than leave it on
+// whatever row now holds the old index.
+func TestSidebar_CursorFollowsServicePastAnInsertion(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{{Name: "db"}, {Name: "web"}}, nil)
+	sb.selected = 1 // "web"
+
+	sb.update([]ipc.ServiceInfo{{Name: "api"}, {Name: "db"}, {Name: "web"}}, nil)
+	assert.Equal(t, "web", sb.selectedService().Name)
+	assert.Equal(t, 2, sb.selected)
 }
 
 func TestServiceRow_ShowsPortStateAndCPU(t *testing.T) {
@@ -350,8 +364,8 @@ func TestSidebar_FooterSaysWhenTheListIsWindowed(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(manyServices(40), nil)
 	sb.setRows(10)
-	assert.Contains(t, plain(sb.frame(true).footRight), "1–10 of 40")
+	assert.Contains(t, plain(sb.frame(true, 40).footRight), "1–10 of 40")
 
 	sb.update(manyServices(5), nil)
-	assert.Empty(t, sb.frame(true).footRight, "nothing to say when every row fits")
+	assert.Empty(t, sb.frame(true, 40).footRight, "nothing to say when every row fits")
 }

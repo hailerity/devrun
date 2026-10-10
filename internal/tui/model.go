@@ -43,6 +43,17 @@ const (
 	focusMain
 )
 
+// searchScope says what the footer's `/` input is narrowing. One input serves
+// both jobs — the query line, its truncation and its two keys are the same
+// either way — and this is what tells the Enter and Esc handlers which list
+// they are committing to.
+type searchScope int
+
+const (
+	scopeLog searchScope = iota
+	scopeServices
+)
+
 // --- Message types ---
 
 type daemonTickMsg struct{}
@@ -77,10 +88,13 @@ type model struct {
 	pickerC     targetPicker
 	helpC       helpPanel
 
-	searching bool            // the footer's search input has the keyboard
-	searchC   textinput.Model // the `/` input; its value is committed to logsC.sb on Enter
-	headerC   headerBar
-	footerC   footerBar
+	searching    bool            // the footer's search input has the keyboard
+	searchScope  searchScope     // which list that input is narrowing
+	searchPrev   string          // the query the input opened on, restored if it is cancelled
+	searchAnchor cursorPos       // where the cursor was then, restored with it
+	searchC      textinput.Model // the `/` input; its value drives logsC.sb or sidebarC per searchScope
+	headerC      headerBar
+	footerC      footerBar
 
 	socketPath string
 	registry   *config.Registry
@@ -243,6 +257,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modalOpen() {
 			return m, nil
 		}
+		// While `/` is narrowing the service list it has to be a mouse trap as
+		// well as a keyboard one: a click would otherwise move focus to the log
+		// pane while the input still held the keyboard — accent border on one
+		// pane, every keystroke narrowing the other, Enter committing a query
+		// the reader had visually left behind.
+		//
+		// A log search is the opposite case. Focus is already on the main pane
+		// and the log is the thing being narrowed, so scrolling it to inspect
+		// the live-highlighted matches is the obvious thing to do mid-search,
+		// and it worked before this key grew a second job. Those events pass.
+		//
+		// Release always passes, whatever the scope: pressing `/` with the
+		// button held would otherwise leave scrollBuffer.mouseDown set, and the
+		// next bare motion over the log would drag a selection with no button
+		// down at all.
+		if m.searching && m.searchScope == scopeServices &&
+			msg.Action != tea.MouseActionRelease {
+			return m, nil
+		}
 		// In the narrow layout the sidebar may be the pane on screen; the log
 		// pane is not drawn, so there is nothing under the pointer to select.
 		if m.narrow() && m.focus == focusSidebar {
@@ -341,6 +374,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// the one being driven. Ignored mid-selection.
 	case key.Matches(msg, keys.Enter):
 		switch {
+		// On a group header there is no service to show, so Enter folds the
+		// group as it would in a file tree. Without this it toggled to a
+		// DETAILS pane with nothing in it — and in the narrow layout opened
+		// that empty pane full-screen.
+		case m.focus == focusSidebar && m.sidebarC.onGroupHeader():
+			m.foldUnderCursor()
 		case m.narrow() && m.focus == focusSidebar:
 			// One pane at a time: the view Enter would toggle is not on
 			// screen, so Enter opens the selected service instead.
@@ -401,15 +440,45 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logsC.sb.enterVisual()
 		}
 
-	// / opens the search input. It always lands in the log pane — searching
-	// from the sidebar or from DETAILS means "search this service's log".
+	// / narrows whatever the focused pane is showing: the service list from the
+	// sidebar, the selected service's log from the main pane. Same key, and the
+	// same input — the list being narrowed is the one under the reader's eyes,
+	// so there is nothing to choose between.
+	case m.focus == focusSidebar && key.Matches(msg, keys.Filter):
+		// Inert only when no query could ever produce a row — an empty config,
+		// or a target filter that has emptied the list on its own. Deliberately
+		// not "the list is empty": that is also true of a query that matched
+		// nothing, and refusing there would make a typo'd filter impossible to
+		// amend, which is the one thing prefilling the input is for.
+		// inTargetCount covers both cases, since it falls back to allServices
+		// when no target is filtering.
+		if m.sidebarC.inTargetCount() == 0 {
+			break
+		}
+		m.searching = true
+		m.searchScope = scopeServices
+		// `/` prefills with the live query so an existing filter can be
+		// amended, which only works if backing out puts the old one back —
+		// along with the cursor, which the narrowing is about to move.
+		// cursorAt, not selectedService: the cursor may be on a group header,
+		// and taking only the service name would leave the restore falling
+		// back to a stale anchor in some other group.
+		m.searchPrev = m.sidebarC.filterQuery
+		m.searchAnchor = m.sidebarC.cursorAt()
+		m.searchC.SetValue(m.sidebarC.filterQuery)
+		m.searchC.CursorEnd()
+		m.searchC.Focus()
+		return m, textinput.Blink
+
+	// From DETAILS as well as from LOGS: searching the main pane means "search
+	// this service's log", so it switches to the tab that can show a match.
 	case key.Matches(msg, keys.Search):
 		if m.sidebarC.selectedService() == nil {
 			break
 		}
-		m.focus = focusMain
 		m.activeTab = tabLogs
 		m.searching = true
+		m.searchScope = scopeLog
 		m.searchC.SetValue(m.logsC.sb.search.query)
 		m.searchC.CursorEnd()
 		m.searchC.Focus()
@@ -428,11 +497,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	// Esc backs out one level: it cancels an active visual selection first,
-	// then clears an active search, otherwise it collapses DETAILS back to LOGS.
+	// then clears whichever narrowing the focused pane is under, otherwise it
+	// collapses DETAILS back to LOGS.
 	case key.Matches(msg, keys.Escape):
 		switch {
 		case m.focus == focusMain && m.activeTab == tabLogs && m.logsC.sb.visualMode:
 			m.logsC.sb.exitVisual()
+		// The query, not the target filter: the target is a deliberate mode
+		// chosen from a picker, and Esc undoing it would be a surprise.
+		case m.focus == focusSidebar && m.sidebarC.filterQuery != "":
+			m.sidebarC.setQuery("")
+			m.updateLogFile()
 		case m.activeTab == tabLogs && m.logsC.sb.search.active():
 			m.logsC.sb.setQuery("")
 		case m.activeTab == tabDetails:
@@ -519,6 +594,12 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.pickerC.openAt(m.sidebarC.targets, m.sidebarC.filterTarget)
 
+	// Space folds the group under the cursor. Only a header answers it; on a
+	// service row it falls through to nothing, so the key is not a surprise
+	// anywhere else in the list.
+	case m.focus == focusSidebar && key.Matches(msg, keys.Collapse):
+		m.foldUnderCursor()
+
 	// e opens the editor for the highlighted service.
 	case key.Matches(msg, keys.Edit):
 		if m.onServiceRow() {
@@ -533,6 +614,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// foldUnderCursor folds the group under the cursor, or says why it will not.
+// `Space` and `↵` mean the same thing on a header, so they share this: a key
+// that silently does nothing is indistinguishable from a key that is broken,
+// and `↵` reached here by giving up its usual LOGS ⇄ DETAILS job.
+func (m *model) foldUnderCursor() {
+	switch {
+	case m.sidebarC.toggleCollapse():
+		m.updateLogFile()
+		m.relayout()
+	// Refused, not ignored: with a query in force every group is shown open, so
+	// a fold could only change state the reader cannot see.
+	case m.sidebarC.onGroupHeader() && m.sidebarC.filterQuery != "":
+		m.footerC.showToast("folding is suspended while /" + m.sidebarC.filterQuery + " is active")
+	}
 }
 
 // onServiceRow reports whether the sidebar has focus, a service is selected, and
@@ -550,10 +647,29 @@ func (m model) onServiceRow() bool {
 func (m model) runAllListed(verb string, forTarget func(string) tea.Cmd, forAll func() tea.Cmd) (tea.Model, tea.Cmd) {
 	scope := "all services"
 	var cmd tea.Cmd
-	if name := m.sidebarC.filterTarget; name != "" {
-		scope = "target " + name
-		cmd = forTarget(name)
-	} else {
+	switch {
+	// A name query narrows the list to a set the daemon has no name for, so the
+	// target request cannot carry it — it would act on the whole target. Go by
+	// name over exactly what is listed instead, even when a target is filtering
+	// too: `S` / `X` mean "everything listed", and the query is part of what is
+	// listed.
+	//
+	// This gives up what `target-stop` offers, which is that stopping a target
+	// leaves alone any member another running target still holds. That is the
+	// right guarantee for "stop this target" and the wrong one here: a reader
+	// who typed a query and pressed `X` named those services, so stopping a
+	// shared one is the request, not collateral. Worth knowing that `X` under a
+	// query can therefore take a service out from under another active target,
+	// where plain `X` would not — if that proves surprising in practice, the
+	// fix is to skip members held elsewhere and say so in the toast, which
+	// needs ipc's ActiveTargets plumbed through to the model.
+	case m.sidebarC.filterQuery != "":
+		scope = fmt.Sprintf("/%s (%d listed)", m.sidebarC.filterQuery, len(m.sidebarC.services))
+		cmd = forAll()
+	case m.sidebarC.filterTarget != "":
+		scope = "target " + m.sidebarC.filterTarget
+		cmd = forTarget(m.sidebarC.filterTarget)
+	default:
 		cmd = forAll()
 	}
 	if cmd == nil {
@@ -574,6 +690,9 @@ func (m model) modalOpen() bool {
 // matched live as it is typed — the border's match count updates — but the
 // cursor only moves on Enter, so abandoning a search with Esc costs nothing.
 func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.searchScope == scopeServices {
+		return m.handleServiceFilterKey(msg)
+	}
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
@@ -594,6 +713,50 @@ func (m model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.searchC, cmd = m.searchC.Update(msg)
 	m.logsC.sb.setQuery(m.searchC.Value())
+	return m, cmd
+}
+
+// handleServiceFilterKey routes a key to the `/` input while it is narrowing
+// the service list. The list itself is the preview — it re-filters on every
+// keystroke — so Enter has nothing to commit beyond handing the keyboard back,
+// and Esc drops the query the way it drops a log search. The query survives
+// Enter: it is the state the frame's title and the footer's "Esc clear" hint
+// then report.
+func (m model) handleServiceFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		// Cancel, as the footer says: the query the input opened on goes back,
+		// which is "" for a fresh filter and the old one when amending. (The
+		// log-search scope still clears outright — a long-standing contract
+		// with its own test, and not this change's to alter.)
+		m.searching = false
+		m.searchC.Blur()
+		m.sidebarC.cancelQuery(m.searchPrev, m.searchAnchor)
+		m.updateLogFile()
+		return m, nil
+	case tea.KeyEnter:
+		m.searching = false
+		m.searchC.Blur()
+		// Blame the query only when clearing it would bring rows back — the
+		// same test render's empty state applies. A poll can land while the
+		// input is open and take every service away (the daemon died, the
+		// config emptied), and "no service matches web" would then point the
+		// reader at their typing instead of at the real cause, which the pane
+		// behind the input is already naming.
+		if q := m.sidebarC.filterQuery; q != "" && len(m.sidebarC.services) == 0 &&
+			m.sidebarC.inTargetCount() > 0 {
+			m.footerC.showToast("no service matches " + q)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.searchC, cmd = m.searchC.Update(msg)
+	m.sidebarC.setQuery(m.searchC.Value())
+	// The narrowed list can hand the highlight to another service, and the log
+	// pane behind the input follows the highlight.
+	m.updateLogFile()
 	return m, cmd
 }
 
@@ -640,8 +803,21 @@ func (m model) openEditor() (tea.Model, tea.Cmd) {
 	if cfg == nil {
 		cfg = &config.ServiceConfig{Name: svc.Name}
 	}
-	m.editC.openFor(svc.Name, cfg)
+	// The service's own group comes from the file, not from cfg: cfg.Group has
+	// already had the project's name applied as a default, and no comparison
+	// here can tell that from a service deliberately pinned to the same name.
+	m.editC.openFor(svc.Name, cfg, config.StoredGroup(m.source, svc.Name), m.inheritedGroup())
 	return m, textinput.Blink
+}
+
+// inheritedGroup is the group a service in the active config falls back to when
+// it names none of its own: the project's name for a devrun.yaml, and nothing
+// for the global registry, which has no owner to inherit from.
+func (m model) inheritedGroup() string {
+	if !m.source.IsLocal() {
+		return ""
+	}
+	return config.ProjectGroupName(m.source.Dir)
 }
 
 // handleEditKey routes a key to the open edit modal: Esc cancels, Enter saves,
@@ -688,17 +864,23 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	oldName := m.editC.origName
-	name, command, cwd := m.editC.values()
+	name, command, cwd, group := m.editC.values()
 
-	if err := config.SaveServiceEdit(m.source, oldName, name, command, cwd); err != nil {
+	if err := config.SaveServiceEdit(m.source, oldName, name, command, cwd, group); err != nil {
 		m.editC.errMsg = err.Error()
 		return m, nil
 	}
-	wasRunning := m.serviceIsRunning(oldName)
-	m.applyEditToRegistry(oldName, name, command, cwd)
+	needsRestart := m.runtimeChanged() && m.serviceIsRunning(oldName)
+	m.applyEditToRegistry(oldName, name, command, cwd, group)
+	// A regroup can send the service into a folded section, where it would have
+	// no row at all: the cursor would fall back to an unrelated service and the
+	// log pane would follow it, with only a toast to explain where the service
+	// went. Unfolding the destination is the least surprising answer — the
+	// reader put it there.
+	m.sidebarC.revealGroup(m.registry.Services[name].Group)
 	m.editC.close()
 
-	if wasRunning {
+	if needsRestart {
 		// A running service keeps its old definition (and, on rename, its old
 		// name) until it is restarted — do that now so the edit takes effect.
 		m.footerC.showToast("restarting " + name)
@@ -709,6 +891,27 @@ func (m model) saveEditor() (tea.Model, tea.Cmd) {
 	}
 	m.footerC.showToast("saved " + name)
 	return m, m.pollDaemon()
+}
+
+// runtimeChanged reports whether the open edit changes anything the daemon
+// actually runs — the name (its identity and its log file), the command, or the
+// working directory. Only those are worth restarting a process for.
+//
+// The group is deliberately not among them: it is a label the sidebar sections
+// by and the daemon never reads, so relabelling a service must not kill a warm
+// dev server or a database to move it under another header.
+//
+// The cwd is compared in its *stored* form. The form shows a project service's
+// resolved absolute path while the file holds a relative one — empty at the
+// project root — so the field and the file disagree by construction, and
+// comparing the raw text read blanking the field as a change when it was a
+// no-op on disk.
+func (m model) runtimeChanged() bool {
+	name, command, cwd, _ := m.editC.values()
+	oldName, oldCommand, oldCWD := m.editC.originals()
+	return name != oldName ||
+		command != oldCommand ||
+		config.StoredCWD(m.source, cwd) != config.StoredCWD(m.source, oldCWD)
 }
 
 // serviceIsRunning reports whether the sidebar's last daemon view shows the
@@ -775,15 +978,21 @@ func (m model) doRestart() tea.Cmd {
 
 // applyEditToRegistry mirrors the just-persisted edit into the in-memory
 // registry so the sidebar reflects it before the next daemon poll. For a project
-// source the cwd is resolved to absolute against the project dir, matching what
+// source the cwd is resolved to absolute against the project dir, and an empty
+// group falls back to the project's name — both matching what
 // ProjectConfig.ToServiceConfigs would produce on reload (and what the daemon
-// needs on restart).
-func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
+// needs on restart). Without the group fallback, clearing the field would file
+// the service under "(no group)" here while a reload put it back under the
+// project's name.
+func (m *model) applyEditToRegistry(oldName, newName, command, cwd, group string) {
 	if m.registry == nil {
 		return
 	}
 	if m.source.IsLocal() {
 		cwd = resolveProjectCWD(m.source.Dir, cwd)
+		if group == "" {
+			group = config.ProjectGroupName(m.source.Dir)
+		}
 	}
 	cur := m.registry.Services[oldName]
 	if cur == nil {
@@ -793,6 +1002,7 @@ func (m *model) applyEditToRegistry(oldName, newName, command, cwd string) {
 	updated.Name = newName
 	updated.Command = command
 	updated.CWD = cwd
+	updated.Group = group
 	if newName != oldName {
 		delete(m.registry.Services, oldName)
 	}
@@ -1035,7 +1245,14 @@ func (m model) scopedServices(all []ipc.ServiceInfo) []ipc.ServiceInfo {
 		if !ok {
 			s = ipc.ServiceInfo{Name: name, State: string(config.StatusStopped)}
 		}
-		if cfg := m.registry.Services[name]; cfg != nil && cfg.Group != "" {
+		// The active config is the authority on a service's group, not the
+		// daemon's copy — which for a project service predates this view
+		// entirely, and for a global one can be whatever the registry said when
+		// the daemon last loaded it. Taken unconditionally, so clearing a group
+		// clears it on screen instead of leaving the daemon's stale value
+		// showing; a project service's empty group has already been resolved to
+		// the project's name by ToServiceConfigs.
+		if cfg := m.registry.Services[name]; cfg != nil {
 			s.Group = cfg.Group
 		}
 		out = append(out, s)
@@ -1101,6 +1318,23 @@ func (m model) sidebarWidth() int {
 	for _, svc := range m.sidebarC.allServices {
 		if n := lipgloss.Width(svc.Name) + 3 + 1 + rowStateW + 1 + rowCPUW + paneChrome; n > w {
 			w = n
+		}
+	}
+	// Group headers are rows too, and a project's name — which is every one of
+	// its services' group — is as likely to be long as a service name is. Sized
+	// from allServices, not the filtered list, so the pane does not resize
+	// while a query is being typed.
+	//
+	// Only when there is more than one group, because that is exactly when a
+	// header is drawn. A devrun.yaml whose services name no group of their own
+	// is a single group — they all inherit the project's name — which is the
+	// common shape, and reserving the room unconditionally took columns off the
+	// log pane for every one of those, for a row that never renders.
+	if widths := m.sidebarC.groupLabelWidths(); len(widths) > 1 {
+		for _, g := range widths {
+			if n := g + groupRowChrome + paneChrome; n > w {
+				w = n
+			}
 		}
 	}
 	w = min(w, sidebarMaxW)
@@ -1280,18 +1514,27 @@ func (m model) doStopTarget(name string) tea.Cmd {
 	}
 }
 
-// scopedServiceNames lists the names of every service in the sidebar's scoped
-// view (the unfiltered "All services" set), in the sidebar's sorted order.
-func (m model) scopedServiceNames() []string {
-	names := make([]string, len(m.sidebarC.allServices))
-	for i, s := range m.sidebarC.allServices {
+// listedServiceNames lists the services the sidebar's filters leave in scope —
+// after the target filter and the name query — in its sorted order. This is
+// what S / X act on, so it must be the narrowed set and not allServices.
+//
+// Folding is deliberately *not* a narrowing here, so a collapsed group's
+// services are still included. The two gestures mean different things: a query
+// or a target excludes services from what you are working on, while folding a
+// group only gets it out of the way on screen — and its header is still there,
+// still counting its members. Collapsing `backend` to make room and then
+// pressing `S` to start everything should start backend too; having it silently
+// skipped would be the surprise.
+func (m model) listedServiceNames() []string {
+	names := make([]string, len(m.sidebarC.services))
+	for i, s := range m.sidebarC.services {
 		names[i] = s.Name
 	}
 	return names
 }
 
-// doStartAll starts every scoped service — the action behind `S` with no target
-// filter, the TUI equivalent of `devrun start --all`. It
+// doStartAll starts every listed service — the action behind `S` when no target
+// alone decides the scope, the TUI equivalent of `devrun start --all`. It
 // dials once per service (the daemon serves one request per connection),
 // shipping each definition inline so a project service the daemon has not seen
 // still starts. A service already running is left alone; a member that fails
@@ -1300,7 +1543,7 @@ func (m model) doStartAll() tea.Cmd {
 	if m.socketPath == "" {
 		return nil
 	}
-	names := m.scopedServiceNames()
+	names := m.listedServiceNames()
 	if len(names) == 0 {
 		return nil
 	}
@@ -1323,15 +1566,15 @@ func (m model) doStartAll() tea.Cmd {
 	}
 }
 
-// doStopAll stops every scoped service — the action behind `X` with no target
-// filter, the TUI equivalent of `devrun stop --all`. Like
+// doStopAll stops every listed service — the action behind `X` when no target
+// alone decides the scope, the TUI equivalent of `devrun stop --all`. Like
 // doStartAll it dials once per service; a service already stopped is not an
 // error, and per-service failures are collected into one message.
 func (m model) doStopAll() tea.Cmd {
 	if m.socketPath == "" {
 		return nil
 	}
-	names := m.scopedServiceNames()
+	names := m.listedServiceNames()
 	if len(names) == 0 {
 		return nil
 	}
@@ -1419,7 +1662,7 @@ func (m model) View() string {
 	header := m.headerC.render(m.sourceLabel(), total, running, crashed, m.spinFrame, m.spinning, m.gateway, m.width)
 
 	// Body: two bordered panes side by side; the focused one takes the accent.
-	sideFrame := m.sidebarC.frame(m.focus == focusSidebar)
+	sideFrame := m.sidebarC.frame(m.focus == focusSidebar, sidebarW)
 	sideW, _ := sideFrame.innerSize(sidebarW, bodyH)
 	var body string
 	switch {
@@ -1453,18 +1696,21 @@ func (m model) View() string {
 	}
 
 	footer := m.footerC.render(footerCtx{
-		tab:          m.activeTab,
-		focus:        m.focus,
-		visual:       m.logsC.sb.visualMode,
-		onServiceRow: m.onServiceRow(),
-		editing:      m.editC.open || m.targetEditC.open,
-		confirming:   m.removeC.open,
-		picking:      m.pickerC.open,
-		helping:      m.helpC.open,
-		searching:    m.searching,
-		hasQuery:     m.logsC.sb.search.active(),
-		searchInput:  m.searchC.View(),
-		narrow:       m.narrow(),
+		tab:           m.activeTab,
+		focus:         m.focus,
+		visual:        m.logsC.sb.visualMode,
+		onServiceRow:  m.onServiceRow(),
+		onGroupHeader: m.focus == focusSidebar && m.sidebarC.onGroupHeader(),
+		editing:       m.editC.open || m.targetEditC.open,
+		confirming:    m.removeC.open,
+		picking:       m.pickerC.open,
+		helping:       m.helpC.open,
+		searching:     m.searching,
+		searchScope:   m.searchScope,
+		hasQuery:      m.logsC.sb.search.active(),
+		hasFilter:     m.sidebarC.filterQuery != "",
+		searchInput:   m.searchC.View(),
+		narrow:        m.narrow(),
 	}, m.width)
 
 	// The header and footer are full-width bars. A terminal has no half rows,

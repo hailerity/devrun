@@ -26,6 +26,8 @@ type keyMap struct {
 	StopAll  key.Binding
 	Help     key.Binding
 	Search   key.Binding
+	Filter   key.Binding
+	Collapse key.Binding
 	Next     key.Binding
 	Prev     key.Binding
 	Restart  key.Binding
@@ -57,7 +59,15 @@ var keys = keyMap{
 	StartAll: key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "start everything listed")),
 	StopAll:  key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "stop everything listed")),
 	Help:     key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "show this help")),
-	Search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
+	// Search and Filter are the same key doing the job of whichever pane has
+	// focus: narrow what is on screen. Two bindings rather than one so the help
+	// overlay can word each under the heading it belongs to; handleKey tries
+	// Filter first and only while the sidebar has focus.
+	Search: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search the log")),
+	Filter: key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter the list by name")),
+	// Space, as a file tree binds it. Only a group header answers it, so it
+	// stays free on every other row.
+	Collapse: key.NewBinding(key.WithKeys(" "), key.WithHelp("Space", "fold or unfold the group")),
 	Next:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "next match (down)")),
 	Prev:     key.NewBinding(key.WithKeys("N"), key.WithHelp("N", "previous match (up)")),
 	Restart:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart the selected service")),

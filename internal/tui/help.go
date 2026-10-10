@@ -19,15 +19,21 @@ type helpGroup struct {
 // helpGroups lays the keymap out for the overlay. It is built from the same
 // key.Binding values handleKey matches against, so a rebinding or a reworded
 // description shows up here without a second list to keep in step.
+//
+// The two columns are balanced on purpose, not grouped by theme alone: the
+// overlay has no scrolling and overlay() hard-clips it to the body height, so
+// its row count is a fixed budget and the taller column spends it. LOGS sits
+// under MOVE rather than under SERVICES to keep the columns near the same
+// height — TestHelp_ViewFitsASmallTerminal guards the total.
 func helpGroups() [][]helpGroup {
 	return [][]helpGroup{
 		{ // left column
 			{"MOVE", []key.Binding{keys.Up, keys.Down, keys.Tab, keys.Left, keys.Right, keys.Enter, keys.Top, keys.Bottom}},
-			{"OTHER", []key.Binding{keys.Escape, keys.Help, keys.Quit}},
+			{"LOGS", []key.Binding{keys.Search, keys.Next, keys.Prev, keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
 		},
 		{ // right column
-			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.Restart, keys.StartAll, keys.StopAll, keys.Expose, keys.Target, keys.Edit, keys.Remove}},
-			{"LOGS", []key.Binding{keys.Search, keys.Next, keys.Prev, keys.Follow, keys.Wrap, keys.Visual, keys.Copy}},
+			{"SERVICES", []key.Binding{keys.Start, keys.Stop, keys.Restart, keys.StartAll, keys.StopAll, keys.Expose, keys.Target, keys.Filter, keys.Collapse, keys.Edit, keys.Remove}},
+			{"OTHER", []key.Binding{keys.Escape, keys.Help, keys.Quit}},
 		},
 	}
 }

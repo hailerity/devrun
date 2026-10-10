@@ -7,16 +7,19 @@ import (
 	"strings"
 )
 
-// SaveServiceEdit changes an existing service's name, command, and working
-// directory, then persists the result to whichever config src points at: the
-// project devrun.yaml when src.IsLocal(), otherwise the global registry.
+// SaveServiceEdit changes an existing service's name, command, working
+// directory and group, then persists the result to whichever config src points
+// at: the project devrun.yaml when src.IsLocal(), otherwise the global registry.
 //
 // oldName identifies the service to edit. newName and command must be non-empty
 // (after trimming); newName may equal oldName but must not collide with a
 // different existing service. For a project file cwd is stored relative to
 // src.Dir (and dropped when it is the project root); for the global registry it
-// is stored as given. All other fields (group, env, desc) are preserved.
-func SaveServiceEdit(src Source, oldName, newName, command, cwd string) error {
+// is stored as given. An empty group is stored as empty — which for a project
+// service means it goes back to inheriting the project's name — so clearing the
+// field is a real edit, not a no-op. The remaining fields (env, desc, port) are
+// preserved.
+func SaveServiceEdit(src Source, oldName, newName, command, cwd, group string) error {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("name is empty")
@@ -24,13 +27,29 @@ func SaveServiceEdit(src Source, oldName, newName, command, cwd string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("command is empty")
 	}
+	group = strings.TrimSpace(group)
 	if src.IsLocal() {
-		return editProjectService(src.Dir, oldName, newName, command, cwd)
+		return editProjectService(src.Dir, oldName, newName, command, cwd, group)
 	}
-	return editRegistryService(RegistryPath(), oldName, newName, command, cwd)
+	return editRegistryService(RegistryPath(), oldName, newName, command, cwd, group)
 }
 
-func editRegistryService(path, oldName, newName, command, cwd string) error {
+// StoredCWD is the value SaveServiceEdit would persist for cwd in the config src
+// points at: relative to the project dir for a devrun.yaml, and empty when it is
+// the project root; as given for the global registry.
+//
+// For callers deciding whether an edit actually changed anything. The TUI's form
+// shows a project service's *resolved absolute* cwd, so the field and the file
+// disagree by construction — blanking the field is a no-op on disk, and
+// comparing the raw text would read it as a change.
+func StoredCWD(src Source, cwd string) string {
+	if src.IsLocal() {
+		return relProjectCWD(src.Dir, cwd)
+	}
+	return cwd
+}
+
+func editRegistryService(path, oldName, newName, command, cwd, group string) error {
 	reg, err := LoadRegistry(path)
 	if err != nil {
 		return err
@@ -45,10 +64,11 @@ func editRegistryService(path, oldName, newName, command, cwd string) error {
 		}
 	}
 
-	updated := *cur // preserve group / env / desc
+	updated := *cur // preserve env / desc / port
 	updated.Name = newName
 	updated.Command = command
 	updated.CWD = cwd
+	updated.Group = group
 
 	if newName != oldName {
 		delete(reg.Services, oldName)
@@ -57,7 +77,7 @@ func editRegistryService(path, oldName, newName, command, cwd string) error {
 	return SaveRegistry(path, reg)
 }
 
-func editProjectService(dir, oldName, newName, command, cwd string) error {
+func editProjectService(dir, oldName, newName, command, cwd, group string) error {
 	proj, err := LoadProject(dir)
 	if err != nil {
 		return err
@@ -75,9 +95,10 @@ func editProjectService(dir, oldName, newName, command, cwd string) error {
 		}
 	}
 
-	updated := *cur // preserve env / desc
+	updated := *cur // preserve env / desc / port
 	updated.Command = command
 	updated.CWD = relProjectCWD(dir, cwd)
+	updated.Group = group
 
 	// A project service's identity is its map key — ProjectServiceConfig has no
 	// Name field — so the rekey below is the rename; there is nothing on the

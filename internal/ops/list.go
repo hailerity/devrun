@@ -84,7 +84,13 @@ func ScopeToRegistry(svcs []ipc.ServiceInfo, reg *config.Registry) []ipc.Service
 		if !ok {
 			info = ipc.ServiceInfo{Name: name, State: string(config.StatusStopped)}
 		}
-		if cfg := reg.Services[name]; cfg != nil && cfg.Group != "" {
+		// The active config is the authority on a service's group, not the
+		// daemon's copy — which is frozen at the moment the service started
+		// (supervisor's snap.group). Taken unconditionally, so clearing a group
+		// clears it here too, and so this agrees with both listOffline below
+		// and the TUI's scopedServices. A group is display-only, so there is
+		// nothing the daemon's value is needed for.
+		if cfg := reg.Services[name]; cfg != nil {
 			info.Group = cfg.Group
 		}
 		out = append(out, info)

@@ -46,7 +46,7 @@ func pressE(t *testing.T, m model) model {
 func TestModel_EditOpensPrefilledAndCancels(t *testing.T) {
 	m := pressE(t, mustFirst(editModel(t, "yarn dev")))
 	require.True(t, m.editC.open)
-	n, c, _ := m.editC.values()
+	n, c, _, _ := m.editC.values()
 	assert.Equal(t, "web", n)
 	assert.Equal(t, "yarn dev", c)
 

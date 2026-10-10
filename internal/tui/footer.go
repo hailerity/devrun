@@ -44,18 +44,21 @@ func (f *footerBar) tick(dt time.Duration) {
 
 // footerCtx is what the footer needs to know to pick its hints.
 type footerCtx struct {
-	tab          tabKind
-	focus        focusKind
-	visual       bool   // a visual selection is active in the log pane
-	onServiceRow bool   // e / d apply to the selected service
-	editing      bool   // a form modal (service or target editor) is open
-	confirming   bool   // the remove confirm is open
-	picking      bool   // the target picker is open
-	helping      bool   // the help overlay is open
-	searching    bool   // the search input has the keyboard
-	hasQuery     bool   // a search is active in the log pane
-	searchInput  string // the rendered search input, shown while searching
-	narrow       bool   // one pane on screen at a time: switching panes is the key to show
+	tab           tabKind
+	focus         focusKind
+	visual        bool        // a visual selection is active in the log pane
+	onServiceRow  bool        // e / d apply to the selected service
+	onGroupHeader bool        // the cursor is on a group header: s / x / r have no target
+	editing       bool        // a form modal (service or target editor) is open
+	confirming    bool        // the remove confirm is open
+	picking       bool        // the target picker is open
+	helping       bool        // the help overlay is open
+	searching     bool        // the search input has the keyboard
+	searchScope   searchScope // which list that input is narrowing
+	hasQuery      bool        // a search is active in the log pane
+	hasFilter     bool        // a name query is narrowing the service list
+	searchInput   string      // the rendered search input, shown while searching
+	narrow        bool        // one pane on screen at a time: switching panes is the key to show
 }
 
 // hint is one key/label pair in the footer. pri ranks it for narrow terminals:
@@ -162,14 +165,45 @@ func (c footerCtx) baseHints() []hint {
 		// toggling a view nobody can see.
 		enter = "open"
 	}
-	out := []hint{
-		{"s", "start", 0},
-		{"x", "stop", 1},
-		{"r", "restart", 4},
-		{"↵", enter, 2},
-		{"t", "target", 5},
-		{"/", "search", 6},
+	out := []hint{}
+	if c.hasFilter {
+		// With part of the list hidden, how to get the rest of it back is the
+		// hint worth most — and the one a reader is least likely to guess.
+		out = append(out, hint{"Esc", "clear", 1})
 	}
+	showEnter := true
+	switch {
+	// A header under a query can do neither thing: there is no service behind
+	// it to start or stop, and folding is suspended while the query is in
+	// force. Promising either would be advertising a key that answers with a
+	// toast. What is left — Esc, /, t, S/X, Tab — is still offered below.
+	case c.onGroupHeader && c.hasFilter:
+		showEnter = false
+	// A group header has no service behind it, so s / x / r would be
+	// advertising keys that do nothing on the row the cursor is on. Folding is
+	// what this row does — named once. `↵` folds as well, but spending a second
+	// slot to say so costs `t target` at 70 columns and `/ filter` at 60, where
+	// hints are scarcest and the duplicate is worth least.
+	case c.onGroupHeader:
+		out = append(out, hint{"Space", "fold", 0})
+		showEnter = false
+	default:
+		out = append(out,
+			hint{"s", "start", 0},
+			hint{"x", "stop", 1},
+			hint{"r", "restart", 4},
+		)
+	}
+	if showEnter {
+		out = append(out, hint{"↵", enter, 2})
+	}
+	out = append(out,
+		// Above `t target`: a query always works, while filtering by target
+		// needs targets to have been configured — and at 100 columns only one
+		// of the two survives.
+		hint{"/", "filter", 5},
+		hint{"t", "target", 6},
+	)
 	if c.onServiceRow {
 		out = append(out, hint{"e", "edit", 7}, hint{"d", "remove", 8})
 	}
@@ -199,7 +233,15 @@ func (f *footerBar) render(c footerCtx, width int) string {
 	if c.searching {
 		// The input takes the left; its two keys are pinned right. The input is
 		// truncated to what is left, so a long query cannot wrap the row.
-		right := fitHints([]hint{{"↵", "find", 0}, {"Esc", "cancel", 1}}, inner)
+		//
+		// Enter is named for what it does to each list: it jumps the log to a
+		// match, while the service list has already narrowed as the query was
+		// typed and Enter only keeps it that way.
+		commit := "find"
+		if c.searchScope == scopeServices {
+			commit = "keep"
+		}
+		right := fitHints([]hint{{"↵", commit, 0}, {"Esc", "cancel", 1}}, inner)
 		room := max(0, inner-lipgloss.Width(right)-len(hintGap))
 		left := ansi.Truncate(c.searchInput, room, "")
 		gap := max(0, inner-lipgloss.Width(left)-lipgloss.Width(right))

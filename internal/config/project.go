@@ -18,6 +18,15 @@ type ProjectServiceConfig struct {
 	CWD     string            `yaml:"cwd,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
 	Desc    string            `yaml:"desc,omitempty"`
+	// Group sections this service in the dashboard. Empty inherits the
+	// project's name, which is what every service in a devrun.yaml got before
+	// this field existed — so a file that says nothing about groups behaves
+	// exactly as it did.
+	//
+	// An explicit group replaces that default rather than nesting inside it:
+	// groups are a flat set, so a project that groups some of its services
+	// simply shows the project's name as the header for the rest.
+	Group string `yaml:"group,omitempty"`
 	// Port overrides detection; see ServiceConfig.Port.
 	Port int `yaml:"port,omitempty"`
 }
@@ -94,17 +103,82 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 		} else if !filepath.IsAbs(cwd) {
 			cwd = filepath.Join(dir, cwd)
 		}
+		// The project's name is the default group, not an override: a service
+		// that names its own group keeps it, so one devrun.yaml can section
+		// itself instead of arriving as a single block.
+		//
+		// Trimmed here rather than only at the writers, because this is the one
+		// path every reader goes through and the file can be hand-written: a
+		// `group: '  '` would otherwise be a group, filing the service under a
+		// blank-looking header of its own instead of falling back.
+		group := strings.TrimSpace(svc.Group)
+		if group == "" {
+			group = p.Name
+		}
 		out[name] = &ServiceConfig{
 			Name:    name,
 			Command: svc.Command,
 			CWD:     cwd,
-			Group:   p.Name,
+			Group:   group,
 			Env:     svc.Env,
 			Desc:    svc.Desc,
 			Port:    svc.Port,
 		}
 	}
 	return out
+}
+
+// ProjectGroupName is the group a service in dir's devrun.yaml inherits when it
+// names none of its own: the file's `name:`, or the sanitised directory name
+// when it does not set one. The same value ToServiceConfigs would apply, for
+// callers that hold only the derived ServiceConfigs and need the default back —
+// the TUI's editor, mirroring a cleared group field without re-resolving the
+// whole config.
+//
+// A read error also yields the directory name. That is LoadProject's default
+// for a *missing* `name:` but not its behaviour on a parse or permission error,
+// which it propagates — so on a broken file this answers with a plausible group
+// rather than the real one. Acceptable only because every caller runs against a
+// file that has just loaded successfully; it is not a general-purpose reader.
+func ProjectGroupName(dir string) string {
+	if p, err := LoadProject(dir); err == nil && p != nil && p.Name != "" {
+		return p.Name
+	}
+	return sanitizeName(filepath.Base(dir))
+}
+
+// StoredGroup is the group the service called name sets for *itself* in the
+// config src points at, or "" when it sets none.
+//
+// Distinct from ServiceConfig.Group, which for a project service has already had
+// the project's name applied as a default by ToServiceConfigs. Anything that
+// needs to tell "inherits the project's name" from "explicitly set to the
+// project's name" — the editor, so it can round-trip the field rather than
+// rewriting it — has to read the file, because the derived value cannot
+// distinguish them.
+//
+// A service that is not in the config, or a config that will not load, reads as
+// "" the same way a service with no group does: the caller is prefilling a form,
+// and an empty field is the safe answer.
+func StoredGroup(src Source, name string) string {
+	if !src.IsLocal() {
+		reg, err := LoadRegistry(RegistryPath())
+		if err != nil {
+			return ""
+		}
+		if svc := reg.Services[name]; svc != nil {
+			return svc.Group
+		}
+		return ""
+	}
+	proj, err := LoadProject(src.Dir)
+	if err != nil || proj == nil {
+		return ""
+	}
+	if svc := proj.Services[name]; svc != nil {
+		return svc.Group
+	}
+	return ""
 }
 
 // sanitizeName replaces characters that are not safe in a project/group name
