@@ -1432,10 +1432,17 @@ func (m model) doStopTarget(name string) tea.Cmd {
 	}
 }
 
-// listedServiceNames lists the names of the services the sidebar is currently
-// showing — after the target filter and the name query — in its sorted order.
-// This is what S / X act on, so it must be the narrowed set and not
-// allServices: "everything listed" has to mean the rows the reader can see.
+// listedServiceNames lists the services the sidebar's filters leave in scope —
+// after the target filter and the name query — in its sorted order. This is
+// what S / X act on, so it must be the narrowed set and not allServices.
+//
+// Folding is deliberately *not* a narrowing here, so a collapsed group's
+// services are still included. The two gestures mean different things: a query
+// or a target excludes services from what you are working on, while folding a
+// group only gets it out of the way on screen — and its header is still there,
+// still counting its members. Collapsing `backend` to make room and then
+// pressing `S` to start everything should start backend too; having it silently
+// skipped would be the surprise.
 func (m model) listedServiceNames() []string {
 	names := make([]string, len(m.sidebarC.services))
 	for i, s := range m.sidebarC.services {

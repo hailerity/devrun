@@ -522,6 +522,9 @@ Two things worth knowing about folding:
   group. That is deliberate — collapsing hides what it hides.
 - **An active `/` query suspends every fold**, so a match is never hidden
   behind one. The folds come back as they were when the query is cleared.
+- **Folding is not filtering.** `S` / `X` still act on a folded group's
+  services: a query or a target changes what you are working on, while folding
+  only gets a group out of the way on screen.
 
 Where the group comes from: a `devrun.yaml` gives every one of its services the
 project's name, so a project is a group. In the global registry, `devrun add

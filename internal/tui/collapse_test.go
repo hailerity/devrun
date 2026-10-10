@@ -164,6 +164,28 @@ func TestModel_SpaceOnAServiceRowDoesNothing(t *testing.T) {
 	assert.False(t, m.removeC.open)
 }
 
+// The pinned distinction: folding is not filtering. A query or a target
+// excludes services from what you are working on; folding only gets a group out
+// of the way on screen, and its header stays there counting its members. So
+// S / X still act on a folded group's services — the opposite choice would mean
+// tidying the view silently changed what the keys do.
+func TestModel_StartAllIncludesFoldedGroups(t *testing.T) {
+	m := groupModel()
+	all := m.listedServiceNames()
+	require.Len(t, all, 6)
+
+	m.sidebarC.selectGroupHeader("backend")
+	require.True(t, m.sidebarC.toggleCollapse())
+	require.NotContains(t, rowShape(&m.sidebarC), "svc:api", "api is off screen")
+
+	assert.Equal(t, all, m.listedServiceNames(),
+		"folding changed the view, not the scope")
+
+	// Whereas a query does change the scope.
+	m.sidebarC.setQuery("web")
+	assert.Equal(t, []string{"web"}, m.listedServiceNames())
+}
+
 // Space is text while the `/` input holds the keyboard — a query can contain
 // one, and it must not fold a group behind the input.
 func TestModel_SpaceIsTextInsideTheFilterInput(t *testing.T) {
