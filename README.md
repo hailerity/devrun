@@ -504,13 +504,13 @@ header per group carrying its running count:
 │ ● db        :5432     0.4%  │
 │ ✖ worker    crashed         │
 │ ▸ frontend             1/2  │
-│ ▾ ungrouped            0/1  │
+│ ▾ (no group)           0/1  │
 │ ○ scratch   stopped         │
 ╰─ 3/6 up ────────────────────╯
 ```
 
 `Space` (or `↵`) on a header folds the group shut; the cursor walks headers as
-it does in a file tree. Groups are alphabetical with the ungrouped ones last,
+it does in a file tree. Groups are alphabetical with the ones with no group last,
 and a header only appears when there is more than one group — a single project
 looks exactly as it did before. A group's services keep their place inside it,
 so a service still never moves because its state changed.

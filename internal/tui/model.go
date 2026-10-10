@@ -379,9 +379,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// DETAILS pane with nothing in it — and in the narrow layout opened
 		// that empty pane full-screen.
 		case m.focus == focusSidebar && m.sidebarC.onGroupHeader():
-			if m.sidebarC.toggleCollapse() {
-				m.relayout()
-			}
+			m.foldUnderCursor()
 		case m.narrow() && m.focus == focusSidebar:
 			// One pane at a time: the view Enter would toggle is not on
 			// screen, so Enter opens the selected service instead.
@@ -600,16 +598,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// service row it falls through to nothing, so the key is not a surprise
 	// anywhere else in the list.
 	case m.focus == focusSidebar && key.Matches(msg, keys.Collapse):
-		switch {
-		case m.sidebarC.toggleCollapse():
-			m.updateLogFile()
-			m.relayout()
-		// Refused rather than silently doing nothing: with a query in force
-		// every group is shown open, so a fold could only change state the
-		// reader cannot see.
-		case m.sidebarC.onGroupHeader() && m.sidebarC.filterQuery != "":
-			m.footerC.showToast("folding is suspended while /" + m.sidebarC.filterQuery + " is active")
-		}
+		m.foldUnderCursor()
 
 	// e opens the editor for the highlighted service.
 	case key.Matches(msg, keys.Edit):
@@ -625,6 +614,22 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// foldUnderCursor folds the group under the cursor, or says why it will not.
+// `Space` and `↵` mean the same thing on a header, so they share this: a key
+// that silently does nothing is indistinguishable from a key that is broken,
+// and `↵` reached here by giving up its usual LOGS ⇄ DETAILS job.
+func (m *model) foldUnderCursor() {
+	switch {
+	case m.sidebarC.toggleCollapse():
+		m.updateLogFile()
+		m.relayout()
+	// Refused, not ignored: with a query in force every group is shown open, so
+	// a fold could only change state the reader cannot see.
+	case m.sidebarC.onGroupHeader() && m.sidebarC.filterQuery != "":
+		m.footerC.showToast("folding is suspended while /" + m.sidebarC.filterQuery + " is active")
+	}
 }
 
 // onServiceRow reports whether the sidebar has focus, a service is selected, and
@@ -1258,6 +1263,15 @@ func (m model) sidebarWidth() int {
 	w := sidebarMinW
 	for _, svc := range m.sidebarC.allServices {
 		if n := lipgloss.Width(svc.Name) + 3 + 1 + rowStateW + 1 + rowCPUW + paneChrome; n > w {
+			w = n
+		}
+	}
+	// Group headers are rows too, and a project's name — which is every one of
+	// its services' group — is as likely to be long as a service name is. Sized
+	// from allServices like the loop above, so the pane does not resize while a
+	// query is being typed.
+	for _, g := range m.sidebarC.groupLabelWidths() {
+		if n := g + groupRowChrome + paneChrome; n > w {
 			w = n
 		}
 	}

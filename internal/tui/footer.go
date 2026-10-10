@@ -171,21 +171,31 @@ func (c footerCtx) baseHints() []hint {
 		// hint worth most — and the one a reader is least likely to guess.
 		out = append(out, hint{"Esc", "clear", 1})
 	}
-	if c.onGroupHeader {
-		// A group header has no service behind it, so s / x / r would be
-		// advertising keys that do nothing on the row the cursor is on.
-		// Folding is what this row does.
+	showEnter := true
+	switch {
+	// A header under a query can do neither thing: there is no service behind
+	// it to start or stop, and folding is suspended while the query is in
+	// force. Promising either would be advertising a key that answers with a
+	// toast. What is left — Esc, /, t, S/X, Tab — is still offered below.
+	case c.onGroupHeader && c.hasFilter:
+		showEnter = false
+	// A group header has no service behind it, so s / x / r would be
+	// advertising keys that do nothing on the row the cursor is on. Folding is
+	// what this row does.
+	case c.onGroupHeader:
 		out = append(out, hint{"Space", "fold", 0})
 		enter = "fold"
-	} else {
+	default:
 		out = append(out,
 			hint{"s", "start", 0},
 			hint{"x", "stop", 1},
 			hint{"r", "restart", 4},
 		)
 	}
+	if showEnter {
+		out = append(out, hint{"↵", enter, 2})
+	}
 	out = append(out,
-		hint{"↵", enter, 2},
 		// Above `t target`: a query always works, while filtering by target
 		// needs targets to have been configured — and at 100 columns only one
 		// of the two survives.

@@ -35,7 +35,7 @@ func TestSidebar_CollapseHidesAGroupsServicesAndKeepsItsHeader(t *testing.T) {
 	assert.Equal(t, []string{
 		"header:backend",
 		"header:frontend", "svc:assets", "svc:web",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 
 	// And the cursor stays on the header the key was pressed on, so pressing
@@ -101,15 +101,41 @@ func TestSidebar_CollapseAndTheCursorBothSurviveAPoll(t *testing.T) {
 
 // A header the reader walked onto without folding anything must hold the cursor
 // across a poll too — the anchor is about where the cursor is, not about folds.
-func TestSidebar_CursorOnAnUnfoldedHeaderSurvivesAPoll(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(groupedServices(), nil)
-	sb.selectGroupHeader("frontend")
-	require.True(t, sb.onGroupHeader())
+//
+// Run over every group, the no-group bucket included. Its key is "", so an
+// anchor that inferred "set" from a non-empty name silently excluded exactly
+// one header — and it was the cursor drift this whole mechanism exists to stop.
+func TestSidebar_CursorOnAnyHeaderSurvivesAPoll(t *testing.T) {
+	for _, group := range []string{"backend", "frontend", ""} {
+		t.Run("group="+groupLabel(group), func(t *testing.T) {
+			sb := &sidebar{}
+			sb.update(groupedServices(), nil)
+			sb.selectGroupHeader(group)
+			require.True(t, sb.onGroupHeader())
 
-	sb.update(groupedServices(), nil)
-	require.True(t, sb.onGroupHeader())
-	assert.Equal(t, "frontend", sb.rows[sb.selected].group)
+			sb.update(groupedServices(), nil)
+			require.True(t, sb.onGroupHeader(), "still on a header")
+			assert.Equal(t, group, sb.rows[sb.selected].group)
+		})
+	}
+}
+
+// Same for folding: fold any group, including the no-group bucket, and the
+// cursor stays on its header across polls.
+func TestSidebar_FoldedHeaderOfAnyGroupHoldsTheCursorAcrossPolls(t *testing.T) {
+	for _, group := range []string{"backend", ""} {
+		t.Run("group="+groupLabel(group), func(t *testing.T) {
+			sb := &sidebar{}
+			sb.update(groupedServices(), nil)
+			sb.selectGroupHeader(group)
+			require.True(t, sb.toggleCollapse())
+
+			sb.update(groupedServices(), nil)
+			require.True(t, sb.onGroupHeader())
+			assert.Equal(t, group, sb.rows[sb.selected].group)
+			assert.True(t, sb.collapsed[group], "and stays folded")
+		})
+	}
 }
 
 // A group that stops being drawn cannot hold the cursor, so it falls back to a
@@ -149,7 +175,7 @@ func TestSidebar_QuerySuspendsCollapseAndRestoresIt(t *testing.T) {
 	assert.Equal(t, []string{
 		"header:backend", "svc:api",
 		"header:frontend", "svc:assets",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb), "backend is folded, yet its match shows")
 
 	// Space is refused while a query is in force: it could only change state
@@ -166,7 +192,7 @@ func TestSidebar_QuerySuspendsCollapseAndRestoresIt(t *testing.T) {
 	assert.Equal(t, []string{
 		"header:backend",
 		"header:frontend", "svc:assets", "svc:web",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 }
 
@@ -329,23 +355,81 @@ func TestModel_EscFromAGroupHeaderReturnsToThatHeader(t *testing.T) {
 	assert.Equal(t, "frontend", m.sidebarC.rows[m.sidebarC.selected].group)
 }
 
-// A group genuinely named "ungrouped" is its own group: it sorts alphabetically
-// and folds independently of the services that have no group at all.
-func TestSidebar_ARealGroupNamedUngroupedIsNotTheNoGroupBucket(t *testing.T) {
+// The same from the no-group bucket's header, whose key is "" — the one the
+// anchor used to treat as "nowhere".
+func TestModel_EscFromTheNoGroupHeaderReturnsToIt(t *testing.T) {
+	m := groupModel()
+	m.sidebarC.selectGroupHeader("")
+	require.True(t, m.sidebarC.onGroupHeader())
+
+	m = typeString(pressKey(m, '/'), "api") // dissolves every header
+	require.False(t, m.sidebarC.onGroupHeader())
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m2.(model)
+	require.True(t, m.sidebarC.onGroupHeader())
+	assert.Equal(t, "", m.sidebarC.rows[m.sidebarC.selected].group)
+}
+
+// Under a query, folding is suspended — so Enter must say so rather than being
+// silently inert. It reached this row by giving up its LOGS ⇄ DETAILS job, so
+// doing nothing at all would look broken.
+func TestModel_EnterOnAHeaderUnderAQuerySaysWhyItRefused(t *testing.T) {
+	m := groupModel()
+	m.sidebarC.setQuery("a")
+	m.sidebarC.selectGroupHeader("backend")
+	require.True(t, m.sidebarC.onGroupHeader())
+	require.Equal(t, tabLogs, m.activeTab)
+
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m2.(model)
+	assert.Contains(t, m.footerC.toast, "suspended")
+	assert.Equal(t, tabLogs, m.activeTab, "and no switch to an empty DETAILS")
+	assert.False(t, m.sidebarC.collapsed["backend"])
+}
+
+// The footer must not promise a fold the query will refuse.
+func TestFooter_HeaderUnderAQueryPromisesNeitherFoldNorStart(t *testing.T) {
+	f := &footerBar{}
+
+	open := plain(f.render(footerCtx{focus: focusSidebar, tab: tabLogs, onGroupHeader: true}, 120))
+	assert.Contains(t, open, "fold")
+
+	filtered := plain(f.render(footerCtx{
+		focus: focusSidebar, tab: tabLogs, onGroupHeader: true, hasFilter: true,
+	}, 120))
+	assert.NotContains(t, filtered, "fold", "folding is suspended under a query")
+	assert.NotContains(t, filtered, "start", "and there is no service here either")
+	assert.Contains(t, filtered, "clear", "what is left is still offered")
+	assert.Contains(t, filtered, "filter")
+}
+
+// A group genuinely named "ungrouped" is its own group: it sorts by its name,
+// folds independently of the services that have no group at all, and — the part
+// that matters on screen — is labelled differently from them. Separating the
+// keys without separating the labels left two sections reading the same thing
+// and folding independently, with nothing to tell them apart.
+func TestSidebar_ARealGroupNamedUngroupedIsDistinctFromTheNoGroupBucket(t *testing.T) {
 	sb := &sidebar{}
 	sb.update([]ipc.ServiceInfo{
 		{Name: "api", Group: "ungrouped"},
 		{Name: "zed", Group: "zoo"},
 		{Name: "scratch"}, // genuinely no group
 	}, nil)
+	sb.setRows(20)
 
-	// Two distinct headers, and the real group sorts by its name while the
-	// no-group bucket stays last.
+	// The real group sorts by its name; the bucket stays last and is labelled
+	// as the absence of a group rather than as one called "ungrouped".
 	assert.Equal(t, []string{
 		"header:ungrouped", "svc:api",
 		"header:zoo", "svc:zed",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb))
+
+	// And the two headers are distinguishable on screen, not just internally.
+	out := plain(sb.render(31))
+	assert.Contains(t, out, "ungrouped")
+	assert.Contains(t, out, "(no group)")
 
 	// Folding the real one leaves the bucket alone.
 	sb.selectGroupHeader("ungrouped")
@@ -353,7 +437,7 @@ func TestSidebar_ARealGroupNamedUngroupedIsNotTheNoGroupBucket(t *testing.T) {
 	assert.Equal(t, []string{
 		"header:ungrouped",
 		"header:zoo", "svc:zed",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb), "only the named group folded")
 }
 

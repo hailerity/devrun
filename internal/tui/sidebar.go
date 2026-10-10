@@ -40,20 +40,24 @@ type sidebarRow struct {
 }
 
 // cursorPos names where the cursor is in a way that survives the rows being
-// rebuilt: a service by name, or a group by its header. At most one field is
-// set; the zero value means "nowhere in particular", which restores to the
-// first service row.
+// rebuilt: a service by name, or a group by its header.
 //
 // A header has to be nameable here, not just cursorable. Anchoring only
 // services meant every rebuild — and the dashboard rebuilds every two seconds —
 // restored the cursor to the last service it had seen, so folding a group and
 // waiting moved the highlight off the header and switched the log pane with it.
+//
+// `set` is carried explicitly rather than inferred from name != "", because ""
+// is a real group key: it is the no-group bucket. Inferring it left that one
+// header unanchorable and reintroduced the very drift described above, for the
+// one group whose key happens to be empty.
 type cursorPos struct {
-	svc   string
-	group string
+	kind rowKind // rowService or rowHeader
+	name string  // the service's name, or the group's key
+	set  bool
 }
 
-func (p cursorPos) empty() bool { return p.svc == "" && p.group == "" }
+func (p cursorPos) empty() bool { return !p.set }
 
 type sidebar struct {
 	allServices []ipc.ServiceInfo // full scoped list, by Name
@@ -142,10 +146,10 @@ func (s *sidebar) keepingCursor(change func()) {
 // on neither a service nor a header — which only happens with an empty list.
 func (s *sidebar) cursorAt() cursorPos {
 	if svc := s.serviceAt(s.selected); svc != nil {
-		return cursorPos{svc: svc.Name}
+		return cursorPos{kind: rowService, name: svc.Name, set: true}
 	}
 	if s.onGroupHeader() {
-		return cursorPos{group: s.rows[s.selected].group}
+		return cursorPos{kind: rowHeader, name: s.rows[s.selected].group, set: true}
 	}
 	return cursorPos{}
 }
@@ -160,13 +164,18 @@ func (s *sidebar) recordAnchor() {
 }
 
 // moveTo puts the cursor back on a remembered position: the group's header when
-// one is named and still drawn, else the service, else the first service row.
+// it names one and that header is still drawn, else the service, else the first
+// service row.
 func (s *sidebar) moveTo(p cursorPos) {
-	if p.group != "" {
-		s.selectGroupHeader(p.group)
-		return
+	switch {
+	case !p.set:
+		s.selected = s.firstServiceRow()
+		s.scrollToCursor()
+	case p.kind == rowHeader:
+		s.selectGroupHeader(p.name)
+	default:
+		s.selectServiceByName(p.name)
 	}
-	s.selectServiceByName(p.svc)
 }
 
 // selectServiceByName moves the cursor to the row showing the service named n,
@@ -277,12 +286,13 @@ func (s *sidebar) refilter() {
 // registry can produce them: a devrun.yaml stamps every service with the
 // project's name.
 //
-// A display label only. The no-group bucket is the empty string everywhere
-// inside the sidebar — as group keys, fold keys and cursor anchors — so a
-// service genuinely added with `--group ungrouped`, or living in a project
-// directory of that name, stays its own group instead of being merged into the
-// bucket and sorted out of the alphabet with it.
-const ungroupedLabel = "ungrouped"
+// Parenthesised, and phrased as the absence of a group rather than as a name,
+// because a real group can be called anything — including "ungrouped", via
+// `devrun add --group ungrouped` or a project directory of that name. The
+// bucket's key is "" everywhere inside the sidebar, so the two are already
+// separate groups; this is what stops them drawing two identical headers that
+// fold independently with nothing to tell them apart.
+const ungroupedLabel = "(no group)"
 
 // groupLabel is how a group is drawn: its own name, or the label for the
 // no-group bucket.
@@ -347,6 +357,17 @@ func (s *sidebar) isCollapsed(group string) bool {
 		return false
 	}
 	return s.collapsed[group]
+}
+
+// hasHeaders reports whether the drawn list is sectioned, i.e. whether a row
+// count and a service count can differ.
+func (s *sidebar) hasHeaders() bool {
+	for i := range s.rows {
+		if s.rows[i].kind == rowHeader {
+			return true
+		}
+	}
+	return false
 }
 
 // onGroupHeader reports whether the cursor is on a group header — a row with no
@@ -682,8 +703,17 @@ func (s *sidebar) frame(focused bool, width int) paneFrame {
 		// Say so when the list is windowed — otherwise rows above or below the
 		// fold are invisible with nothing to hint they exist. Counted in drawn
 		// rows, which is what is actually scrolling.
+		//
+		// Named "rows" only once headers exist, because then the total differs
+		// from the service count beside it and "1–9 of 9" next to "2/6 up"
+		// reads as two counts of the same thing. With no headers the two are
+		// the same number and the bare range is what it has always been.
 		if first, last := s.window(); last-first < len(s.rows) {
-			f.footRight = styleMuted.Render(fmt.Sprintf("%d–%d of %d", first+1, last, len(s.rows)))
+			unit := ""
+			if s.hasHeaders() {
+				unit = "rows "
+			}
+			f.footRight = styleMuted.Render(fmt.Sprintf("%s%d–%d of %d", unit, first+1, last, len(s.rows)))
 		}
 	}
 	return f
@@ -722,6 +752,29 @@ func (s *sidebar) render(width int) string {
 		out = append(out, groupRow(width, groupLabel(g), up, total, i == s.selected, s.isCollapsed(g)))
 	}
 	return strings.Join(out, "\n")
+}
+
+// groupRowChrome is what a group header spends on everything but its name: the
+// margin, the fold glyph, the gaps, and the widest plausible count. It lets
+// sidebarWidth ask for a pane that fits the header without duplicating
+// groupRow's layout.
+const groupRowChrome = 3 + 1 + 7 // " ▾" + " " + name + " " + "999/999"
+
+// groupLabelWidths is the display width of every group label among *all*
+// scoped services, filtered or not — what sidebarWidth needs to size the pane
+// without it twitching as a query narrows the list.
+func (s *sidebar) groupLabelWidths() []int {
+	seen := make(map[string]bool, len(s.allServices))
+	var out []int
+	for _, svc := range s.allServices {
+		g := groupOf(svc)
+		if seen[g] {
+			continue
+		}
+		seen[g] = true
+		out = append(out, lipgloss.Width(groupLabel(g)))
+	}
+	return out
 }
 
 // groupCount is how many of a group's listed services are running, and how many

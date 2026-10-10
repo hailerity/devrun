@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/hailerity/devrun/internal/config"
 
 	"github.com/hailerity/devrun/internal/ipc"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +48,7 @@ func TestSidebar_GroupsAreSectionedAlphabeticallyWithUngroupedLast(t *testing.T)
 	assert.Equal(t, []string{
 		"header:backend", "svc:api", "svc:db", "svc:worker",
 		"header:frontend", "svc:assets", "svc:web",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 }
 
@@ -114,7 +118,7 @@ func TestSidebar_QueryDropsEmptiedGroupsAndTheirHeaders(t *testing.T) {
 	assert.Equal(t, []string{
 		"header:backend", "svc:api",
 		"header:frontend", "svc:assets",
-		"header:ungrouped", "svc:scratch",
+		"header:(no group)", "svc:scratch",
 	}, rowShape(sb))
 
 	// Narrow to one group's worth and the headers go entirely: one group left.
@@ -225,7 +229,11 @@ func TestSidebar_CursorSurvivesAPollWithGroups(t *testing.T) {
 
 // Headers are rows, so they count toward the scroll window and the "a–b of N"
 // the border shows — otherwise the numbers would not match what is scrolling.
-func TestSidebar_WindowCountsHeaderRows(t *testing.T) {
+//
+// And once there are headers that total differs from the service count in
+// footLeft, so it is named: "rows 1–4 of 9" beside "3/6 up" is two measurements,
+// where a bare "1–4 of 9" reads as a second, contradictory count of services.
+func TestSidebar_WindowCountsHeaderRowsAndNamesTheUnit(t *testing.T) {
 	sb := &sidebar{}
 	sb.update(groupedServices(), nil)
 	require.Len(t, sb.rows, 9) // 6 services + 3 headers
@@ -234,7 +242,51 @@ func TestSidebar_WindowCountsHeaderRows(t *testing.T) {
 	first, last := sb.window()
 	assert.Equal(t, 0, first)
 	assert.Equal(t, 4, last)
-	assert.Contains(t, plain(sb.frame(true, 40).footRight), "of 9")
+
+	f := sb.frame(true, 40)
+	assert.Contains(t, plain(f.footRight), "rows 1–4 of 9")
+	assert.Contains(t, plain(f.footLeft), "3/6 up", "services, not rows")
+}
+
+// With no headers a row *is* a service, so the range stays the bare one it has
+// always been — naming the unit there would be noise.
+func TestSidebar_WindowOmitsTheUnitWhenThereAreNoHeaders(t *testing.T) {
+	var svcs []ipc.ServiceInfo
+	for i := 0; i < 12; i++ {
+		svcs = append(svcs, ipc.ServiceInfo{Name: fmt.Sprintf("svc-%02d", i)})
+	}
+	sb := &sidebar{}
+	sb.update(svcs, nil)
+	sb.setRows(5)
+
+	out := plain(sb.frame(true, 40).footRight)
+	assert.Contains(t, out, "1–5 of 12")
+	assert.NotContains(t, out, "rows")
+}
+
+// The pane sizes itself to the longest service name; a group header is a row
+// too, and a project's name is every one of its services' group, so it has to
+// count as well or headers truncate while the pane could have grown.
+func TestModel_SidebarWidthAccountsForGroupNames(t *testing.T) {
+	m := newModel("", nil, config.Source{}, "", clipboard{})
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 200, Height: 30})
+	m = m2.(model)
+
+	m.sidebarC.update([]ipc.ServiceInfo{{Name: "a", Group: "g"}, {Name: "b", Group: "h"}}, nil)
+	narrow := m.sidebarWidth()
+
+	m.sidebarC.update([]ipc.ServiceInfo{
+		{Name: "a", Group: "customer-portal-backend"},
+		{Name: "b", Group: "h"},
+	}, nil)
+	assert.Greater(t, m.sidebarWidth(), narrow,
+		"a long group name widens the pane, as a long service name does")
+
+	// And the header is then drawn in full rather than shortened.
+	m.relayout()
+	sideW, _ := m.paneWidths()
+	w, _ := m.sidebarC.frame(true, sideW).innerSize(sideW, 20)
+	assert.Contains(t, plain(m.sidebarC.render(w)), "customer-portal-backend")
 }
 
 // The render has to draw headers, not silently skip rows it cannot map to a
@@ -249,5 +301,5 @@ func TestSidebar_RenderDrawsAHeaderPerGroup(t *testing.T) {
 		"every row gets a line, headers included")
 	assert.Contains(t, out, "backend")
 	assert.Contains(t, out, "frontend")
-	assert.Contains(t, out, "ungrouped")
+	assert.Contains(t, out, "(no group)")
 }
