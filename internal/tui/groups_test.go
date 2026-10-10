@@ -48,6 +48,48 @@ func TestSidebar_GroupsAreSectionedAlphabeticallyWithUngroupedLast(t *testing.T)
 	}, rowShape(sb))
 }
 
+// Group names come from user config and a project's directory name, so they are
+// as likely to be capitalised as not. The order has to agree with where a
+// reader looks for a name — byte order would file every capitalised group ahead
+// of every lowercase one, exactly as it did for service names.
+func TestSidebar_GroupOrderIsCaseInsensitive(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "s1", Group: "Zebra"},
+		{Name: "s2", Group: "api"},
+		{Name: "s3", Group: "Backend"},
+		{Name: "s4", Group: "charlie"},
+		{Name: "s5"}, // ungrouped, still last
+	}, nil)
+
+	var headers []string
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowHeader {
+			headers = append(headers, sb.rows[i].group)
+		}
+	}
+	assert.Equal(t, []string{"api", "Backend", "charlie", "Zebra", ungroupedLabel}, headers)
+}
+
+// Groups differing only in case are distinct groups and still need a stable,
+// total order between them.
+func TestSidebar_GroupOrderIsTotalForCaseOnlyDifferences(t *testing.T) {
+	sb := &sidebar{}
+	sb.update([]ipc.ServiceInfo{
+		{Name: "s1", Group: "web"},
+		{Name: "s2", Group: "WEB"},
+		{Name: "s3", Group: "Web"},
+	}, nil)
+
+	var headers []string
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowHeader {
+			headers = append(headers, sb.rows[i].group)
+		}
+	}
+	assert.Equal(t, []string{"WEB", "Web", "web"}, headers)
+}
+
 // One group is nothing to tell the reader, so no header is drawn — this is what
 // keeps the ungrouped common case looking as it always did.
 func TestSidebar_NoHeaderForASingleGroup(t *testing.T) {
