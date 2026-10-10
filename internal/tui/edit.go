@@ -85,10 +85,6 @@ func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, own, inherit
 		vals[fieldCWD] = cfg.CWD
 	}
 	p.inputs[fieldGroup].Placeholder = inherited
-	// The group's own cap, shared with the MCP server's refusal, rather than the
-	// 512 the other fields take: a command or a path is legitimately long, a
-	// label drawn on one row of a 47-column pane is not.
-	p.inputs[fieldGroup].CharLimit = config.MaxGroupLen
 	// What the daemon actually runs, kept so a save can tell a relabelling from
 	// a change that needs the process restarted.
 	p.origCommand = vals[fieldCommand]
@@ -98,6 +94,17 @@ func (p *editPanel) openFor(name string, cfg *config.ServiceConfig, own, inherit
 		p.inputs[i].CursorEnd()
 		p.inputs[i].Blur()
 	}
+	// The group's own cap, shared with the MCP server's refusal, rather than the
+	// 512 the other fields take: a command or a path is legitimately long, a
+	// label drawn on one row of a 47-column pane is not.
+	//
+	// Set *after* SetValue, which truncates to CharLimit. Nothing else caps a
+	// group — not `devrun add --group`, not a hand-written file — so a stored
+	// one can be longer than this, and capping before the prefill silently cut
+	// it to 128 characters and then wrote that back on the next save, moving the
+	// service to a truncated section the reader never asked for. Applied here it
+	// bounds what can be *typed* and leaves what is already there alone.
+	p.inputs[fieldGroup].CharLimit = config.MaxGroupLen
 	p.inputs[p.focus].Focus()
 }
 

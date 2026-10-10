@@ -133,6 +133,12 @@ func (p *ProjectConfig) ToServiceConfigs(dir string) map[string]*ServiceConfig {
 // one row of a pane at most 47 columns wide, so an unbounded one only makes a
 // config file unreadable.
 //
+// Counted in **characters, not bytes**, and every enforcer has to agree on that:
+// the TUI's input limit counts runes, so a byte comparison elsewhere made the
+// same string pass in one place and fail in the other — 128 Cyrillic characters
+// are 256 bytes. Characters is also the unit the rationale is in, since what
+// bounds this is how much fits on a row.
+//
 // Shared so the MCP server's refusal and the TUI editor's input limit are the
 // same number. They were 128 and 512, which made the same field's limit depend
 // on who was writing it.

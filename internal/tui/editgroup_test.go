@@ -439,3 +439,38 @@ func TestEditPanel_GroupFieldSharesTheGroupLimit(t *testing.T) {
 	p.openFor("web", &config.ServiceConfig{Command: "yarn"}, "", "")
 	assert.Equal(t, config.MaxGroupLen, p.inputs[fieldGroup].CharLimit)
 }
+
+// The cap bounds what can be *typed*, not what is already stored. Nothing else
+// enforces it — not `devrun add --group`, not a hand-written devrun.yaml — so a
+// longer group can legitimately exist, and setting CharLimit before the prefill
+// made textinput truncate it on the way in. The form then showed a cut label and
+// the next save — of any field — wrote the truncation back, moving the service to
+// a section nobody asked for.
+func TestEditPanel_ALongStoredGroupIsNotTruncatedByTheCap(t *testing.T) {
+	long := strings.Repeat("g", config.MaxGroupLen+40)
+	p := newEditPanel()
+	p.openFor("web", &config.ServiceConfig{Command: "yarn", Group: long}, long, "shop")
+
+	_, _, _, group := p.values()
+	assert.Equal(t, long, group, "shown as stored, so a save round-trips it")
+
+	// And the cap still applies to typing: a fresh value is held to it.
+	p.inputs[fieldGroup].SetValue(long)
+	assert.Len(t, p.inputs[fieldGroup].Value(), config.MaxGroupLen,
+		"a newly typed group is capped")
+}
+
+// The limit is counted in characters, not bytes: the editor's CharLimit counts
+// runes, so a byte comparison in the MCP server's refusal made the same group
+// pass in one place and fail in the other.
+func TestEditPanel_TheGroupCapCountsCharactersNotBytes(t *testing.T) {
+	p := newEditPanel()
+	p.openFor("web", &config.ServiceConfig{Command: "yarn"}, "", "")
+
+	cyrillic := strings.Repeat("ф", config.MaxGroupLen) // 2 bytes each
+	p.inputs[fieldGroup].SetValue(cyrillic)
+	assert.Equal(t, cyrillic, p.inputs[fieldGroup].Value(),
+		"%d characters fit, whatever they weigh in bytes", config.MaxGroupLen)
+	assert.Greater(t, len(cyrillic), config.MaxGroupLen,
+		"the fixture is only interesting if it is over the limit in bytes")
+}

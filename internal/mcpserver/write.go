@@ -28,7 +28,7 @@ type AddServiceInput struct {
 	Name    string            `json:"name" jsonschema:"Name for the new service: letters, digits, '.', '_' or '-'."`
 	Command string            `json:"command" jsonschema:"Shell command that runs the service in the foreground, e.g. 'npm run dev'. It is run with sh -c."`
 	CWD     string            `json:"cwd,omitempty" jsonschema:"Working directory. A relative path is taken against the project directory. Defaults to the project directory."`
-	Group   string            `json:"group,omitempty" jsonschema:"Section to file the service under in the dashboard, e.g. 'backend'. One line, at most 128 bytes; a service belongs to exactly one group. Use list_services to see the groups in use and match one rather than inventing a synonym. Omit it to leave the service in the default section, which is the project's name for a devrun.yaml and no group at all for the global registry."`
+	Group   string            `json:"group,omitempty" jsonschema:"Section to file the service under in the dashboard, e.g. 'backend'. One line, at most 128 characters; a service belongs to exactly one group. Use list_services to see the groups in use and match one rather than inventing a synonym. Omit it to leave the service in the default section, which is the project's name for a devrun.yaml and no group at all for the global registry."`
 	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables to set for the service."`
 }
 
@@ -132,7 +132,14 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 			return nil, AddServiceOutput{}, fmt.Errorf("invalid environment variable name %q", k)
 		}
 	}
-	if err := checkGroup(in.Group); err != nil {
+	// Trimmed once, here, and everything downstream sees the trimmed value:
+	// validating the raw string refused " "+128 chars+" " for being 130 when
+	// what would be written is exactly at the limit, and let a whitespace-only
+	// group through to be normalised to "" — after which the echo reported the
+	// project's name as the group just set, matching neither the request nor
+	// "no group".
+	group := strings.TrimSpace(in.Group)
+	if err := checkGroup(group); err != nil {
 		return nil, AddServiceOutput{}, err
 	}
 	s, err := h.scope(in.Scoped)
@@ -141,7 +148,7 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 	}
 	if _, err := ops.AddService(s, ops.NewService{
 		Name: in.Name, Command: in.Command, CWD: in.CWD,
-		Group: h.ownGroup(in.Scoped, in.Group), Env: in.Env,
+		Group: h.ownGroup(in.Scoped, group), Env: in.Env,
 	}); err != nil {
 		return nil, AddServiceOutput{}, err
 	}
@@ -189,8 +196,11 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 // resolves to the global registry with `global` false, and there a group that
 // happens to match the directory's name is a group like any other: nothing
 // inherits, so there is nothing to normalise away.
+//
+// Takes `group` already trimmed — its caller trims once, before validating, so
+// that what is checked, compared here and stored are the same string. Trimming
+// again here would only hide a caller that did not.
 func (h *handlers) ownGroup(sc Scoped, group string) string {
-	group = strings.TrimSpace(group)
 	if group == "" {
 		return ""
 	}

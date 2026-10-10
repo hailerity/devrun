@@ -302,3 +302,70 @@ func TestAddService_NoProjectFileMeansNoInheritance(t *testing.T) {
 	assert.Equal(t, filepath.Base(e.root), out.Service.Group,
 		"kept: there is no project to inherit from")
 }
+
+// The limit is characters, not bytes, and the TUI editor's input cap counts
+// runes — so a byte comparison here made 128 Cyrillic characters, which are 256
+// bytes, pass in the editor and be refused through this tool. The same field
+// cannot have two different limits depending on who writes it.
+func TestAddService_TheGroupLimitCountsCharactersNotBytes(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+
+	atLimit := strings.Repeat("ф", config.MaxGroupLen) // 2 bytes each
+	require.Greater(t, len(atLimit), config.MaxGroupLen,
+		"the fixture is only interesting if it is over the limit in bytes")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"name": "api", "command": "x", "group": atLimit,
+	}, &out), "%d characters is at the limit, whatever they weigh", config.MaxGroupLen)
+	assert.Equal(t, atLimit, out.Service.Group)
+
+	// One character past it is still refused, and the count in the message is in
+	// the same unit as the limit it is compared against.
+	errText := e.call("add_service", map[string]any{
+		"name": "api2", "command": "x", "group": atLimit + "ф",
+	}, &out)
+	require.NotEmpty(t, errText)
+	assert.Contains(t, errText, fmt.Sprintf("%d characters", config.MaxGroupLen+1))
+}
+
+// Validated after trimming, because trimming is what decides what gets stored.
+// Checking the raw string instead refused a group that would have been written
+// exactly at the limit, for being over it by its surrounding spaces.
+func TestAddService_TheGroupIsTrimmedBeforeItIsChecked(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+
+	atLimit := strings.Repeat("g", config.MaxGroupLen)
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"name": "api", "command": "x", "group": "  " + atLimit + "  ",
+	}, &out), "what would be stored is at the limit, so it is accepted")
+	assert.Equal(t, atLimit, out.Service.Group, "stored and echoed trimmed")
+
+	reg, err := config.LoadRegistry(config.RegistryPath())
+	require.NoError(t, err)
+	assert.Equal(t, atLimit, reg.Services["api"].Group)
+}
+
+// The other half of trimming first: the inherit check compares the group
+// against the project's name, so it has to compare the stored form. Padded, it
+// matched nothing and was stored as an explicit group — the very pinning the
+// normalisation exists to avoid, and invisible in the result, since a pinned
+// group and an inherited one read back identically.
+func TestAddService_APaddedGroupMatchingTheProjectNameStillInherits(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"project_dir": dir, "name": "api", "command": "x", "group": "  shop  ",
+	}, &out))
+	assert.Equal(t, "shop", out.Service.Group)
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Empty(t, proj.Services["api"].Group,
+		"no group line, so a rename of the project carries it along with its siblings")
+}

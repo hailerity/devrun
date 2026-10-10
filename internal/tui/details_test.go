@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -208,4 +209,58 @@ func TestDetailLines_NoURLRowWithoutOne(t *testing.T) {
 	for _, l := range detailLines(&ipc.ServiceInfo{Name: "web", State: "running"}, nil) {
 		assert.NotEqual(t, "url", l.label)
 	}
+}
+
+// One detailLine is one terminal line, and the panel's cursor and scrolling both
+// count detailLines. A newline in a config value broke that: render() joins the
+// window's lines with "\n", so a value carrying its own newline drew more rows
+// than the window asked for — the pane spilled past its height and every line
+// after it sat one row below where the arithmetic put it.
+//
+// CONFIG and ENV are where it comes from: a devrun.yaml and `devrun mcp`'s
+// add_service both take free-form text, and only the MCP server refuses a
+// malformed group. The STATUS rows above are built by the daemon from a pid, a
+// port and a state name.
+func TestDetailLines_AMultilineConfigValueStillDrawsOneLinePerRow(t *testing.T) {
+	svc := &ipc.ServiceInfo{Name: "api", State: "running"}
+	cfg := &config.ServiceConfig{
+		Name:    "api",
+		Command: "go run .\n& sleep 1",
+		CWD:     "/w\r/api",
+		Group:   "shop\nfront",
+		Env:     map[string]string{"GREET": "hi\nthere", "A\nB": "x"},
+	}
+	lines := detailLines(svc, cfg)
+
+	dp := &detailsPanel{}
+	dp.setRows(len(lines))
+	out := dp.render(lines, 80, false)
+	assert.Equal(t, len(lines), strings.Count(out, "\n")+1,
+		"the pane draws exactly one terminal line per detailLine")
+
+	// The focused cursor row takes the other branch of render(), which rebuilds
+	// the row from l.text — so that path has to be one line too.
+	dp.cursor = 7 // cmd: the first CONFIG row
+	focused := dp.render(lines, 80, true)
+	assert.Equal(t, len(lines), strings.Count(focused, "\n")+1,
+		"and the highlighted row is one line as well")
+
+	// A carriage return costs no line but still wrecks the row it is on — the
+	// terminal returns to column 0 and redraws over what is already there — so
+	// the bar is the whole class, not newlines alone. Checked on the stripped
+	// output, where the only control character left standing is the "\n" that
+	// separates one row from the next.
+	for _, line := range strings.Split(plain(out), "\n") {
+		assert.False(t, strings.ContainsFunc(line, unicode.IsControl),
+			"a drawn row carries no control characters: %q", line)
+	}
+
+	// Flattened for drawing, not mangled: the text is still there, on one line.
+	assert.Contains(t, plain(out), "shop front")
+
+	// The clipboard keeps the real value — `y` on the command is for pasting it
+	// back into a shell, not for reproducing the pane.
+	i := slices.IndexFunc(lines, func(l detailLine) bool { return l.label == "cmd" })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, "go run .\n& sleep 1", lines[i].copy)
 }

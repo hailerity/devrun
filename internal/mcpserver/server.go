@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -138,8 +139,12 @@ func checkGroup(group string) error {
 	if group == "" {
 		return nil
 	}
-	if len(group) > config.MaxGroupLen {
-		return fmt.Errorf("group is %d bytes, over the %d-byte limit", len(group), config.MaxGroupLen)
+	// Characters, not bytes: the TUI editor's input limit counts runes, and a
+	// byte comparison here made 128 Cyrillic characters — 256 bytes — pass in
+	// the editor and fail through this tool. Characters is also the unit the
+	// limit is justified in, which is how much fits on one row.
+	if n := utf8.RuneCountInString(group); n > config.MaxGroupLen {
+		return fmt.Errorf("group is %d characters, over the %d-character limit", n, config.MaxGroupLen)
 	}
 	for _, r := range group {
 		if r == '\n' || r == '\r' {
