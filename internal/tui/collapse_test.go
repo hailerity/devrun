@@ -509,3 +509,55 @@ func TestModel_CollapseLeavesNoServiceSelected(t *testing.T) {
 	m = pressSpace(m)
 	assert.Nil(t, m.sidebarC.selectedService(), "the cursor is on the folded header")
 }
+
+// Unfolding must scroll the least it can, and a group's body is its services —
+// not "everything up to the next header", which now includes the blank line
+// between them. Aiming at that gap scrolled one row too far and pushed a real
+// row off the top to reveal a line with nothing on it.
+func TestSidebar_UnfoldDoesNotScrollToTheTrailingGap(t *testing.T) {
+	var svcs []ipc.ServiceInfo
+	for _, g := range []string{"aaa", "bbb", "ccc"} {
+		for i := 1; i <= 2; i++ {
+			svcs = append(svcs, ipc.ServiceInfo{Name: fmt.Sprintf("%s%d", g[:1], i), Group: g})
+		}
+	}
+	sb := &sidebar{}
+	sb.update(svcs, nil)
+	sb.setRows(5)
+
+	sb.selectGroupHeader("bbb")
+	require.True(t, sb.toggleCollapse())
+	sb.top = 0
+	require.True(t, sb.toggleCollapse()) // unfold
+
+	first, last := sb.window()
+	shown := rowShape(sb)[first:last]
+
+	// bbb's header and both its services are on screen...
+	assert.Contains(t, shown, "header:bbb")
+	assert.Contains(t, shown, "svc:b1")
+	assert.Contains(t, shown, "svc:b2")
+	// ...and the window is not padded out with blank rows to get there.
+	gaps := 0
+	for _, r := range shown {
+		if r == "gap" {
+			gaps++
+		}
+	}
+	assert.LessOrEqual(t, gaps, 1, "at most the one gap above bbb: %v", shown)
+}
+
+// A header with nothing under it has nothing to reveal, so unfolding one must
+// not move the window at all.
+func TestSidebar_RevealUnderIsANoOpForAnEmptyBody(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(4)
+	sb.selectGroupHeader("backend")
+	sb.top = 2
+	before := sb.top
+
+	// Point it at the last row, which is a service with no body under it.
+	sb.revealUnder(len(sb.rows) - 1)
+	assert.Equal(t, before, sb.top)
+}

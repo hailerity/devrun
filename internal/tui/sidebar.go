@@ -290,8 +290,15 @@ func (s *sidebar) refilter() {
 	// A clamp can land on a blank line between groups, where the cursor would
 	// be invisible. Every other path that moves it already avoids one; this is
 	// the one that arrives by arithmetic rather than by choice.
+	//
+	// One row on, not back to the top of the list: a spacer is always
+	// immediately followed by its group's header, so selected+1 is in range and
+	// is a row the cursor can sit on. Jumping to the first service would
+	// satisfy the same postcondition while moving the reader — and the log pane
+	// with them — somewhere they never asked to be, which matters the moment a
+	// caller stops re-anchoring after this.
 	if s.selected < len(s.rows) && s.rows[s.selected].kind == rowSpacer {
-		s.selected = s.firstServiceRow()
+		s.selected++
 	}
 }
 
@@ -325,9 +332,12 @@ func groupLabel(group string) string {
 // Services arrive sorted by name and that order is kept within each group, so a
 // service's place is still predictable; only the grouping moves it.
 func (s *sidebar) rebuildRows() {
-	s.rows = make([]sidebarRow, 0, len(s.services))
-
 	groups := s.groupOrder()
+	// Services, plus a header for each group and a gap between them. The old
+	// capacity counted only the services, so a grouped list reallocated on
+	// every poll.
+	s.rows = make([]sidebarRow, 0, len(s.services)+2*len(groups))
+
 	if len(groups) < 2 {
 		for i := range s.services {
 			s.rows = append(s.rows, sidebarRow{kind: rowService, svc: i})
@@ -465,10 +475,17 @@ func (s *sidebar) revealUnder(row int) {
 	if s.paneRows <= 0 || row+1 >= len(s.rows) {
 		return
 	}
-	// The group's body runs to the next header, or to the end of the list.
-	last := row + 1
-	for last+1 < len(s.rows) && s.rows[last+1].kind != rowHeader {
+	// The group's body is the run of service rows under its header — scanned
+	// for exactly that, rather than for "anything that is not a header".
+	// A blank line sits between a group's last service and the next header, so
+	// the looser test ran one row too far and aimed the scroll at a line with
+	// nothing on it, pushing a real row off the top to reveal it.
+	last := row
+	for last+1 < len(s.rows) && s.rows[last+1].kind == rowService {
 		last++
+	}
+	if last == row {
+		return // a header with nothing under it; nothing to reveal
 	}
 	// The furthest row worth bringing into view: the end of the body, or as
 	// much of it as the pane can hold below the header.
@@ -830,7 +847,18 @@ func (s *sidebar) render(width int) string {
 			// Spaces, not "": the pane pads a short line anyway, but an
 			// explicit full-width row keeps every entry in `out` the same
 			// width, which is what the join relies on.
-			out = append(out, strings.Repeat(" ", max(0, width)))
+			//
+			// Carries the selection background if the cursor is somehow on it.
+			// It should never be — step() skips spacers and refilter nudges off
+			// one — but those are the only two things holding that up, and the
+			// failure mode of an unstyled row is a cursor that is nowhere on
+			// screen. A highlighted blank line is a strange sight; an invisible
+			// cursor is an unusable list.
+			blank := strings.Repeat(" ", max(0, width))
+			if i == s.selected {
+				blank = lipgloss.NewStyle().Background(colorSelSidebar).Render(blank)
+			}
+			out = append(out, blank)
 			continue
 		}
 		g := s.rows[i].group

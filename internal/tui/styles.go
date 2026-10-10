@@ -20,6 +20,11 @@ var (
 	// non-text element needs, and a section label in a long list is something a
 	// reader actively hunts for. One step up from muted on dark terminals;
 	// muted's own value on light ones, where it already clears 4.9:1.
+	//
+	// The light side being identical to colorMuted's is deliberate, not an
+	// oversight: only the dark side was too dim. It does mean the two cannot be
+	// told apart by a test rendering on a light profile, which is why the
+	// header's colour assertions pin the dark side.
 	// Floor held by styles_test.go.
 	colorGroup  = lipgloss.AdaptiveColor{Light: "#656d76", Dark: "#8b949e"}
 	colorAccent = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"}

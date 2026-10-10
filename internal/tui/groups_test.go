@@ -451,30 +451,6 @@ func TestSidebar_GapRendersAsABlankFullWidthLine(t *testing.T) {
 	}
 }
 
-// refilter's postcondition: the cursor is never left on a gap. Reached by
-// putting it there directly, which is how a shifted row index would arrive —
-// every public path re-anchors by name afterwards, so this is the backstop
-// under them rather than something they can produce.
-func TestSidebar_RefilterNeverLeavesTheCursorOnAGap(t *testing.T) {
-	sb := &sidebar{}
-	sb.update(groupedServices(), nil)
-
-	gap := -1
-	for i := range sb.rows {
-		if sb.rows[i].kind == rowSpacer {
-			gap = i
-			break
-		}
-	}
-	require.GreaterOrEqual(t, gap, 0, "the fixture has gaps")
-
-	sb.selected = gap
-	sb.refilter()
-	assert.NotEqual(t, rowSpacer, sb.rows[sb.selected].kind,
-		"refilter moved the cursor off the gap")
-	assert.NotNil(t, sb.selectedService(), "and onto something selectable")
-}
-
 // fgSeq is the escape sequence a foreground colour emits, for asserting which
 // colour a rendered row actually used. Comparing whole styled strings does not
 // work: groupRow styles the name together with its padding in one call, so the
@@ -499,4 +475,61 @@ func TestGroupRow_IsNotColouredLikeAServiceName(t *testing.T) {
 		"a group header must not use a service name's colour anywhere on its row")
 	assert.Contains(t, header, fgSeq(t, colorGroup), "it is colorGroup")
 	assert.Contains(t, plain(header), "backend", "and still shows the name")
+
+	// Worth knowing what this does and does not prove: colorGroup and colorMuted
+	// share their Light side on purpose — only the dark side was too dim — so on
+	// a light profile these two sequences are identical and the positive
+	// assertion above would pass for either. It is meaningful because lipgloss
+	// is on its dark default here, which the next line pins.
+	require.NotEqual(t, colorGroup.Dark, colorMuted.Dark,
+		"the dark sides differ, which is what makes the assertion above mean something")
+}
+
+// The gap backstop moves the cursor one row on, to the header the gap belongs
+// to — not to the top of the list, which would take the reader and the log pane
+// somewhere they never asked to be.
+func TestSidebar_GapBackstopMovesOneRowNotToTheTop(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+
+	gap := -1
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowSpacer {
+			gap = i
+			break
+		}
+	}
+	require.Positive(t, gap, "the fixture has a gap, and not at row 0")
+
+	sb.selected = gap
+	sb.refilter()
+	assert.Equal(t, gap+1, sb.selected, "one row on, onto the header the gap introduces")
+	assert.True(t, sb.onGroupHeader())
+}
+
+// If the cursor ever does end up on a gap, the row has to show it. The
+// invariant says it cannot happen, and the two things upholding that are a skip
+// in step() and a nudge in refilter() — so the failure mode is worth degrading
+// gracefully: a highlighted blank line, not a cursor that is nowhere.
+func TestSidebar_ASelectedGapStillShowsTheCursor(t *testing.T) {
+	sb := &sidebar{}
+	sb.update(groupedServices(), nil)
+	sb.setRows(20)
+
+	gap := -1
+	for i := range sb.rows {
+		if sb.rows[i].kind == rowSpacer {
+			gap = i
+			break
+		}
+	}
+	require.Positive(t, gap)
+
+	sb.selected = gap // deliberately, bypassing every guard
+	lines := strings.Split(sb.render(31), "\n")
+	require.Len(t, lines, len(sb.rows))
+
+	assert.NotEqual(t, strings.Repeat(" ", 31), lines[gap],
+		"a selected gap must not render as plain spaces")
+	assert.Empty(t, strings.TrimSpace(plain(lines[gap])), "but is still blank text")
 }
