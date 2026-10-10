@@ -127,9 +127,10 @@ func (s *sidebar) recordAnchor() {
 }
 
 // selectServiceByName moves the cursor to the row showing the service named n,
-// or to row 0 when no row does. Call after the drawn rows change.
+// or to the first service row when no row does. Call after the drawn rows
+// change.
 func (s *sidebar) selectServiceByName(n string) {
-	s.selected = 0
+	s.selected = s.firstServiceRow()
 	for i := range s.rows {
 		if svc := s.serviceAt(i); svc != nil && svc.Name == n {
 			s.selected = i
@@ -137,6 +138,21 @@ func (s *sidebar) selectServiceByName(n string) {
 		}
 	}
 	s.scrollToCursor()
+}
+
+// firstServiceRow is the first row with a service behind it, or 0 when there is
+// none. This is the fallback for "the service we wanted is not listed", and it
+// skips headers deliberately: row 0 of a grouped list is a header, so falling
+// back there would open the dashboard with the cursor on a row that selects
+// nothing — s/x/e/d inert and the log pane empty — which is how the list looks
+// on every first load once grouping is on.
+func (s *sidebar) firstServiceRow() int {
+	for i := range s.rows {
+		if s.serviceAt(i) != nil {
+			return i
+		}
+	}
+	return 0
 }
 
 // target returns the configured target called name, or nil.
@@ -214,15 +230,80 @@ func (s *sidebar) refilter() {
 	}
 }
 
-// rebuildRows lays s.services out as drawn lines. With one distinct group there
-// is nothing to label, so the rows are the services and the list looks exactly
-// as it did before grouping existed; a header only earns its line when it is
-// telling the reader something.
+// ungroupedLabel heads the services that carry no group. Only the global
+// registry can produce them: a devrun.yaml stamps every service with the
+// project's name.
+const ungroupedLabel = "ungrouped"
+
+// rebuildRows lays s.services out as drawn lines, one group at a time. With a
+// single distinct group there is nothing to tell the reader, so no header is
+// drawn and the rows are simply the services — the list looks exactly as it did
+// before grouping existed. A header only earns its line when it is dividing
+// something.
+//
+// Services arrive sorted by name and that order is kept within each group, so a
+// service's place is still predictable; only the grouping moves it.
 func (s *sidebar) rebuildRows() {
 	s.rows = make([]sidebarRow, 0, len(s.services))
-	for i := range s.services {
-		s.rows = append(s.rows, sidebarRow{kind: rowService, svc: i})
+
+	groups := s.groupOrder()
+	if len(groups) < 2 {
+		for i := range s.services {
+			s.rows = append(s.rows, sidebarRow{kind: rowService, svc: i})
+		}
+		return
 	}
+
+	for _, g := range groups {
+		s.rows = append(s.rows, sidebarRow{kind: rowHeader, group: g, svc: -1})
+		for i := range s.services {
+			if groupOf(s.services[i]) == g {
+				s.rows = append(s.rows, sidebarRow{kind: rowService, group: g, svc: i})
+			}
+		}
+	}
+}
+
+// groupOf is a service's group as the sidebar labels it, mapping the empty
+// group to the "ungrouped" bucket so every service belongs somewhere.
+func groupOf(svc ipc.ServiceInfo) string {
+	if svc.Group == "" {
+		return ungroupedLabel
+	}
+	return svc.Group
+}
+
+// groupOrder lists the distinct groups among the listed services, alphabetical,
+// with the ungrouped bucket last. Last because it is the absence of an answer:
+// a reader scanning for a named group should not have to pass a pile of
+// unlabelled services to reach it.
+func (s *sidebar) groupOrder() []string {
+	seen := make(map[string]bool, len(s.services))
+	var named []string
+	ungrouped := false
+	for _, svc := range s.services {
+		g := groupOf(svc)
+		if seen[g] {
+			continue
+		}
+		seen[g] = true
+		if g == ungroupedLabel {
+			ungrouped = true
+			continue
+		}
+		named = append(named, g)
+	}
+	sort.Slice(named, func(i, j int) bool {
+		li, lj := strings.ToLower(named[i]), strings.ToLower(named[j])
+		if li != lj {
+			return li < lj
+		}
+		return named[i] < named[j]
+	})
+	if ungrouped {
+		named = append(named, ungroupedLabel)
+	}
+	return named
 }
 
 // serviceAt returns the service a row points at, or nil for a header.
@@ -497,13 +578,64 @@ func (s *sidebar) render(width int) string {
 	first, last := s.window()
 	out := make([]string, 0, last-first)
 	for i := first; i < last; i++ {
-		svc := s.serviceAt(i)
-		if svc == nil {
-			continue // a header; drawn once grouping lands
+		if svc := s.serviceAt(i); svc != nil {
+			out = append(out, serviceRow(width, *svc, i == s.selected, s.exposed[svc.Name]))
+			continue
 		}
-		out = append(out, serviceRow(width, *svc, i == s.selected, s.exposed[svc.Name]))
+		g := s.rows[i].group
+		up, total := s.groupCount(g)
+		out = append(out, groupRow(width, g, up, total, i == s.selected))
 	}
 	return strings.Join(out, "\n")
+}
+
+// groupCount is how many of a group's listed services are running, and how many
+// there are. Counted over s.services, so it describes the group as filtered —
+// the header cannot claim members a query has hidden.
+func (s *sidebar) groupCount(group string) (up, total int) {
+	for _, svc := range s.services {
+		if groupOf(svc) != group {
+			continue
+		}
+		total++
+		if svc.State == "running" {
+			up++
+		}
+	}
+	return up, total
+}
+
+// groupRow renders a group header: "▾ backend              2/3", exactly width
+// columns wide. The running count is the whole of what the header says about
+// its members, and it is the only thing on screen about a group that is
+// collapsed — a service that is down inside one is not otherwise visible.
+func groupRow(width int, group string, up, total int, selected bool) string {
+	base := lipgloss.NewStyle()
+	if selected {
+		base = base.Background(colorSelSidebar)
+	}
+
+	count := fmt.Sprintf("%d/%d", up, total)
+	// Dimmer than a service row's name and without the state glyph's column, so
+	// a header reads as structure rather than as another service.
+	nameW := max(1, width-3-1-lipgloss.Width(count))
+
+	row := base.Foreground(colorMuted).Render(" "+collapseGlyph(false)) +
+		base.Foreground(colorText).Bold(true).Render(" "+padRight(truncateName(group, nameW), nameW)) +
+		base.Foreground(colorMuted).Render(" "+count)
+	if pad := width - lipgloss.Width(row); pad > 0 {
+		row += base.Render(strings.Repeat(" ", pad))
+	}
+	return row
+}
+
+// collapseGlyph is the header's disclosure marker. Shape alone carries it, as
+// the state glyphs do, so it survives --no-color.
+func collapseGlyph(collapsed bool) string {
+	if collapsed {
+		return "▸"
+	}
+	return "▾"
 }
 
 // window returns the half-open range of drawn rows currently visible.
