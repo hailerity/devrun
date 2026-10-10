@@ -733,11 +733,11 @@ prints these instructions.
 
 | Tool | What it does |
 |---|---|
-| `list_services` | Every service and target in scope, with live state, PID, port, uptime, CPU/memory and the URL it can be opened at |
+| `list_services` | Every service and target in scope, with live state, PID, port, uptime, CPU/memory, its group, and the URL it can be opened at |
 | `service_status` | One service's state and definition — command, directory, env variable **names** (never values), last exit code |
 | `gateway_status` | What the gateway serves, its posture, what may leave the machine, and the public URL when a tunnel is running. Never the token |
 | `logs` | The end of a service's output as plain text: 100 lines by default, at most 1000 and 64 KB, optionally filtered |
-| `add_service` | Define a new service in the project's `devrun.yaml` (or the global registry). Refuses an existing name |
+| `add_service` | Define a new service in the project's `devrun.yaml` (or the global registry), optionally in a `group`. Refuses an existing name |
 | `add_to_target` | Create a target or add services to it |
 | `start` | Start a service or target and **wait for the outcome**: running, or crashed / exited / failed with the end of its log |
 | `stop` | Stop a service or target. Stopping something that is not running is fine |

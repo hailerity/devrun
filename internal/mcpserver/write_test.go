@@ -22,15 +22,76 @@ func TestAddService_ProjectFile(t *testing.T) {
 	}, &out))
 	assert.Equal(t, "project", out.Scope)
 	assert.Equal(t, filepath.Join(dir, config.ProjectFileName), out.Source)
-	assert.Equal(t, ServiceDef{Name: "api", Command: "go run ./cmd/api", CWD: filepath.Join(dir, "backend"), EnvKeys: []string{"PORT"}}, out.Service,
-		"the result is read back from disk, with cwd resolved")
+	// Group is "proj" though none was asked for: the project's name is what a
+	// service in a devrun.yaml inherits, and the result is read back from disk
+	// rather than echoed, so it reports the group the service actually has.
+	assert.Equal(t, ServiceDef{
+		Name: "api", Command: "go run ./cmd/api", CWD: filepath.Join(dir, "backend"),
+		Group: "proj", EnvKeys: []string{"PORT"},
+	}, out.Service, "the result is read back from disk, with cwd resolved")
 
 	proj, err := config.LoadProject(dir)
 	require.NoError(t, err)
 	require.Contains(t, proj.Services, "api")
 	assert.Equal(t, "backend", proj.Services["api"].CWD, "stored relative to the project file")
+	assert.Empty(t, proj.Services["api"].Group, "and the file records no group of its own")
 	_, err = os.Stat(config.RegistryPath())
 	assert.True(t, os.IsNotExist(err), "the global registry is untouched")
+}
+
+// The parameter an agent had no way to set: a group, written to whichever
+// config is in scope and reported back.
+func TestAddService_WritesTheGroup(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"project_dir": dir, "name": "api", "command": "go run .", "group": "backend",
+	}, &out))
+	assert.Equal(t, "backend", out.Service.Group, "reported back")
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Equal(t, "backend", proj.Services["api"].Group, "and written to the file")
+	assert.Empty(t, proj.Services["web"].Group, "its sibling is untouched")
+}
+
+// Omitting it leaves the service inheriting, rather than pinning it to the
+// project's current name — so renaming the project still carries it along.
+func TestAddService_OmittedGroupInherits(t *testing.T) {
+	e := newEnv(t)
+	dir := e.project("name: shop\nservices:\n  web:\n    command: npm start\n")
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"project_dir": dir, "name": "api", "command": "go run .",
+	}, &out))
+	assert.Equal(t, "shop", out.Service.Group, "the inherited group is reported")
+
+	proj, err := config.LoadProject(dir)
+	require.NoError(t, err)
+	assert.Empty(t, proj.Services["api"].Group, "but nothing is pinned in the file")
+}
+
+// In the global registry there is no project to inherit from, so an omitted
+// group means ungrouped and a given one is stored as-is.
+func TestAddService_GroupInTheGlobalRegistry(t *testing.T) {
+	e := newEnv(t)
+	e.registry(map[string]string{}, nil)
+
+	var out AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"name": "api", "command": "go run .", "group": "backend",
+	}, &out))
+	assert.Equal(t, "global", out.Scope)
+	assert.Equal(t, "backend", out.Service.Group)
+
+	var bare AddServiceOutput
+	require.Empty(t, e.call("add_service", map[string]any{
+		"name": "lonely", "command": "go run .",
+	}, &bare))
+	assert.Empty(t, bare.Service.Group, "nothing to inherit")
 }
 
 // An agent must never silently replace a service someone defined.

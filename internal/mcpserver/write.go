@@ -27,6 +27,7 @@ type AddServiceInput struct {
 	Name    string            `json:"name" jsonschema:"Name for the new service: letters, digits, '.', '_' or '-'."`
 	Command string            `json:"command" jsonschema:"Shell command that runs the service in the foreground, e.g. 'npm run dev'. It is run with sh -c."`
 	CWD     string            `json:"cwd,omitempty" jsonschema:"Working directory. A relative path is taken against the project directory. Defaults to the project directory."`
+	Group   string            `json:"group,omitempty" jsonschema:"Section to file the service under in the dashboard, e.g. 'backend'. Free-form, and a service belongs to exactly one. Use list_services to see the groups already in use and match one rather than inventing a synonym. Omit to inherit the project's name."`
 	Env     map[string]string `json:"env,omitempty" jsonschema:"Environment variables to set for the service."`
 }
 
@@ -34,6 +35,7 @@ type ServiceDef struct {
 	Name    string   `json:"name"`
 	Command string   `json:"command"`
 	CWD     string   `json:"cwd"`
+	Group   string   `json:"group,omitempty"`
 	EnvKeys []string `json:"env_keys,omitempty"`
 }
 
@@ -132,7 +134,9 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 	if err != nil {
 		return nil, AddServiceOutput{}, err
 	}
-	if _, err := ops.AddService(s, ops.NewService{Name: in.Name, Command: in.Command, CWD: in.CWD, Env: in.Env}); err != nil {
+	if _, err := ops.AddService(s, ops.NewService{
+		Name: in.Name, Command: in.Command, CWD: in.CWD, Group: in.Group, Env: in.Env,
+	}); err != nil {
 		return nil, AddServiceOutput{}, err
 	}
 
@@ -146,7 +150,10 @@ func (h *handlers) addService(_ context.Context, _ *mcp.CallToolRequest, in AddS
 	if err != nil {
 		return nil, AddServiceOutput{}, err
 	}
-	def := ServiceDef{Name: in.Name, Command: cfg.Command, CWD: cfg.CWD}
+	// cfg.Group, not in.Group: for a project service an omitted group has been
+	// resolved to the project's name by now, and echoing the input back would
+	// report an empty group for a service that has one.
+	def := ServiceDef{Name: in.Name, Command: cfg.Command, CWD: cfg.CWD, Group: cfg.Group}
 	for k := range cfg.Env {
 		def.EnvKeys = append(def.EnvKeys, k)
 	}

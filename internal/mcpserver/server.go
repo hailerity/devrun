@@ -37,6 +37,8 @@ Prefer these tools over running a dev server yourself: a service started here ke
 
 Config: a devrun.yaml in the project directory defines the project's services and targets; without one, the user's global registry is used. Every tool accepts project_dir (default: the directory you were launched in) and every result says which file it used.
 
+Groups and targets are different and both show in list_services. A group is the section a service is filed under in the dashboard — one per service, for navigating a long list. A target is a set that starts and stops together — a service can be in several. Reuse a group that is already in use rather than adding a synonym of it.
+
 Typical flow: list_services → add_service if what you need is missing → start (it waits and tells you whether the service came up, with its log tail if not) → logs to check on it → stop when done.`
 
 // New builds the devrun MCP server.
