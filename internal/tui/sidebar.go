@@ -697,12 +697,31 @@ func (s *sidebar) selectedService() *ipc.ServiceInfo {
 	return s.serviceAt(s.selected)
 }
 
+// portDetectSettle is how long a running service may go without a detected
+// port before the list stops calling it "detecting" and just calls it running.
+// The daemon polls for ports every 5s, so this is three attempts.
+//
+// It is not a verdict, which is why it can be this short: detection carries on,
+// and the moment a port turns up the label becomes that port. Settling early
+// therefore costs at most a few seconds of "running" before ":5173" replaces
+// it, while settling late — or never, as before — leaves the label plainly
+// wrong for every service that does not listen at all.
+const portDetectSettle = 15
+
 // stateLabel returns the short status token for a service: its port when
-// running, otherwise the state word.
+// running and listening, otherwise the state word.
+//
+// "detecting" used to have no end. A service that never binds a port — a
+// worker, a file watcher, a log emitter — is running, not pending, and it sat
+// at "detecting" for as long as it ran. `devrun list` had it right all along,
+// printing state `running` with an empty port column; only this label disagreed.
 func stateLabel(svc ipc.ServiceInfo) string {
 	if svc.State == "running" {
 		if svc.Port != nil && *svc.Port != 0 {
 			return fmt.Sprintf(":%d", *svc.Port)
+		}
+		if svc.UptimeSec >= portDetectSettle {
+			return "running"
 		}
 		return "detecting"
 	}

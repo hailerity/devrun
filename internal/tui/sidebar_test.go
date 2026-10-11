@@ -82,12 +82,14 @@ func TestStateLabel_RunningWithPort(t *testing.T) {
 }
 
 func TestStateLabel_RunningNoPort(t *testing.T) {
-	assert.Equal(t, "detecting", stateLabel(ipc.ServiceInfo{State: "running", Port: nil}))
+	// Uptime stated rather than left at zero: "detecting" holds only while
+	// there is still reason to detect. See TestStateLabel_SettlesOnRunningWhenNoPortArrives.
+	assert.Equal(t, "detecting", stateLabel(ipc.ServiceInfo{State: "running", Port: nil, UptimeSec: 1}))
 }
 
 func TestStateLabel_RunningZeroPort(t *testing.T) {
 	port := 0
-	assert.Equal(t, "detecting", stateLabel(ipc.ServiceInfo{State: "running", Port: &port}))
+	assert.Equal(t, "detecting", stateLabel(ipc.ServiceInfo{State: "running", Port: &port, UptimeSec: 1}))
 }
 
 func TestStateLabel_Crashed(t *testing.T) {
