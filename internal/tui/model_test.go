@@ -81,9 +81,20 @@ func TestModel_SidebarWidth_Adaptive(t *testing.T) {
 	// Short names → floor.
 	assert.Equal(t, sidebarMinW, mk("web", "api", "db").sidebarWidth())
 
-	// A long name grows the sidebar: margin + glyph + space + name, the state
-	// and CPU columns with a space before each, and the pane border.
-	assert.Equal(t, 3+len("my-really-long-service")+1+rowStateW+1+rowCPUW+paneChrome, mk("api", "my-really-long-service").sidebarWidth())
+	// A long name grows the sidebar to hold it: the name, every other column of
+	// a service row, and the pane border.
+	//
+	// Against serviceRowChrome — the one constant serviceRow also spends —
+	// rather than a second copy of the arithmetic. This line used to restate
+	// the formula term by term, so it could only ever agree with the code it
+	// was checking: when the exposed column was added to serviceRow and not to
+	// sidebarWidth, both this assertion and the implementation went on omitting
+	// it, and the pane clipped by two columns the very name it had been sized
+	// for. What that width is *for* is asserted in
+	// TestSidebar_TheLongestNameFitsThePaneItSized, which reads the rendered
+	// rows and cannot restate anything.
+	long := "my-really-long-service"
+	assert.Equal(t, len(long)+serviceRowChrome+paneChrome, mk("api", long).sidebarWidth())
 
 	// Pathologically long name → capped at the ceiling.
 	assert.Equal(t, sidebarMaxW, mk("this-name-is-absurdly-long-and-keeps-going-forever").sidebarWidth())

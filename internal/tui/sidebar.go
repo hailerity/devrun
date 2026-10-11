@@ -1030,6 +1030,17 @@ const (
 	// so the name keeps a usable share of a narrow sidebar.
 	rowMinWForCPU   = 27
 	rowMinWForState = 19
+
+	// serviceRowChrome is every column of a service row that is not the name,
+	// at full width: the margin, glyph and space, then the exposed, state and
+	// CPU columns with the blank before each. It is what serviceRow subtracts
+	// from its width to size the name, and what sidebarWidth adds to the
+	// longest name to size the pane — one constant, because when they were two
+	// expressions they drifted. The exposed column arrived with the gateway
+	// mark and was added to serviceRow only, so the pane came out two columns
+	// narrower than its own longest name and clipped it on every list whose
+	// width that name decided.
+	serviceRowChrome = 3 + (1 + rowExposedW) + (1 + rowStateW) + (1 + rowCPUW)
 )
 
 // serviceRow renders one table row of the service list — glyph, name, port or
@@ -1044,13 +1055,15 @@ func serviceRow(width int, svc ipc.ServiceInfo, selected, exposed bool) string {
 	showState := width >= rowMinWForState
 	showCPU := width >= rowMinWForCPU
 
-	nameW := width - 3 // margin + glyph + space
-	nameW -= 1 + rowExposedW
-	if showState {
-		nameW -= 1 + rowStateW
+	// The full-width budget, then the columns a narrow pane has dropped put
+	// back. Written against serviceRowChrome so that sizing the pane and
+	// filling it cannot disagree about what a row costs.
+	nameW := width - serviceRowChrome
+	if !showState {
+		nameW += 1 + rowStateW
 	}
-	if showCPU {
-		nameW -= 1 + rowCPUW
+	if !showCPU {
+		nameW += 1 + rowCPUW
 	}
 	nameW = max(1, nameW)
 
