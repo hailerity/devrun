@@ -55,11 +55,8 @@ services:
   events:
     command: go run ./services/logemitter
     group: platform
-  # Short, and still sorts after `redis` so it stays last in its group — the
-  # tape's keypress counts are measured against these row positions. It was
-  # `search-indexer`, which the sidebar drew as `search…dexer`: truthful, since
-  # the name column is 12 columns wide, but in a hero image a mid-word ellipsis
-  # reads as a rendering bug.
+  # Keep this name short and sorting after `redis`: it stays last in its group,
+  # and the tape's keypress counts are measured against these row positions.
   search:
     # A folded block scalar, because the command contains ": " twice. As a
     # plain scalar YAML reads "search: dial tcp ..." as a nested mapping and

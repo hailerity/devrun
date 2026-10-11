@@ -10,12 +10,13 @@ import (
 )
 
 // playground/devrun.yaml is the project people are told to run and the one
-// assets/demo.tape records for the README's hero image. It is committed, nothing else loads it, and a mistake in
-// it only shows up at the end of a record-and-render cycle that takes minutes
-// and needs vhs installed — so it is parsed here instead.
+// assets/demo.tape records for the README's hero image. It is committed,
+// nothing else loads it, and a mistake in it only shows up at the end of a
+// record-and-render cycle that takes minutes and needs vhs installed — so it
+// is parsed here instead.
 //
-// The mistake that prompted this: the worker's command contains ": " twice, and
-// as a plain scalar YAML read "worker: dial tcp ..." as a nested mapping and
+// The mistake that prompted this: `search`'s command contains ": " twice, and
+// as a plain scalar YAML read "search: dial tcp ..." as a nested mapping and
 // refused the whole file. The recording captured `devrun up` printing a parse
 // error for its full length.
 func TestDemoFixture_ParsesAndShowsWhatTheHeroNeeds(t *testing.T) {
@@ -73,10 +74,10 @@ func TestDemoFixture_ParsesAndShowsWhatTheHeroNeeds(t *testing.T) {
 
 	// The crash is the point of the frame: a dashboard where everything is green
 	// says less about devrun than one with a ✖ and a reason beside it.
-	worker := p.Services["search"]
-	require.NotNil(t, worker)
-	assert.Contains(t, worker.Command, "exit 1")
-	assert.Contains(t, worker.Command, "connection refused",
+	search := p.Services["search"]
+	require.NotNil(t, search)
+	assert.Contains(t, search.Command, "exit 1")
+	assert.Contains(t, search.Command, "connection refused",
 		"the log line a reader sees under the crashed service")
-	assert.NotContains(t, worker.Command, "\n", "folded to one line")
+	assert.NotContains(t, search.Command, "\n", "folded to one line")
 }

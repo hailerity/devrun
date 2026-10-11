@@ -38,10 +38,10 @@ Type "devrun" Enter
 Sleep 4s
 
 # No navigation. The cursor restores from an empty anchor to the first service
-# row, which with these four services is `api` — the one with the busiest log.
-# An earlier version walked the cursor here "to be sure" and landed on `worker`
-# instead: the sidebar's step() is modular, so k wraps off the top rather than
-# clamping on it.
+# row — `admin-api` here, since groups sort before services do and `admin` is
+# the first group. An earlier version walked the cursor "to be sure" and landed
+# somewhere else entirely: the sidebar's step() is modular, so k wraps off the
+# top of the list rather than clamping on it.
 Show
 Sleep 6s
 
