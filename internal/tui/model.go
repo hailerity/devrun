@@ -1316,7 +1316,7 @@ const (
 func (m model) sidebarWidth() int {
 	w := sidebarMinW
 	for _, svc := range m.sidebarC.allServices {
-		if n := lipgloss.Width(svc.Name) + 3 + 1 + rowStateW + 1 + rowCPUW + paneChrome; n > w {
+		if n := lipgloss.Width(svc.Name) + serviceRowChrome + paneChrome; n > w {
 			w = n
 		}
 	}
