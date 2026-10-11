@@ -1,0 +1,78 @@
+# The playground project: a monorepo with four sub-projects in it, which is the
+# shape where devrun earns its keep. Four services in one group needs no
+# dashboard; ten across four does.
+#
+# Run it yourself — `cd playground && devrun up && devrun` — and you are looking
+# at the same thing the README's GIF shows. See README.md in this directory.
+#
+# Each `group:` here is a sub-project. A service that named no group would
+# inherit `acme`, the project's own name — right for a repo that is one thing,
+# and not what a monorepo wants.
+#
+# The ports are deliberately off the beaten track. 8080, 5432, 5174 and 9229
+# were all taken on the machine this was recorded on, and a port devrun cannot
+# bind records as a crashed service — so the demo would show false failures.
+name: acme
+
+services:
+  # --- storefront: what customers see ----------------------------------
+  web:
+    command: python3 serve.py 5173 web
+    group: storefront
+    env:
+      API_URL: "${DEVRUN_URL_BFF}"
+  bff:
+    command: python3 serve.py 8787 api
+    group: storefront
+
+  # --- admin: what the support team sees --------------------------------
+  console:
+    command: python3 serve.py 4000 web
+    group: admin
+  admin-api:
+    command: python3 serve.py 8788 api
+    group: admin
+
+  # --- payments: its own team, its own release train --------------------
+  charges:
+    command: python3 serve.py 8789 api
+    group: payments
+  ledger:
+    command: python3 serve.py 8790 api
+    group: payments
+
+  # --- platform: the things everything else needs -----------------------
+  postgres:
+    command: python3 serve.py 5433 db
+    group: platform
+  redis:
+    command: python3 serve.py 6380 cache
+    group: platform
+  # The repo's own sample service, not a python stand-in: it prints coloured
+  # INFO / WARN / ERROR lines, so the log pane shows that devrun passes a
+  # service's ANSI through untouched. It binds no port, which is why the
+  # sidebar shows `running` for it rather than a number.
+  events:
+    command: go run ./services/logemitter
+    group: platform
+  # Keep this name short and sorting after `redis`: it stays last in its group,
+  # and the tape's keypress counts are measured against these row positions.
+  search:
+    # A folded block scalar, because the command contains ": " twice. As a
+    # plain scalar YAML reads "search: dial tcp ..." as a nested mapping and
+    # refuses the file; inside a block scalar the colons and the single quotes
+    # are both literal, with nothing to escape.
+    command: >-
+      sh -c 'sleep 2; echo "search: dial tcp 127.0.0.1:9200: connection refused" >&2; exit 1'
+    group: platform
+
+# Targets are the other axis, and the reason both exist. A group is where a
+# service *lives* in the list — one each, so the sidebar can be sectioned and
+# folded. A target is a set you *act on*, and a service can be in as many as
+# you like: postgres is in three of these, so `devrun target stop admin` leaves
+# it running while storefront still holds it.
+targets:
+  storefront: [web, bff, postgres, redis]
+  admin:      [console, admin-api, postgres]
+  payments:   [charges, ledger, postgres]
+  data:       [postgres, redis, events]
